@@ -1,0 +1,9 @@
+{
+  "name": "zero-friction-local-cast",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zero-Friction Local Cast — Android screen, game audio, and microphone casting to a desktop over local Wi-Fi. Monorepo root (mobile app is Gradle-based; desktop app gets its own package.json in Phase 2).",
+  "scripts": {
+    "desktop": "echo \"apps/desktop is initialized in Phase 2 — see docs/development/roadmap.md\""
+  }
+}

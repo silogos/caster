@@ -1,0 +1,42 @@
+# --- Node / desktop ---
+node_modules/
+dist/
+out/
+release/
+build-release/
+*.log
+npm-debug.log*
+
+# --- Electron builder output ---
+apps/desktop/dist/
+apps/desktop/out/
+apps/desktop/release/
+
+# --- Android / Gradle ---
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# --- Android keystore (never commit signing material) ---
+*.jks
+*.keystore
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/*
+!.vscode/extensions.json
+
+# --- Env / secrets ---
+.env
+.env.*
+
+# --- Local agent tooling ---
+.zcode/
