@@ -4,6 +4,8 @@ Development is incremental: each phase = **plan → implement → test → docum
 
 Current status: **Phase 1 complete — awaiting review.**
 
+> **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
+
 ---
 
 ## Phase 0 — Project Architecture ✅
