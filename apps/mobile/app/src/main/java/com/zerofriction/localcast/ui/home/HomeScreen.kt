@@ -20,23 +20,37 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
-fun HomeScreen(
-    viewModel: HomeViewModel = viewModel(),
-) {
+fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    HomeContent(
+        uiState = uiState,
+        onStartCastClicked = viewModel::onStartCastClicked,
+        onNoticeShown = viewModel::onNoticeShown,
+    )
+}
+
+@Composable
+fun HomeContent(
+    uiState: HomeUiState,
+    onStartCastClicked: () -> Unit,
+    onNoticeShown: () -> Unit,
+) {
     val snackbarHostState = remember { SnackbarHostState() }
 
     uiState.notice?.let { notice ->
         LaunchedEffect(notice) {
             snackbarHostState.showSnackbar(notice)
-            viewModel.onNoticeShown()
+            onNoticeShown()
         }
     }
 
@@ -62,11 +76,23 @@ fun HomeScreen(
             )
             Spacer(Modifier.height(24.dp))
             Button(
-                onClick = viewModel::onStartCastClicked,
+                onClick = onStartCastClicked,
                 modifier = Modifier.fillMaxWidth(0.6f),
             ) {
                 Text(stringResource(R.string.start_cast))
             }
         }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 640)
+@Composable
+private fun HomeContentPreview() {
+    LocalCastTheme {
+        HomeContent(
+            uiState = HomeUiState(),
+            onStartCastClicked = {},
+            onNoticeShown = {},
+        )
     }
 }
