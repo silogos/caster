@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 0 complete — awaiting review.**
+Current status: **Phase 1 complete — awaiting review.**
 
 ---
 
@@ -10,10 +10,10 @@ Current status: **Phase 0 complete — awaiting review.**
 **Scope:** repo skeleton; architecture docs ([architecture/overview.md](../architecture/overview.md) and siblings); ADRs 001–003 ([decisions/](../decisions)); this roadmap; risk register. No application code.
 **Accept:** structure matches the spec (`apps/`, `docs/`, root files); docs are consistent and cover why/what/constraints/limitations; risks identified with mitigations and validation phases.
 
-## Phase 1 — Initialize Mobile Application
+## Phase 1 — Initialize Mobile Application ✅
 **Scope:** `/apps/mobile`: Gradle (Kotlin DSL) project, application id `com.zerofriction.localcast`, minSdk 29, Compose UI with the minimal home screen (title, `[Start Cast]`, status "Not connected"), pinned dependency versions, `development/mobile.md`.
 **Not in scope:** WebRTC, MediaProjection, any audio, pairing, desktop communication.
-**Accept:** build succeeds; installs and launches on emulator/device; commit `chore: initialize mobile app`.
+**Accept:** build succeeds; installs and launches on emulator/device; commit `chore: initialize mobile app`. *(Verified 2026-09-19: build + 3 unit tests green; installed and launched on API 36 emulator, home screen renders per spec — [mobile.md](mobile.md).)*
 
 ## Phase 2 — Initialize Desktop Application
 **Scope:** `/apps/desktop`: electron-vite + TypeScript scaffold; dark UI showing app title, "Waiting for mobile device…", a QR rendered from **static test data**; main/renderer split per [desktop.md](../architecture/desktop.md); `development/desktop.md`; root package scripts wired.

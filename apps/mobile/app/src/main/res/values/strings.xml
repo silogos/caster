@@ -1,0 +1,7 @@
+<resources>
+    <!-- Launcher label stays short; the full product name is shown on the home screen. -->
+    <string name="app_name">Local Cast</string>
+    <string name="home_title">Zero-Friction Local Cast</string>
+    <string name="start_cast">Start Cast</string>
+    <string name="cast_not_implemented">Casting isn\'t wired up yet — it arrives in Phase 5.</string>
+</resources>

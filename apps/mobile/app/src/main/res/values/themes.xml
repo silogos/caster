@@ -1,0 +1,6 @@
+<resources>
+    <!-- Compose draws all real UI; the platform theme only needs to be dark and chrome-free. -->
+    <style name="Theme.LocalCast" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

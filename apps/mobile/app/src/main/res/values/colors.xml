@@ -1,0 +1,5 @@
+<resources>
+    <!-- Dark window background prevents a white flash before Compose draws (app is dark-styled). -->
+    <color name="window_background">#FF101418</color>
+    <color name="ic_launcher_background">#FF101418</color>
+</resources>
