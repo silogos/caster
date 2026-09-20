@@ -19,7 +19,7 @@ New module `thermal/` ([mobile.md](../architecture/mobile.md) module map):
 
 Where it surfaces:
 
-- **Diagnostics (acceptance: "thermal ladder visible in diagnostics")** — the "This cast" section on the home screen shows a plain-words line per ladder rung (normal / getting warm / hot + cooler-profile advice / very hot + consider stopping / overheating — stop). Advice, never action (AGENTS.md: simple user-facing text; the numbers stay out of the UI).
+- **Diagnostics (acceptance: "thermal ladder visible in diagnostics")** — the read-out rides wherever the cast's status is rendered: the "This cast" section on the home screen *and* the scan screen's cast-status block (a review-time find: the user watches a started cast from the scan screen). Both show a plain-words line per ladder rung (normal / getting warm / hot + cooler-profile advice / very hot + consider stopping / overheating — stop). Advice, never action (AGENTS.md: simple user-facing text; the numbers stay out of the UI).
 - **Logs (Phase15's measurement trail)** — one INFO line per ladder transition (`thermal: NONE → MODERATE, headroom 2.1, battery 39.5°C`), a DEBUG fact sample every 10 s, start/stop lines; next to the existing ~1 Hz sender-stats line (resolution, bitrate, drops, encoder), logcat is now the complete thermal-measurement channel Phase15's protocol needs. The ~1 Hz stats remain the encoder-stress signal (thermal.md: indirect thermal signal).
 
 ### Stored-settings migration
@@ -30,11 +30,12 @@ The settings document is now v2; v1 documents (Phase10 shape) decode through an 
 
 **Tests:** mobile JVM **94/94** (11 new: `ThermalMonitorTest` — the `PowerManager` constant mirror, transition-once semantics, unknown values ignored, sample-without-transition; `QualityProfileTest` — thermal vocabulary labels + the encoder-target distinctness acceptance; `CastSettingsCodecTest` — v1 light/smooth migration, v1 unknown label → null, v2 round-trips; `SettingsViewModelTest` — cool-profile pick). `assembleDebug` green.
 
-**On-device (remaining acceptance items, need the phone in hand):**
+**On-device (review session, 2026-09-20):** installed on the Lenovo TB321FU / Android 16; a live cast to `MacBookPro.lan` ran on the new build, and `ThermalSource` sampled on real hardware at exactly the 10 s cadence — `status SEVERE, headroom 0.94, battery 39.9°C` — matching `dumpsys thermalservice`'s own `Thermal Status: 3` (CPU cores ~90 °C; the device was genuinely hot, cooling to 38.9 °C during sampling). The ladder mirror is verified live, not only by the constant test.
+
+**Remaining on-device acceptance items (need the phone in hand):**
 
 1. Pick `performance`, scan → cast, then end and recast with `cool`: the ~1 Hz sender-stats line must show the switch (1280@60 with a 6–10 Mbps ceiling vs 960@30 with ~3 Mbps, resolution now logged since Phase10).
-2. Cast long enough to move the ladder (or a warm device): watch the `ThermalSource`/`CastService` INFO lines and the home screen's This-cast thermal line follow the platform's status; `adb shell dumpsys thermalservice` as the cross-check.
-3. Emulator honesty: emulators don't exercise real thermals (AGENTS.md) — the ladder stays NONE there; the wiring still proves itself by logging the seed + samples.
+2. The plain-words thermal line visible on screen while the ladder moves (the log side is verified; the on-screen read-out should follow the same transitions — eyeball it during a warm cast).
 
 ## Known limitations
 
