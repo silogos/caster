@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1 and 3 (status: **Phase 3 implemented — device verification in progress**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1 and 3 (status: **Phase 3 complete — verified on device**).
 
 ## Prerequisites
 
@@ -66,6 +66,7 @@ The package skeleton follows [architecture/mobile.md](../architecture/mobile.md)
 ## Permissions
 
 - `INTERNET` (signaling WebSocket), `CAMERA` (QR scanning only, requested at the scan screen). Nothing else — later phases add theirs with their feature.
+- **Cleartext is allowed via `network_security_config.xml`**: the signaling channel is plain `ws://` on the LAN by design ([ADR-002](../decisions/ADR-002-pairing-and-signaling-security.md)); Android blocks cleartext by default. Do not remove this without changing the transport.
 
 ## Not implemented yet (by design)
 

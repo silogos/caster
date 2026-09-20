@@ -1,6 +1,6 @@
 # Feature: Pairing (QR + WebSocket handshake)
 
-Implemented in: **Phase 3** (see [roadmap](../development/roadmap.md)). Status: **implemented — device verification in progress**.
+Implemented in: **Phase 3** (see [roadmap](../development/roadmap.md)). Status: **implemented and verified on a real device (2026-09-20)**.
 
 Implements [architecture/pairing.md](../architecture/pairing.md) and the pairing subset of [architecture/webrtc.md](../architecture/webrtc.md) ([ADR-002](../decisions/ADR-002-pairing-and-signaling-security.md)). No media — the handshake is the whole feature ("test handshake only").
 
@@ -26,7 +26,9 @@ Implements [architecture/pairing.md](../architecture/pairing.md) and the pairing
 - **Desktop unit tests** (vitest, plain Node — the modules are Electron-free): session lifecycle (expiry regeneration, busy, reconnect window, invalidation, no-LAN-IP failure + recovery), HMAC vector, and **loopback protocol tests** — a real `ws` server + a scripted phone client that scans the QR from the rendered PNG (jsQR), then exercises: successful handshake, `unknown-session`, `bad-auth` + rate limiting, `busy` + reconnect, `bad-version` (payload range and envelope version), recoverable `bad-message`, `expired`, `bye` → fresh QR. **20/20 green**, typecheck green, production build green.
 - **Mobile unit tests** (JVM JUnit): payload parse/validate (wrong app, unknown version, malformed, blank hosts), a **cross-platform HMAC vector identical to the desktop's** (both implementations must agree byte-for-byte), envelope codec round-trip, and PairingClient behavior with a scripted fake transport (exact wire frames, host iteration, error mapping). **15/15 green**, `assembleDebug` green.
 - **Live check** (2026-09-20): the production desktop build running on macOS shows a QR whose decoded payload carries the machine's real LAN IP and a fresh session; payload extracted via CDP (`apps/desktop/scripts/read-qr-payload.mjs`).
-- **Pending: real-device camera scan** — desktop generates QR → phone scans → connects → desktop shows the phone's name. Requires a physical phone on the same Wi-Fi (an emulator cannot scan a real desktop QR; its debug payload input covers the network path instead).
+- **Real-device camera scan (2026-09-20, pass)**: desktop (macOS, production build) generates QR → phone (Lenovo TB321FU, Android 16) scans it in the app → connects over Wi-Fi → handshake completes → phone shows "Connected to \<desktop name\>" and the desktop shows "Connected to TB321FU". Two findings from this test:
+  - **Android cleartext policy blocks plain `ws://` by default** (`CLEARTEXT communication not permitted by network security policy`). The signaling channel is deliberately plain `ws://` on the LAN (ADR-002), so the app ships a `network_security_config.xml` allowing cleartext (see `apps/mobile/app/src/main/res/xml/`).
+  - **Scan retrigger loop**: without a guard, every analyzed frame (~30/s) redelivers the QR payload, so an instantly-failing connect attempt made the screen blink between camera and status. The scanner now delivers a detected payload exactly once, and the ViewModel ignores scans while a connection is in flight.
 
 ## Known limitations (by design in this phase)
 

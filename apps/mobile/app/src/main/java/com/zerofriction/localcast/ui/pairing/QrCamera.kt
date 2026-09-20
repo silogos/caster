@@ -1,5 +1,6 @@
 package com.zerofriction.localcast.ui.pairing
 
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
@@ -16,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -55,16 +57,37 @@ fun QrCamera(
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
+        var frameCounter = 0
+        var delivered = false
         analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
-            analyzeFrame(imageProxy, scanner, onQrText)
+            analyzeFrame(imageProxy, scanner) { detected ->
+                frameCounter += 1
+                // DEBUG-level diagnostics: frames must flow for a scan to happen (AGENTS.md logging rules).
+                if (frameCounter == 1 || frameCounter % 30 == 0) {
+                    Log.d(
+                        TAG,
+                        "frame $frameCounter ${imageProxy.width}x${imageProxy.height} " +
+                            "rot=${imageProxy.imageInfo.rotationDegrees} qr=${detected != null}",
+                    )
+                }
+                // Deliver once: a second detection while the UI transitions to
+                // Connecting would retrigger the whole flow at frame rate.
+                if (detected != null && !delivered) {
+                    delivered = true
+                    Log.i(TAG, "QR payload detected after $frameCounter frames (${detected.length} chars)")
+                    onQrText(detected)
+                }
+            }
         }
 
         provider.unbindAll()
         provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+        Log.i(TAG, "camera bound (preview + analysis)")
     }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
+            Log.i(TAG, "unbinding camera")
             cameraProviderRef[0]?.unbindAll()
             scanner.close()
         }
@@ -92,18 +115,29 @@ private suspend fun awaitCameraProvider(context: android.content.Context): Proce
         )
     }
 
+/**
+ * Runs ML Kit on one frame; closes the proxy; reports the decoded QR text
+ * (null when no QR was found in this frame).
+ */
 @OptIn(ExperimentalGetImage::class)
 private fun analyzeFrame(
     imageProxy: androidx.camera.core.ImageProxy,
-    scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
-    onQrText: (String) -> Unit,
+    scanner: BarcodeScanner,
+    onResult: (String?) -> Unit,
 ) {
     val mediaImage = imageProxy.image
     if (mediaImage == null) {
         imageProxy.close()
+        onResult(null)
         return
     }
     scanner.process(InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees))
-        .addOnSuccessListener { barcodes -> barcodes.firstOrNull()?.rawValue?.let(onQrText) }
+        .addOnSuccessListener { barcodes -> barcodes.firstOrNull { it.rawValue != null }?.rawValue.let(onResult) }
+        .addOnFailureListener { error ->
+            Log.e(TAG, "ML Kit frame failed", error)
+            onResult(null)
+        }
         .addOnCompleteListener { imageProxy.close() }
 }
+
+private const val TAG = "QrCamera"

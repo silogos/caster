@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The signaling channel is deliberately plain ws:// over the LAN — no TLS, no
+  STUN/TURN, no internet relay (ADR-002: pairing-and-signaling-security). Android
+  blocks cleartext by default, so it is allowed here, globally for this app: the
+  only sockets it ever opens go to hosts taken from the desktop's QR payload
+  (private LAN addresses), and the pairing secret never crosses the wire
+  (HMAC challenge-response). Anything leaving the LAN would still be forbidden
+  by product rule (LAN only), not by transport policy.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

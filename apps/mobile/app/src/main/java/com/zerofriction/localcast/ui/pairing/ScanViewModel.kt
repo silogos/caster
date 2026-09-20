@@ -19,7 +19,17 @@ class ScanViewModel(
     val pairingState: StateFlow<PairingClient.State> = pairingClient.state
 
     fun onQrScanned(qrText: String) {
-        pairingClient.startFromQrText(qrText)
+        // Camera frames keep flowing while the UI transitions; only a fresh
+        // attempt (Idle/Failed/Disconnected) may start a connection.
+        when (pairingClient.state.value) {
+            PairingClient.State.Idle,
+            is PairingClient.State.Failed,
+            is PairingClient.State.Disconnected,
+            -> pairingClient.startFromQrText(qrText)
+            PairingClient.State.Connecting, PairingClient.State.Authenticating,
+            is PairingClient.State.Connected,
+            -> {}
+        }
     }
 
     fun onManualPayloadSubmit(payloadJson: String) {
