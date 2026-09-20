@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phases 2–9 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, and the Phase9 audio mixer — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md)).
+Status: Phases 2–9 + 13 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, and the Phase13 pairing-hero screens — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md)).
 
 ## Role
 
@@ -33,7 +33,8 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
                 │ Electron IPC (thin, typed events only)
 ┌───────────────▼─────────────────────────────────────────┐
 │  Renderer (Chromium)                                    │
-│  PairingView: renders QR (from data URL), waiting state │
+│  PairingView: QR hero (waiting); paired check card;     │
+│             friendly session-error (pairingHero.ts)     │
 │  ReceiverSession: RTCPeerConnection ×2, ICE/SDP glue    │
 │  VideoView: <video> fills the window while casting      │
 │             (window follows the stream's aspect)        │

@@ -1,11 +1,14 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { heroView } from './pairingHero'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
+const heroHeadingEl = document.getElementById('hero-heading') as HTMLHeadingElement
+const iconCheckEl = document.getElementById('icon-check') as HTMLDivElement
+const iconWarningEl = document.getElementById('icon-warning') as HTMLDivElement
 const qrCardEl = document.getElementById('qr-card') as HTMLDivElement
 const qrEl = document.getElementById('qr') as HTMLImageElement
-const errorEl = document.getElementById('error') as HTMLParagraphElement
 const hintEl = document.getElementById('hint') as HTMLParagraphElement
 const videoEl = document.getElementById('video') as HTMLVideoElement
 const micAudioEl = document.getElementById('mic-audio') as HTMLAudioElement
@@ -18,11 +21,6 @@ const castStatusEl = document.getElementById('cast-status') as HTMLParagraphElem
 const openSettingsEl = document.getElementById('open-settings') as HTMLButtonElement
 const settingsBackdropEl = document.getElementById('settings-backdrop') as HTMLDivElement
 const closeSettingsEl = document.getElementById('close-settings') as HTMLButtonElement
-
-const WAITING_MESSAGE = 'Waiting for mobile device…'
-// Friendly, non-technical (AGENTS.md): codes stay in the main-process logs.
-const SESSION_ERROR_MESSAGE =
-  "Couldn't create a pairing session. Make sure this computer is connected to your Wi-Fi network, then try again."
 
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
@@ -76,9 +74,6 @@ const receiver = new ReceiverSession({
       document.body.classList.add('receiving')
       castOverlayEl.hidden = false
       window.desktopApi.setCastActive(true)
-      qrCardEl.hidden = true
-      hintEl.hidden = true
-      regenerateEl.hidden = true
     },
     clear: () => {
       videoEl.srcObject = null
@@ -91,8 +86,9 @@ const receiver = new ReceiverSession({
       // The next cast reshapes the window fresh — the resize listener
       // re-fires when the new stream's metadata arrives.
       lastAppliedAspect =0
-      hintEl.hidden = false
-      regenerateEl.hidden = false
+      // The pairing hero reappears (the mobile-state 'waiting' event clears
+      // the paired name; body.receiving has been hiding the whole stage).
+      renderHero()
     }
   },
   // The mic pc's stream (Phase8) lands in the mixer (Phase9) — its audible
@@ -136,27 +132,42 @@ videoEl.addEventListener('resize', () => {
 
 let connectedName: string | null = null
 let sessionInfo: CastSessionInfo | null = null
+// No LAN IP / session generation failed — the hero shows the friendly error
+// until a session (re)appears or the user retries via the regenerate button.
+let pairingSessionError = false
+
+// The pairing stage's waiting/connected/error screens (Phase13): one pure
+// view model (pairingHero.ts) decides what the user sees; this applies it.
+function renderHero(): void {
+  const view = heroView(connectedName, pairingSessionError)
+  qrCardEl.hidden = !view.showQr
+  iconCheckEl.hidden = view.icon !== 'check'
+  iconWarningEl.hidden = view.icon !== 'warning'
+  heroHeadingEl.textContent = view.heading
+  statusEl.textContent = view.subline
+  statusEl.classList.toggle('is-error', view.icon === 'warning')
+  hintEl.hidden = !view.showHint
+  regenerateEl.hidden = !view.showRegenerate
+  regenerateEl.textContent = view.regenerateLabel
+}
 
 function showSession(session: PairingSessionView): void {
-  errorEl.hidden = true
+  pairingSessionError = false
   qrEl.src = session.qrDataUrl
-  qrCardEl.hidden = false
+  renderHero()
 }
 
 function showSessionError(): void {
-  statusEl.textContent = WAITING_MESSAGE
-  qrCardEl.hidden = true
-  errorEl.textContent = SESSION_ERROR_MESSAGE
-  errorEl.hidden = false
+  pairingSessionError = true
+  renderHero()
 }
 
 function showMobileState(state: MobileStateEvent): void {
   if (state.state === 'connected') {
     connectedName = state.name
     sessionInfo = null
+    renderHero()
     renderStatus()
-    qrCardEl.hidden = true
-    errorEl.hidden = true
   } else if (state.state === 'session-info') {
     // Display-only summary from the mobile (webrtc.md) — never acted on.
     sessionInfo = state.info
@@ -167,17 +178,19 @@ function showMobileState(state: MobileStateEvent): void {
     connectedName = null
     sessionInfo = null
     receiver.handleMobileGone()
+    renderHero()
     renderStatus()
   }
 }
 
-// "Connected to Pixel 8 — 1280×720 · 30 fps · balanced · game audio · mic"
-// — shown in the waiting layout's status line and, while receiving, in the
-// hover overlay over the video.
+// "Connected to Pixel8 — 1280×720 · 30 fps · balanced · game audio · mic"
+// — the hover overlay's line over the video while receiving. The pairing
+// stage's own status is owned by renderHero (Phase13); the stage is hidden
+// during a cast anyway.
 function renderStatus(): void {
   let text: string
   if (connectedName === null) {
-    text = WAITING_MESSAGE
+    text = ''
   } else {
     const info = sessionInfo
     if (info === null) {
@@ -188,7 +201,6 @@ function renderStatus(): void {
       text = `Connected to ${connectedName} — ${parts.join(' · ')}`
     }
   }
-  statusEl.textContent = text
   castStatusEl.textContent = text
 }
 

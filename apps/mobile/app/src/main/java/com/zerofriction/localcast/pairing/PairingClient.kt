@@ -92,6 +92,10 @@ class PairingClient(
             return
         }
 
+        // A valid QR means a desktop was found — Phase13's immediate
+        // post-scan feedback ("Desktop found") before any socket opens.
+        _state.value = State.Connecting
+
         val client = SignalingClient(
             hosts = payload.h,
             port = payload.p,

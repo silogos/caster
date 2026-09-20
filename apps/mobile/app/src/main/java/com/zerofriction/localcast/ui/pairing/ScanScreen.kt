@@ -11,18 +11,28 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -32,10 +42,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -189,11 +203,10 @@ fun ScanContent(
                 }
 
                 is CastState.Failed -> {
-                    Text(
-                        text = castState.message,
-                        fontSize = 15.sp,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(bottom = 16.dp),
+                    StatusMessage(
+                        icon = Icons.Filled.Warning,
+                        message = castState.message,
+                        tint = MaterialTheme.colorScheme.error,
                     )
                     ScanUi(
                         hasCameraPermission = hasCameraPermission,
@@ -207,19 +220,21 @@ fun ScanContent(
                     PairingClient.State.Idle,
                     is PairingClient.State.Failed,
                     PairingClient.State.Ended -> {
+                        // Friendly error states (pairing.md §Failure modes): an
+                        // icon plus the mapped plain-words message above the
+                        // still-live scanner — codes stay in logs (AGENTS.md).
                         if (state is PairingClient.State.Failed) {
-                            Text(
-                                text = pairingErrorMessage(state.error),
-                                fontSize = 15.sp,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(bottom = 16.dp),
+                            StatusMessage(
+                                icon = Icons.Filled.Warning,
+                                message = pairingErrorMessage(state.error),
+                                tint = MaterialTheme.colorScheme.error,
                             )
                         }
                         if (state == PairingClient.State.Ended) {
-                            Text(
-                                text = stringResource(R.string.session_ended),
-                                fontSize = 15.sp,
-                                modifier = Modifier.padding(bottom = 16.dp),
+                            StatusMessage(
+                                icon = Icons.Filled.Info,
+                                message = stringResource(R.string.session_ended),
+                                tint = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                         ScanUi(
@@ -230,16 +245,21 @@ fun ScanContent(
                         )
                     }
 
+                    // The Phase13 mockup's intermediate step: the QR decoded,
+                    // a desktop is being paired with.
                     PairingClient.State.Connecting, PairingClient.State.Authenticating -> {
+                        Text(
+                            text = stringResource(R.string.desktop_found),
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(16.dp))
                         CircularProgressIndicator()
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            text = if (state == PairingClient.State.Connecting) {
-                                stringResource(R.string.connecting)
-                            } else {
-                                stringResource(R.string.authenticating)
-                            },
+                            text = stringResource(R.string.pairing_with_desktop),
                             fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
 
@@ -254,15 +274,32 @@ fun ScanContent(
                     }
 
                     is PairingClient.State.Connected -> {
+                        // The mockup's terminal pairing step: "Connected" →
+                        // START CAST. The consent hint below the trigger is
+                        // the mobile.md affordance for the Android 14+ dialog
+                        // that defaults to "Share one app".
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(56.dp),
+                        )
+                        Spacer(Modifier.height(16.dp))
                         Text(
                             text = stringResource(R.string.connected_to, state.desktopName),
-                            fontSize = 18.sp,
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(24.dp))
                         CastControls(castState = castState, desktopName = state.desktopName, releaseSignalingClient = releaseSignalingClient)
-                        Spacer(Modifier.height(16.dp))
-                        Button(onClick = onDisconnect) {
+                        Text(
+                            text = stringResource(R.string.share_full_screen_hint),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+                        )
+                        TextButton(onClick = onDisconnect) {
                             Text(stringResource(R.string.disconnect))
                         }
                     }
@@ -299,7 +336,9 @@ private fun ScanUi(
             onQrText = onQrScanned,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(320.dp),
+                .height(320.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp)),
         )
     }
 
@@ -398,13 +437,36 @@ private fun CastControls(
         }
     }
 
-    // Starting/Casting is rendered by the outer card; here only the trigger.
+    // Starting/Casting is rendered by the outer card; here only the trigger —
+    // labeled like the home button ("Start Cast") per the Phase13 mockup.
     when (castState) {
         CastState.Idle, is CastState.Failed -> Button(onClick = ::requestConsentAndStart) {
-            Text(stringResource(R.string.start_casting))
+            Text(stringResource(R.string.start_cast))
         }
 
         is CastState.Starting, is CastState.Casting -> Unit
+    }
+}
+
+/** Icon + plain-words message row — the pairing screen's friendly states. */
+@Composable
+private fun StatusMessage(
+    icon: ImageVector,
+    message: String,
+    tint: Color,
+) {
+    Row(
+        modifier = Modifier.padding(bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(text = message, fontSize = 15.sp, color = tint)
     }
 }
 

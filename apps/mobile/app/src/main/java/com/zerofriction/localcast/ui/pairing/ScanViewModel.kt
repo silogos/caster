@@ -20,12 +20,14 @@ import kotlinx.coroutines.flow.StateFlow
 class ScanViewModel(
     private val pairingClient: PairingClient =
         PairingClient(::defaultTransportFactory, ::defaultSignalingScheduler, ::defaultUserAgent),
+    /** The cast service's state — injected like HomeViewModel's, so the VM is JVM-testable. */
+    castState: StateFlow<CastState> = CastService.state,
 ) : ViewModel() {
 
     val pairingState: StateFlow<PairingClient.State> = pairingClient.state
 
     /** The cast service's state — what the cast controls render. */
-    val castState: StateFlow<CastState> = CastService.state
+    val castState: StateFlow<CastState> = castState
 
     /**
      * Hand the live signaling connection of the current pairing to the cast
