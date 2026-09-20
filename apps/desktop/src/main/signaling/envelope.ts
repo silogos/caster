@@ -1,12 +1,33 @@
 // Message envelope for the signaling WebSocket — docs/architecture/webrtc.md.
-// Every frame is JSON text: {v, type, seq, sid, payload}. Phase3 implements
-// only the pairing-related types; Phase4 adds sdp-*/ice/ping/pong/session-info.
+// Every frame is JSON text: {v, type, seq, sid, payload}. The full Phase4
+// message set: pairing (hello/challenge/auth/auth-ok), media plumbing
+// (sdp-offer/sdp-answer/ice/session-info), and lifecycle (ping/pong/bye/error).
 
 export const ENVELOPE_VERSION = 1
 /** Max envelope size per webrtc.md. */
 export const ENVELOPE_MAX_BYTES = 256 * 1024
 
-export type EnvelopeType = 'hello' | 'challenge' | 'auth' | 'auth-ok' | 'error' | 'bye'
+export type EnvelopeType =
+  | 'hello'
+  | 'challenge'
+  | 'auth'
+  | 'auth-ok'
+  | 'error'
+  | 'bye'
+  | 'sdp-offer'
+  | 'sdp-answer'
+  | 'ice'
+  | 'session-info'
+  | 'ping'
+  | 'pong'
+
+/** PeerConnection discriminator — the two PCs share one signaling channel (ADR-003). */
+export type PcId = 'media' | 'mic'
+
+/** Type guard for the `pc` discriminator (not part of the wire format). */
+export function isPcId(value: unknown): value is PcId {
+  return value === 'media' || value === 'mic'
+}
 
 export interface HelloPayload {
   /** App/platform string for logs, e.g. "ZeroFrictionCast/0.1.0 (Android15; Pixel8)". */
@@ -32,9 +53,50 @@ export interface ErrorPayload {
   code: string
   msg?: string
 }
-export interface ByePayload {}
+export interface ByePayload {
+  /** Free-form reason for logs; never user-facing (webrtc.md). */
+  reason?: string
+}
+export interface SdpPayload {
+  /** Which PeerConnection the blob belongs to. */
+  pc: PcId
+  /** Opaque SDP blob — signaling never parses it. */
+  sdp: string
+}
+export interface IcePayload {
+  pc: PcId
+  /**
+   * Platform candidate object, passed through verbatim (an RTCIceCandidateInit
+   * on the desktop, its libwebrtc equivalent on mobile). `null` marks
+   * end-of-gathering for this `pc` (webrtc.md). Signaling treats it as opaque.
+   */
+  candidate: unknown
+}
+export interface SessionInfoPayload {
+  /** Display-only summary for the desktop status line — never acted on (webrtc.md). */
+  profile: string
+  width: number
+  height: number
+  fps: number
+  gameAudio: boolean
+  mic: boolean
+}
+export interface HeartbeatPayload {
+  /** Sender's epoch milliseconds; echoed unchanged in the pong. */
+  t: number
+}
 
-export type EnvelopePayload = HelloPayload | ChallengePayload | AuthPayload | AuthOkPayload | ErrorPayload | ByePayload
+export type EnvelopePayload =
+  | HelloPayload
+  | ChallengePayload
+  | AuthPayload
+  | AuthOkPayload
+  | ErrorPayload
+  | ByePayload
+  | SdpPayload
+  | IcePayload
+  | SessionInfoPayload
+  | HeartbeatPayload
 
 export interface Envelope<P extends EnvelopePayload = EnvelopePayload> {
   v: typeof ENVELOPE_VERSION
@@ -50,9 +112,20 @@ export type ParseResult =
   | { ok: true; envelope: Envelope }
   | { ok: false; code: 'bad-version' | 'bad-message'; reason: string }
 
-function isEnvelopeType(value: unknown): value is EnvelopeType {
-  return value === 'hello' || value === 'challenge' || value === 'auth' || value === 'auth-ok' || value === 'error' || value === 'bye'
-}
+const ENVELOPE_TYPES: ReadonlySet<string> = new Set<EnvelopeType>([
+  'hello',
+  'challenge',
+  'auth',
+  'auth-ok',
+  'error',
+  'bye',
+  'sdp-offer',
+  'sdp-answer',
+  'ice',
+  'session-info',
+  'ping',
+  'pong'
+])
 
 /**
  * Parse one inbound frame. Envelope version mismatch is terminal (bad-version);
@@ -76,7 +149,7 @@ export function parseEnvelope(raw: string): ParseResult {
   if (candidate.v !== ENVELOPE_VERSION) {
     return { ok: false, code: 'bad-version', reason: `envelope v ${String(candidate.v)}` }
   }
-  if (!isEnvelopeType(candidate.type)) {
+  if (typeof candidate.type !== 'string' || !ENVELOPE_TYPES.has(candidate.type)) {
     return { ok: false, code: 'bad-message', reason: `unknown type ${String(candidate.type)}` }
   }
   if (typeof candidate.seq !== 'number' || !Number.isInteger(candidate.seq) || candidate.seq < 1) {

@@ -3,6 +3,7 @@ package com.zerofriction.localcast.ui.pairing
 import androidx.lifecycle.ViewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.pairing.PairingClient
+import com.zerofriction.localcast.pairing.defaultSignalingScheduler
 import com.zerofriction.localcast.pairing.defaultTransportFactory
 import kotlinx.coroutines.flow.StateFlow
 
@@ -13,7 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
  * only" (roadmap); the cast service (Phase6) will own it later.
  */
 class ScanViewModel(
-    private val pairingClient: PairingClient = PairingClient(::defaultTransportFactory, ::defaultUserAgent),
+    private val pairingClient: PairingClient =
+        PairingClient(::defaultTransportFactory, ::defaultSignalingScheduler, ::defaultUserAgent),
 ) : ViewModel() {
 
     val pairingState: StateFlow<PairingClient.State> = pairingClient.state
@@ -24,10 +26,12 @@ class ScanViewModel(
         when (pairingClient.state.value) {
             PairingClient.State.Idle,
             is PairingClient.State.Failed,
-            is PairingClient.State.Disconnected,
+            PairingClient.State.Ended,
             -> pairingClient.startFromQrText(qrText)
-            PairingClient.State.Connecting, PairingClient.State.Authenticating,
+            PairingClient.State.Connecting,
+            PairingClient.State.Authenticating,
             is PairingClient.State.Connected,
+            is PairingClient.State.Reconnecting,
             -> {}
         }
     }

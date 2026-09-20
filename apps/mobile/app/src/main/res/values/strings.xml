@@ -12,7 +12,9 @@
     <string name="connecting">Connecting to the desktop…</string>
     <string name="authenticating">Pairing…</string>
     <string name="connected_to">Connected to %1$s</string>
-    <string name="disconnected">Connection to the desktop was lost. Scan again to reconnect.</string>
+    <string name="reconnecting_to">Reconnecting to %1$s…</string>
+    <string name="reconnecting">Reconnecting to the desktop…</string>
+    <string name="session_ended">The desktop ended the session. Scan again to connect.</string>
     <string name="disconnect">Disconnect</string>
     <string name="scan_again">Scan again</string>
     <string name="manual_payload_label">Debug: paste the QR payload JSON</string>

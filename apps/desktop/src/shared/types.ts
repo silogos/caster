@@ -39,3 +39,17 @@ export interface PairingSessionView {
 export type MobileStateEvent =
   | { state: 'waiting' }
   | { state: 'connected'; name: string }
+  | { state: 'session-info'; info: CastSessionInfo }
+
+/**
+ * Display-only summary pushed by the mobile's `session-info` message
+ * (docs/architecture/webrtc.md) — shown on the status line, never acted on.
+ */
+export interface CastSessionInfo {
+  profile: string
+  width: number
+  height: number
+  fps: number
+  gameAudio: boolean
+  mic: boolean
+}
