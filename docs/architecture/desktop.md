@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phases 2–5 implemented (pairing, signaling, and the renderer's `ReceiverSession` + video since Phase 5 — [features/screen-capture.md](../features/screen-capture.md)).
+Status: Phases 2–9 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, and the Phase9 audio mixer — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md)).
 
 ## Role
 

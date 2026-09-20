@@ -111,3 +111,52 @@ body {
 .video[hidden] {
   display: none;
 }
+
+/*
+  Phase9's mixer (audio.md) — the receiver's one audio control: independent
+  volume/mute per stream. Receiver/environment control only (overview.md):
+  this is never a cast setting.
+*/
+.mixer {
+  display: flex;
+  gap: 28px;
+  padding: 12px 16px;
+  border: 1px solid #232833;
+  border-radius: 10px;
+}
+
+.mixer[hidden] {
+  display: none;
+}
+
+.mixer-channel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mixer-label {
+  font-size: 13px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.mixer-channel input[type='range'] {
+  width: 120px;
+  accent-color: var(--fg);
+}
+
+.mixer-button {
+  padding: 6px 12px;
+  border: 1px solid var(--fg-muted);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mixer-button:hover {
+  border-color: var(--fg);
+}

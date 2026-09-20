@@ -24,6 +24,10 @@ Every mic failure (record init/start error, `createPeerConnection` null, ICE `FA
 
 `NeedsPermission`'s button asks for the grant from the activity (the service cannot show dialogs); granting turns the mic on immediately — denial keeps the honest fact, never an error.
 
+### Backgrounded operation — the `microphone` FGS type (found live in the Phase9 listen)
+
+The cast FGS started as type `mediaProjection` only (Phase6), which covers screen and game-audio capture while the app is backgrounded — but **Android 11+ allows a backgrounded app's microphone only through a `microphone`-typed foreground service**: with the mic on, backgrounding the app (running a game, say) silenced the mic on the desktop while screen + game audio kept streaming. Fix: `CastForegroundTypes` computes the service's type set — `mediaProjection` always, `microphone` added at mic-on and removed at mic-off (a re-`startForeground` with the same notification); the bit joins only with RECORD_AUDIO granted (Android14+ refuses a microphone-typed start without it) and only from API30, where the type exists. Manifest: `foregroundServiceType="mediaProjection|microphone"` + the `FOREGROUND_SERVICE_MICROPHONE` permission. JVM tests cover the type-set computation (62 total).
+
 ### Permission flow
 
 RECORD_AUDIO was already requested non-fatally before every cast (Phase7 needs it for playback capture). Phase 8 reuses it: granted → both audio paths available; denied → game audio off **and** mic `NeedsPermission`, cast otherwise unaffected. Denial observed live in Phase 7's reasoning; the runtime-denial device case is listed for Phase 15's matrix.
@@ -51,4 +55,4 @@ RECORD_AUDIO was already requested non-fatally before every cast (Phase7 needs i
 
 **Remaining acceptance item — the audible listen:** the room was quiet during the measurement window, so the mic stream's peak at the receiver was ≈ 0.00003 (a live but silent stream — nobody spoke). A planned loud-sample test (macOS `say` through the Mac's speakers into the phone's mic) raced the mic being toggled off. So: everything short of *heard* audio is verified; the user's listen of a spoken word on the desktop speakers closes the acceptance, exactly like Phase 7's test tone.
 
-**Also pending (Phase 15 matrix):** runtime RECORD_AUDIO denial on device, mic quality through the APM (noise suppression strength), behavior of a mic pc when Wi-Fi flaps mid-toggle (the reconnect ladder itself was observed re-authing cleanly three times when the phone's Wi-Fi grew unstable at the end of the session).
+**Also pending (Phase 15 matrix):** runtime RECORD_AUDIO denial on device, mic quality through the APM (noise suppression strength), behavior of a mic pc when Wi-Fi flaps mid-toggle (the reconnect ladder itself was observed re-authing cleanly three times when the phone's Wi-Fi grew unstable at the end of the session), and the formal backgrounded-mic verification on the fixed build (the `microphone` FGS type above — the silencing was found live; the fixed behavior still needs a backgrounded listen).

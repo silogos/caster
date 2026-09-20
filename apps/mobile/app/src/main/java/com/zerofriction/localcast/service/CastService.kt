@@ -9,7 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -164,6 +163,9 @@ class CastService : Service() {
     private var physicalWidth: Int = 0
     private var physicalHeight: Int = 0
 
+    /** Kept from [StartArgs] for the notification the FGS type updates rebuild. */
+    private var desktopName: String = ""
+
     override fun onBind(intent: Intent?) = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -193,22 +195,17 @@ class CastService : Service() {
         pendingStart = null
         signaling = args.signaling
         config = args.config
+        desktopName = args.desktopName
         physicalWidth = args.physicalWidth
         physicalHeight = args.physicalHeight
 
-        // Android 14+ ordering (mobile.md): foreground *before* the projection
-        // starts; the consent was collected *before* the service started.
+        // Android14+ ordering (mobile.md): foreground *before* the projection
+        // starts; the consent was collected *before* the service started. The
+        // mic bit joins the type set only when the mic session starts — the
+        // mic decision (config + permission) is settled below, and Android14+
+        // refuses a microphone-typed start without RECORD_AUDIO.
         createChannel()
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(args.desktopName),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            } else {
-                0
-            },
-        )
+        startCastForeground(micOn = false)
 
         val newSession = MediaCastSession(
             context = applicationContext,
@@ -256,6 +253,7 @@ class CastService : Service() {
         if (currentMic !== null) {
             currentMic.stop()
             micSession = null
+            startCastForeground(micOn = false)
             // The session's onState(Off) republishes; the summary needs the
             // flag flipped after it.
             sendSessionInfo(mic = false)
@@ -279,6 +277,9 @@ class CastService : Service() {
         )
         micSession = newMic
         newMic.start()
+        // Before the ADM's first mic read: the mic bit must be on the FGS
+        // before the app can be backgrounded, or Android11+ mutes the mic.
+        startCastForeground(micOn = true)
         sendSessionInfo(mic = true)
         Log.i(TAG, "mic session started")
     }
@@ -305,6 +306,24 @@ class CastService : Service() {
     private fun hasRecordAudioPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
+
+    /**
+     * (Re-)declare the service's foreground type set. The `microphone` bit
+     * rides along exactly while the mic session is on (CastForegroundTypes):
+     * Android11+ silences a backgrounded app's mic unless its FGS carries the
+     * type — found live on Android16 (mic went silent the moment the app was
+     * backgrounded while screen + game audio kept streaming). Re-calling
+     * startForeground with the same id rebuilds the same notification with the
+     * new types; callers add the mic bit only with RECORD_AUDIO granted.
+     */
+    private fun startCastForeground(micOn: Boolean) {
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(desktopName),
+            CastForegroundTypes.types(micOn, Build.VERSION.SDK_INT),
+        )
+    }
 
     /** First-class stop paths (mobile.md): simple user-facing message, details stay in logs. */
     private fun onFatal(failure: MediaCastSession.Failure) {

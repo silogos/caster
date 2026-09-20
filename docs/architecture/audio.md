@@ -1,6 +1,6 @@
 # Audio Architecture
 
-Status: game audio **implemented in Phase7** and mic **in Phase 8** (findings: [features/game-audio.md](../features/game-audio.md), [features/microphone.md](../features/microphone.md)); desktop mixer lands in Phase 9.
+Status: game audio **implemented in Phase7**, mic **in Phase 8**, desktop mixer **in Phase 9** (findings: [features/game-audio.md](../features/game-audio.md), [features/microphone.md](../features/microphone.md), [features/audio-mixer.md](../features/audio-mixer.md)).
 
 ## Product rule
 
@@ -34,6 +34,8 @@ Facts that shape the implementation (all verified live in Phase 7 — [features/
 
 Implemented in Phase 8: the mic is **off by default** and turned on/off by a live toggle during the cast (`MicCastSession`, built and torn down on demand — the `media` PC is never renegotiated because of it; every mic failure is mic-local, the cast keeps running). Verification record: [features/microphone.md](../features/microphone.md).
 
+**Backgrounded operation (found live on Android16):** the cast FGS must carry the **`microphone` foreground-service type while the mic session is on** — Android11+ silences a backgrounded app's mic otherwise (screen + game audio kept streaming because `mediaProjection` covers them; the mic went silent the moment the app was backgrounded). The type is added/removed at the mic toggle (`CastForegroundTypes`), only with RECORD_AUDIO granted (Android14+ refuses a microphone-typed start without it) and only from API30, where the type exists.
+
 ### Why two PeerConnections (the libwebrtc constraint)
 
 libwebrtc allows **one AudioDeviceModule per PeerConnectionFactory**, and every local audio track in that factory records through that single ADM — there is no second recording stream. Two independent sources therefore cannot share one PeerConnection, and mixing on Android is forbidden by the product rule.
@@ -54,11 +56,12 @@ Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.
 "mic"   PC ─▶ mic MediaStream     ─▶ MediaStreamAudioSourceNode ─▶ GainNode ─┘
 ```
 
-Until Phase9 wires this graph, the game-audio track plays directly through the receiver `<video>` element (Phase7 verified its markup must **not** be muted — a Phase5 autoplay leftover silently ate all cast audio until found live), and the mic track plays through its own separate `<audio>` element (Phase8) — separate elements on purpose, so the two streams stay independent at the receiver too.
+Since Phase9 the graph above is the receiver's only audio path (implementation + verification: [features/audio-mixer.md](../features/audio-mixer.md)):
 
-- Independent volume per `GainNode`; persisted levels restored on launch.
+- The receiver `<video>` element is **muted** — it renders video only; its audio track plays through the mixer's graph (an unmuted element would play the game audio twice). A muted `<audio>` element still holds the mic stream as a **keep-alive**: Chromium stops pulling a `MediaStream` held only by Web Audio once the page is hidden (found live — minimized window, mic silent, game audio fine), so every received stream stays attached to a media element while the graph remains the sole audible path.
+- Independent volume per `GainNode`; persisted levels restored on launch (renderer `localStorage`).
 - **No further processing** (no EQ, compression, echo cancellation on the receiver) unless a measured need appears. The desktop renders and plays; it does not re-mix into one track or re-encode.
-- Chromium resamples each remote stream into the output clock; per-stream pull means there is no drift-accumulation problem between the two streams in practice (validated by ear + measurement in Phase 9).
+- Chromium resamples each remote stream into the output clock; per-stream pull means there is no drift-accumulation problem between the two streams in practice (predicted here; validated by ear + measurement in the Phase9/15 listen — [features/audio-mixer.md](../features/audio-mixer.md)).
 
 ## Known limitations
 

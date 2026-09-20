@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 8 implemented — awaiting review (the audible mic listen on the desktop is the one remaining acceptance item; see [features/microphone.md](../features/microphone.md)).**
+Current status: **Phase 9 implemented — awaiting review (the audible live-cast listen — independent volumes, no clipping at defaults, long-session drift — is the remaining acceptance item; see [features/audio-mixer.md](../features/audio-mixer.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -48,7 +48,7 @@ Current status: **Phase 8 implemented — awaiting review (the audible mic liste
 
 ## Phase 9 — Desktop Audio Mixer
 **Scope:** `MediaStreamAudioSourceNode → GainNode ×2 → destination`; independent, persisted volume sliders; no extra processing.
-**Accept:** independent volume/mute per stream; levels persist across launches; no distortion/clipping at sensible defaults; drift check over a long session. Commit `feat: add desktop audio mixer`.
+**Accept:** independent volume/mute per stream; levels persist across launches; no distortion/clipping at sensible defaults; drift check over a long session. Commit `feat: add desktop audio mixer`. *(Implemented 2026-09-20: `AudioMixer` is the receiver's only audible path — the `<video>` element is muted (it renders video only; the old element playback would double the game audio next to the graph); the mic stream is held by a muted keep-alive `<audio>` element because Chromium stops pulling an element-less MediaStream while the window is hidden (found live: minimized → mic silent). Two live-found mic bugs fixed during the listen: the desktop keep-alive above, and the mobile `microphone` FGS type — Android11+ silences a backgrounded app's mic without it (mic went silent when the app was backgrounded; `CastForegroundTypes` adds/removes the type at the mic toggle, mobile JVM 62/62). Unity-gain defaults; levels persisted in renderer `localStorage`, restored on launch; corrupt storage degrades to defaults. Desktop 67/67 (14 new mixer tests), build green; live CDP check drove the sliders/mute and verified persistence across a relaunch. Remaining: the audible live-cast listen (independence heard, clipping, long-session drift) — [features/audio-mixer.md](../features/audio-mixer.md).)*
 
 ## Phase 10 — Mobile Cast Configuration
 **Scope:** settings screen on mobile (quality profile, resolution, FPS, bitrate/auto, game-audio & mic toggles) per [overview.md](../architecture/overview.md) ownership rules; sender-side `RTCRtpSender` parameter application; changes take effect on next cast (or live if cheap).
@@ -90,5 +90,5 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 ## Documentation produced along the way
 
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
-- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`
+- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.
