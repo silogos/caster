@@ -34,6 +34,8 @@ Facts that shape the implementation (all verified live in Phase 7 — [features/
 
 Implemented in Phase 8: the mic is **off by default** and turned on/off by a live toggle during the cast (`MicCastSession`, built and torn down on demand — the `media` PC is never renegotiated because of it; every mic failure is mic-local, the cast keeps running). Verification record: [features/microphone.md](../features/microphone.md).
 
+**Backgrounded operation (found live on Android16):** the cast FGS must carry the **`microphone` foreground-service type while the mic session is on** — Android11+ silences a backgrounded app's mic otherwise (screen + game audio kept streaming because `mediaProjection` covers them; the mic went silent the moment the app was backgrounded). The type is added/removed at the mic toggle (`CastForegroundTypes`), only with RECORD_AUDIO granted (Android14+ refuses a microphone-typed start without it) and only from API30, where the type exists.
+
 ### Why two PeerConnections (the libwebrtc constraint)
 
 libwebrtc allows **one AudioDeviceModule per PeerConnectionFactory**, and every local audio track in that factory records through that single ADM — there is no second recording stream. Two independent sources therefore cannot share one PeerConnection, and mixing on Android is forbidden by the product rule.

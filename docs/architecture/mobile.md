@@ -41,7 +41,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 
 ## Session architecture
 
-- **`CastService`** is a **foreground service** (type `mediaProjection`) that owns the whole cast session: MediaProjection, the peer connections, **and the pairing signaling connection** (handed over by the pairing machine at cast start — Phase6). The Activity is only UI; the cast survives the app being backgrounded while a game runs, the scan screen being left, and the task being removed.
+- **`CastService`** is a **foreground service** (type `mediaProjection`, plus `microphone` while the mic session is on — `CastForegroundTypes`) that owns the whole cast session: MediaProjection, the peer connections, **and the pairing signaling connection** (handed over by the pairing machine at cast start — Phase6). The Activity is only UI; the cast survives the app being backgrounded while a game runs, the scan screen being left, and the task being removed. The mic type is added/removed at the mic toggle because Android11+ silences a backgrounded app's microphone unless its FGS declares the type (found live on Android16 — [features/microphone.md](../features/microphone.md)).
 - **Ordering constraint (Android 14+):** the service enters the foreground *before* `createVirtualDisplay`/projection starts, and the media-projection consent result is obtained *before* the service starts. Implemented: consent → handover → foreground → projection.
 - **Stop policy (Phase6 decision):** ending a cast ends the pairing session too (`bye` → the desktop shows a fresh QR; a new cast means a new scan). The service must stop for clean resource release, and no background process can be trusted to hold the socket. Every lifecycle edge (user stop via app or notification, projection revoked, desktop gone, process death) funnels through one idempotent teardown — no leaked projections/displays (the acceptance matrix lives in [features/cast-session.md](../features/cast-session.md)).
 - Session state is exposed to the UI as a `StateFlow` (`Idle` / `Starting` / `Casting` / `Failed`), rendered by both the home and scan screens — not via callbacks scattered across classes.
@@ -52,7 +52,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 | Permission | Purpose | When requested |
 |---|---|---|
 | `INTERNET` | WebSocket + WebRTC | Install time |
-| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` | Cast keeps running while a game is foreground | Install time (manifest) |
+| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` + `FOREGROUND_SERVICE_MICROPHONE` | Cast keeps running while a game is foreground; the microphone type is required on Android11+ for a backgrounded app's mic (added/removed at the mic toggle) | Install time (manifest) |
 | `POST_NOTIFICATIONS` | Cast-in-progress notification (required for FGS visibility) | Runtime, before first cast |
 | `RECORD_AUDIO` | Playback-capture AudioRecord + the WebRTC ADM's initial mic record (Phase7), and microphone capture itself on the `mic` PC (Phase 8 — off by default, toggled live during the cast) | Runtime, before first cast (non-fatal: denial = video-only cast + mic needs-permission state) |
 | `CAMERA` | QR code scanning only | Runtime, at scan screen |
