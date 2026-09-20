@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 7 implemented — awaiting review (the audible test-tone confirmation on the fixed desktop build is the one remaining acceptance listen; see [features/game-audio.md](../features/game-audio.md)).**
+Current status: **Phase 8 implemented — awaiting review (the audible mic listen on the desktop is the one remaining acceptance item; see [features/microphone.md](../features/microphone.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -44,7 +44,7 @@ Current status: **Phase 7 implemented — awaiting review (the audible test-tone
 
 ## Phase 8 — Microphone Audio
 **Scope:** `mic` PC (factory B) with `JavaAudioDeviceModule`; permission flow; mic toggle; simultaneous operation with game audio.
-**Accept:** mic audible as an independent stream; independent of game-audio state; permission-denied path graceful. Commit `feat: add microphone capture`.
+**Accept:** mic audible as an independent stream; independent of game-audio state; permission-denied path graceful. Commit `feat: add microphone capture`. *(Implemented 2026-09-20: `MicCastSession` built/torn down on demand by a live on/off toggle (mic off by default — privacy, and the media PC is never renegotiated); every mic failure is mic-local; the desktop answers the mic pc on its own answerer and renders it to a separate `<audio>` element (the Phase9 mixer is next). Live on device: mic offers answered through a full off→on toggle cycle, mic stream rendered at the receiver, mic pc connected independently while game audio streamed loud on the media pc, new mic UI observed on both screens. Remaining: the audible mic listen (the room was quiet during measurement — stream live but silent) + runtime permission-denial on device goes to the Phase15 matrix. JVM tests 58/58, desktop 53/53.)*
 
 ## Phase 9 — Desktop Audio Mixer
 **Scope:** `MediaStreamAudioSourceNode → GainNode ×2 → destination`; independent, persisted volume sliders; no extra processing.

@@ -1,6 +1,6 @@
 # WebRTC & Signaling Architecture
 
-Status: signaling **implemented in Phase4** and media transport (video-only) **implemented in Phase 5** — verification records in [features/signaling.md](../features/signaling.md) and [features/screen-capture.md](../features/screen-capture.md). Envelope v1, message set and lifecycle rules below are as implemented.
+Status: signaling **implemented in Phase4**, video transport in **Phase 5**, game audio on the `media` PC in **Phase 7**, and the `mic` PC in **Phase 8** — verification records in [features/signaling.md](../features/signaling.md), [features/screen-capture.md](../features/screen-capture.md), [features/game-audio.md](../features/game-audio.md), and [features/microphone.md](../features/microphone.md). Envelope v1, message set and lifecycle rules below are as implemented.
 
 ## Separation of concerns
 
@@ -61,7 +61,7 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 libwebrtc/Electron constraint: one AudioDeviceModule per PeerConnectionFactory, and all local audio tracks in a factory share that single recorder — so two independent audio sources cannot live in one PeerConnection. Therefore:
 
 - **`media` PC** (factory A): screen video + **game audio** (custom playback-capture ADM).
-- **`mic` PC** (factory B): microphone (standard `JavaAudioDeviceModule`).
+- **`mic` PC** (factory B): microphone (standard `JavaAudioDeviceModule`) — implemented in Phase 8, built/torn down on demand by the mobile's live mic toggle; the desktop answers it on its own answerer, independently of the media pc.
 
 Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS cost of the second connection is negligible on LAN. Full rationale, alternatives, and the validation spike: [ADR-003](../decisions/ADR-003-two-audio-track-architecture.md).
 

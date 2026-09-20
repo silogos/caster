@@ -1,6 +1,6 @@
 # Audio Architecture
 
-Status: game audio **implemented in Phase 7** (findings: [features/game-audio.md](../features/game-audio.md)); mic lands in Phase8, desktop mixer in Phase 9.
+Status: game audio **implemented in Phase7** and mic **in Phase 8** (findings: [features/game-audio.md](../features/game-audio.md), [features/microphone.md](../features/microphone.md)); desktop mixer lands in Phase 9.
 
 ## Product rule
 
@@ -32,6 +32,8 @@ Facts that shape the implementation (all verified live in Phase 7 — [features/
 
 `JavaAudioDeviceModule` (libwebrtc default recorder, `VOICE_COMMUNICATION` audio source so the platform applies noise suppression / AGC as appropriate) ──▶ `"mic"` PC audio track.
 
+Implemented in Phase 8: the mic is **off by default** and turned on/off by a live toggle during the cast (`MicCastSession`, built and torn down on demand — the `media` PC is never renegotiated because of it; every mic failure is mic-local, the cast keeps running). Verification record: [features/microphone.md](../features/microphone.md).
+
 ### Why two PeerConnections (the libwebrtc constraint)
 
 libwebrtc allows **one AudioDeviceModule per PeerConnectionFactory**, and every local audio track in that factory records through that single ADM — there is no second recording stream. Two independent sources therefore cannot share one PeerConnection, and mixing on Android is forbidden by the product rule.
@@ -52,7 +54,7 @@ Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.
 "mic"   PC ─▶ mic MediaStream     ─▶ MediaStreamAudioSourceNode ─▶ GainNode ─┘
 ```
 
-Until Phase 9 wires this graph, the game-audio track plays directly through the receiver `<video>` element (Phase7 verified its markup must **not** be muted — a Phase5 autoplay leftover silently ate all cast audio until found live).
+Until Phase9 wires this graph, the game-audio track plays directly through the receiver `<video>` element (Phase7 verified its markup must **not** be muted — a Phase5 autoplay leftover silently ate all cast audio until found live), and the mic track plays through its own separate `<audio>` element (Phase8) — separate elements on purpose, so the two streams stay independent at the receiver too.
 
 - Independent volume per `GainNode`; persisted levels restored on launch.
 - **No further processing** (no EQ, compression, echo cancellation on the receiver) unless a measured need appears. The desktop renders and plays; it does not re-mix into one track or re-encode.
