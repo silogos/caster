@@ -10,8 +10,8 @@ It must **not** expose cast configuration. Forbidden on the desktop: resolution,
 
 Allowed desktop controls are **receiver/environment** controls only:
 
-- Game-audio volume, microphone volume (independent `GainNode`s — Phase 9)
-- Window: fullscreen, aspect-ratio behavior (letterbox)
+- Game-audio volume, microphone volume (independent `GainNode`s — Phase9), reached through the hover-triggered settings modal
+- Window: fullscreen, aspect-ratio behavior — implemented as **the window following the stream's aspect** (cast start and rotation): content area preserved, clamped to the display work area, no stretch/crop
 - Stay-awake during an active cast (`powerSaveBlocker`)
 - Regenerate pairing QR / cancel session
 
@@ -35,14 +35,16 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
 │  Renderer (Chromium)                                    │
 │  PairingView: renders QR (from data URL), waiting state │
 │  ReceiverSession: RTCPeerConnection ×2, ICE/SDP glue    │
-│  VideoView: <video> element, letterboxed, dark bg       │
+│  VideoView: <video> fills the window while casting      │
+│             (window follows the stream's aspect)        │
 │  AudioMixer: MediaStreamAudioSourceNode → GainNode ×2   │
 │             → AudioContext.destination                  │
-│  StatusView: connection state, volume sliders           │
+│  CastOverlay: hover-revealed status + settings trigger; │
+│  SettingsModal: the mixer (volume/mute per stream)       │
 └─────────────────────────────────────────────────────────┘
 ```
 
-Responsibility split: the main process owns **sockets and sessions**; the renderer owns **WebRTC and media**. IPC carries only typed session events (pairing-created, mobile-authenticated, signaling-message, cast-started/ended, error) — no business logic on both sides.
+Responsibility split: the main process owns **sockets, sessions, and the window** (including the cast window's shape — it reshapes to the stream's aspect so the video fills it edge-to-edge in every orientation; the geometry is pure and unit-tested in `windowGeometry.ts`); the renderer owns **WebRTC and media**. IPC carries only typed session events (pairing-created, mobile-authenticated, signaling-message, cast-started/ended, window-shape, error) — no business logic on both sides.
 
 ## Receiver session details
 
@@ -53,12 +55,12 @@ Responsibility split: the main process owns **sockets and sessions**; the render
 
 ## Window design for OBS / streaming (Phase 14 target)
 
-The receiver window is the product's "output device" for streamers:
+The receiver window is the product's "output device" for streamers. Early pieces landed in the review-time restructure after Phase9 (full-window video, hover overlay, window-follows-stream):
 
-- Stable window (no re-layout during a cast), dark background (#000 or near-black).
-- Video letterboxed with a predictable aspect ratio that follows the phone's rotation; no stretched rendering.
-- Minimal UI: no overlays on top of the video while casting; controls fade out or sit outside the video rect.
+- Stable, dark window (#000/near-black); while casting the video fills the window, and the window reshapes to the stream's aspect (cast start + rotation) so there is no persistent letterboxing; `contain` never stretches or crops.
+- Minimal UI: **no visible UI over the video** while casting — a hover-revealed overlay carries the status line and the settings trigger; the mixer lives in the modal it opens.
 - Smooth rendering: the `<video>` element is composited directly (no canvas copy) unless a measured reason appears.
+- Remaining Phase14 items: 30+ min OBS-session hardening, letterboxing polish for manually resized windows, optional session-info overlay off-cast.
 
 ## Lifecycle states
 

@@ -4,7 +4,7 @@ import { IPC } from '../shared/ipc'
 import type { MobileStateEvent, PairingSessionView } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
-import { createMainWindow } from './window'
+import { createMainWindow, enterCastWindowLayout, leaveCastWindowLayout, resizeToStreamAspect } from './window'
 import { PairingServer } from './pairing/pairingServer'
 import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { logger } from './log'
@@ -42,6 +42,15 @@ function asIceMessage(raw: unknown): { pc: PcId; candidate: unknown } | null {
   const { pc, candidate } = raw as Record<string, unknown>
   if (!isPcId(pc) || !('candidate' in (raw as Record<string, unknown>))) return null
   return { pc, candidate }
+}
+
+/** Renderer input is untrusted at the process boundary — same rule as the SDP/ICE relays above. */
+function asStreamSize(raw: unknown): { width: number; height: number } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { width, height } = raw as Record<string, unknown>
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
+  if ((width as number) <= 0 || (height as number) <= 0) return null
+  return { width: width as number, height: height as number }
 }
 
 app.whenReady().then(async () => {
@@ -100,6 +109,30 @@ app.whenReady().then(async () => {
       return
     }
     signaling.sendIceCandidate(message.pc, message.candidate)
+  })
+
+  // Window behavior (overview.md: the receiver's own control — never a cast
+  // setting). While a cast fills the window, the waiting layout's minimums
+  // are relaxed so portrait streams can fill it; on cast end they're restored.
+  ipcMain.handle(IPC.window.castActive, (_event, raw) => {
+    if (mainWindow === null || mainWindow.isDestroyed()) return
+    if (raw === true) {
+      enterCastWindowLayout(mainWindow)
+    } else {
+      leaveCastWindowLayout(mainWindow)
+    }
+  })
+  // The window follows the stream's aspect (rotation included) so the
+  // letterboxed video fills it edge-to-edge in every orientation.
+  ipcMain.handle(IPC.window.resizeToStream, (_event, raw) => {
+    const size = asStreamSize(raw)
+    if (size === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed stream size — dropping')
+      return
+    }
+    if (mainWindow === null || mainWindow.isDestroyed()) return
+    resizeToStreamAspect(mainWindow, size.width, size.height)
+    logger.info(LOG_SCOPE, 'window reshaped to the stream', { width: size.width, height: size.height })
   })
 
   mainWindow = createMainWindow()

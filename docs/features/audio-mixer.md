@@ -38,7 +38,7 @@ Each remote stream becomes a `MediaStreamAudioSourceNode` → its **own** `GainN
 
 ### UI
 
-The mixer panel (the StatusView's volume controls — desktop.md) sits below the video and shows **only while receiving**; it is the receiver's one allowed audio control (receiver/environment control, [overview.md](../architecture/overview.md) — never a cast setting). One row per channel: label, 0–100 % slider, mute/unmute button (`aria-pressed`). Slider values initialize from the persisted levels; every change goes through the mixer (which persists it), so the panel and the graph cannot drift apart.
+The mixer lives in the receiver's **settings modal** (review-time restructure after Phase9: the video fills the whole window; hovering reveals a small overlay with the status line and a *Settings* trigger; the trigger opens the modal). It is the receiver's one allowed audio control (receiver/environment control, [overview.md](../architecture/overview.md) — never a cast setting). One row per channel: label, 0–100 % slider, mute/unmute button (`aria-pressed`); a note under them states that cast quality is set on the phone. The modal closes via its button, Escape, or a backdrop click. Slider values initialize from the persisted levels; every change goes through the mixer (which persists it), so the panel and the graph cannot drift apart.
 
 ## Verification (2026-09-20)
 
