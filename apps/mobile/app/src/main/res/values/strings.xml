@@ -37,6 +37,18 @@
     <string name="cast_notification_stop">Stop</string>
     <string name="casting_background_hint">You can leave the app and use your phone normally — the cast keeps running until you stop it.</string>
 
+    <!-- Game audio (Phase 7) — simple, non-technical (AGENTS.md); the raw
+         capture/permission detail stays in the service logs. -->
+    <string name="mute_game_audio">Mute game audio</string>
+    <string name="unmute_game_audio">Unmute game audio</string>
+    <string name="game_audio_off">Game audio is off for this cast.</string>
+    <string name="game_audio_cannot_capture">This app\'s audio can\'t be captured.</string>
+    <string name="game_audio_unavailable">Game audio isn\'t available for this cast.</string>
+
+    <!-- Debug-only tone for verifying capture (Phase7, features/game-audio.md). -->
+    <string name="debug_play_test_tone">Debug: play test tone</string>
+    <string name="debug_stop_test_tone">Debug: stop test tone</string>
+
     <!--
       User-facing failure messages per docs/architecture/pairing.md §Failure modes.
       Technical detail (error codes) stays in logs — never shown here.

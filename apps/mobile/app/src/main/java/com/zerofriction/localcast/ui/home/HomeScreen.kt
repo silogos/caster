@@ -13,8 +13,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,7 +29,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
@@ -36,9 +43,11 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
 ) {
     val castState by viewModel.castState.collectAsStateWithLifecycle()
+    val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
 
     HomeContent(
         castState = castState,
+        gameAudioState = gameAudioState,
         onStartCast = onStartCast,
     )
 }
@@ -51,6 +60,7 @@ fun HomeScreen(
 @Composable
 fun HomeContent(
     castState: CastState,
+    gameAudioState: GameAudioState = GameAudioState.Off,
     onStartCast: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -95,6 +105,11 @@ fun HomeContent(
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
                     )
+                    Spacer(Modifier.height(12.dp))
+                    GameAudioControls(gameAudioState)
+                    if (BuildConfig.DEBUG) {
+                        DebugToneButton()
+                    }
                     Spacer(Modifier.height(24.dp))
                     OutlinedButton(
                         onClick = { CastService.requestStop(context) },
@@ -123,12 +138,85 @@ fun HomeContent(
     }
 }
 
-@Preview(showBackground = true, widthDp = 360, heightDp = 640)
+/**
+ * The game-audio row of a running cast (Phase7, audio.md): a live mute
+ * toggle plus an honest fact line. The capture can't produce sound for
+ * opted-out apps or without the RECORD_AUDIO grant — those surface as plain
+ * statements, never as technical errors (AGENTS.md).
+ */
+@Composable
+fun GameAudioControls(gameAudioState: GameAudioState) {
+    val context = LocalContext.current
+    when (gameAudioState) {
+        GameAudioState.Off -> Text(
+            text = stringResource(R.string.game_audio_off),
+            fontSize = 13.sp,
+        )
+
+        GameAudioState.Failed -> Text(
+            text = stringResource(R.string.game_audio_unavailable),
+            fontSize = 13.sp,
+        )
+
+        GameAudioState.Silent -> {
+            Text(
+                text = stringResource(R.string.game_audio_cannot_capture),
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+
+        else -> Unit
+    }
+    when (gameAudioState) {
+        GameAudioState.Active, GameAudioState.Muted, GameAudioState.Silent -> OutlinedButton(
+            onClick = { CastService.requestToggleGameAudio(context) },
+        ) {
+            Text(
+                stringResource(
+                    if (gameAudioState == GameAudioState.Muted) {
+                        R.string.unmute_game_audio
+                    } else {
+                        R.string.mute_game_audio
+                    },
+                ),
+            )
+        }
+        else -> Unit
+    }
+}
+
+/**
+ * Debug-only capture test signal (Phase7): a loud continuous tone from this
+ * app — one of the few capturable sources, since apps targeting API29+ opt
+ * OUT of playback capture by default. Audible on the desktop = the whole
+ * game-audio chain works.
+ */
+@Composable
+fun DebugToneButton() {
+    var playing by rememberSaveable { mutableStateOf(false) }
+    TextButton(
+        onClick = {
+            if (playing) DebugTestTone.stop() else DebugTestTone.start()
+            playing = !playing
+        },
+    ) {
+        Text(
+            stringResource(
+                if (playing) R.string.debug_stop_test_tone else R.string.debug_play_test_tone,
+            ),
+            fontSize = 13.sp,
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp =360, heightDp = 640)
 @Composable
 private fun HomeContentPreview() {
     LocalCastTheme {
         HomeContent(
             castState = CastState.Casting("MacBook Pro"),
+            gameAudioState = GameAudioState.Active,
             onStartCast = {},
         )
     }

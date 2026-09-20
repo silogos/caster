@@ -180,7 +180,11 @@ export class ReceiverSession {
     state.pc.ontrack = (event) => {
       const stream = event.streams[0]
       if (stream !== undefined) {
-        this.options.log('info', 'video track arrived — rendering')
+        // Since Phase7 the mobile's media pc also carries the game-audio
+        // track in this same stream — both play through the <video> element
+        // (Web Audio routing with per-stream volume is Phase9's AudioMixer).
+        const kind = (event.track as { kind?: string } | null)?.kind ?? 'unknown'
+        this.options.log('info', `${kind} track arrived — rendering`)
         this.options.sink.show(stream)
       }
     }

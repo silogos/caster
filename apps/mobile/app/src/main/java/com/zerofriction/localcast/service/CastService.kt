@@ -13,8 +13,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.MainActivity
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.webrtc.MediaCastSession
@@ -68,12 +70,21 @@ class CastService : Service() {
         private const val CHANNEL_ID = "cast"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
+        private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
 
         private val _state = MutableStateFlow<CastState>(CastState.Idle)
         val state: StateFlow<CastState> = _state.asStateFlow()
+
+        /**
+         * The game-audio half of the cast's state (Phase7, audio.md) —
+         * rendered by the home screen next to [state]. Reset to [GameAudioState.Off]
+         * whenever no cast is running; the session republishes on every change.
+         */
+        private val _gameAudioState = MutableStateFlow<GameAudioState>(GameAudioState.Off)
+        val gameAudioState: StateFlow<GameAudioState> = _gameAudioState.asStateFlow()
 
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
@@ -100,6 +111,11 @@ class CastService : Service() {
 
         fun requestStop(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_STOP))
+        }
+
+        /** Mute/unmute the game-audio track of the running cast (no-op without one). */
+        fun requestToggleGameAudio(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_GAME_AUDIO))
         }
     }
 
@@ -128,6 +144,14 @@ class CastService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 endCast()
+                return START_NOT_STICKY
+            }
+            ACTION_TOGGLE_GAME_AUDIO -> {
+                val currentSession = session
+                if (currentSession !== null) {
+                    // Muted ⇄ everything else; the session owns the actual sender-side muting.
+                    currentSession.setGameAudioMuted(currentSession.gameAudioState != GameAudioState.Muted)
+                }
                 return START_NOT_STICKY
             }
         }
@@ -165,6 +189,9 @@ class CastService : Service() {
                     _state.value = CastState.Casting(args.desktopName)
                 }
             },
+            onGameAudioState = { gameAudioState ->
+                _gameAudioState.value = gameAudioState
+            },
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
@@ -181,7 +208,14 @@ class CastService : Service() {
             is MediaCastSession.Failure.Error -> getString(R.string.cast_failed_generic)
         }
         Log.w(TAG, "cast ended: ${failure.logDetail()}")
-        _state.value = CastState.Failed(message)
+        // Debug builds only: this ROM's logcat suppresses app logs (features/
+        // game-audio.md), so the detail rides the message to stay diagnosable.
+        val shown = if (BuildConfig.DEBUG && failure is MediaCastSession.Failure.Error) {
+            "$message [debug: ${failure.detail}]"
+        } else {
+            message
+        }
+        _state.value = CastState.Failed(shown)
         endCast()
     }
 
@@ -200,6 +234,7 @@ class CastService : Service() {
         signaling = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+        _gameAudioState.value = GameAudioState.Off
         if (_state.value !is CastState.Failed) {
             _state.value = CastState.Idle
         }
