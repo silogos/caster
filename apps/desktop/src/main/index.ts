@@ -203,30 +203,30 @@ app.whenReady().then(async () => {
       lastStreamSize = null
     }
   })
-  // The window follows the stream's aspect (rotation included) so the
-  // letterboxed video fills it edge-to-edge in every orientation.
-  ipcMain.handle(IPC.window.resizeToStream, (_event, raw) => {
+  // The stream's size (first metadata, every rotation, quality steps): the
+  // window's shape is the user's — the video letterboxes via CSS (contain),
+  // never the other way around. The size is cached for the on-demand
+  // "Match window to video" reshape.
+  ipcMain.handle(IPC.window.streamSize, (_event, raw) => {
     const size = asStreamSize(raw)
     if (size === null) {
       logger.warn(LOG_SCOPE, 'renderer sent a malformed stream size — dropping')
       return
     }
-    if (mainWindow === null || mainWindow.isDestroyed()) return
     lastStreamSize = size
-    resizeToStreamAspect(mainWindow, size.width, size.height)
-    logger.info(LOG_SCOPE, 'window reshaped to the stream', { width: size.width, height: size.height })
+    logger.info(LOG_SCOPE, 'stream size changed', { width: size.width, height: size.height })
   })
-  // Manual-resize polish (Phase14): one click back to edge-to-edge after the
-  // user has reshaped the window by hand — the same geometry as the automatic
-  // reshape (current content area, stream aspect, work-area clamps).
+  // On-demand reshape (Phase14): after the user has sized the window for their
+  // canvas, one click snaps it to the stream's aspect — the same geometry
+  // math as before (current content area, stream aspect, work-area clamps).
   ipcMain.handle(IPC.window.fitToStream, () => {
     if (mainWindow === null || mainWindow.isDestroyed()) return
     if (!castActive || lastStreamSize === null) {
-      logger.warn(LOG_SCOPE, 'fit-to-stream requested with no live stream size — ignoring')
+      logger.warn(LOG_SCOPE, 'match-to-stream requested with no live stream size — ignoring')
       return
     }
     resizeToStreamAspect(mainWindow, lastStreamSize.width, lastStreamSize.height)
-    logger.info(LOG_SCOPE, 'window re-fitted to the stream', { width: lastStreamSize.width, height: lastStreamSize.height })
+    logger.info(LOG_SCOPE, 'window matched to the stream', { width: lastStreamSize.width, height: lastStreamSize.height })
   })
   ipcMain.handle(IPC.window.sessionInfoOverlay, (_event, raw) => {
     if (typeof raw !== 'boolean') {

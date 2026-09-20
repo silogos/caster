@@ -72,11 +72,11 @@ const receiver = new ReceiverSession({
       videoEl.muted = true
       videoEl.play().catch((error) => log('warn', 'autoplay was blocked', { error: String(error) }))
       mixer.attachStream('game', stream)
-      // `body.receiving` (renderer.css): the video fills the window; the
-      // stage's waiting layout disappears; the hover overlay appears. The
-      // window relaxes its minimums (portrait streams need a portrait
-      // window) and then follows the stream's aspect (the resize listener
-      // below fires when the stream's metadata arrives).
+      // `body.receiving` (renderer.css): the video takes over the window and
+      // letterboxes into it (`contain` — the user's chosen window shape is
+      // final); the stage's waiting layout disappears; the hover overlay
+      // appears. The window relaxes its minimums so portrait streams fit a
+      // small window too.
       document.body.classList.add('receiving')
       castOverlayEl.hidden = false
       window.desktopApi.setCastActive(true)
@@ -89,9 +89,6 @@ const receiver = new ReceiverSession({
       castOverlayEl.hidden = true
       hideSettings()
       window.desktopApi.setCastActive(false)
-      // The next cast reshapes the window fresh — the resize listener
-      // re-fires when the new stream's metadata arrives.
-      lastAppliedAspect =0
       // The pairing hero reappears (the mobile-state 'waiting' event clears
       // the paired name; body.receiving has been hiding the whole stage).
       renderHero()
@@ -117,23 +114,15 @@ const receiver = new ReceiverSession({
   log
 })
 
-// The window follows the stream's aspect (receiver window behavior —
-// overview.md; never a cast setting): the video element's 'resize' event
-// fires whenever the intrinsic size changes — first metadata, then every
-// rotation — and the main process reshapes the window so the letterboxed
-// video fills it edge-to-edge. Epsilon-guarded: encoder pixel jitter must
-// not fight the user's own window resizing.
-const ASPECT_EPSILON = 0.01
-let lastAppliedAspect = 0
+// The stream's size (first metadata, every rotation, quality steps) feeds the
+// main process's cache — the on-demand "Match window to video" reshape uses
+// it. The window itself is the user's canvas: the video letterboxes via CSS
+// (`contain` — full width or full height, black bars for the rest) and never
+// reshapes the window (found live in the Phase14 session: the auto-reshape
+// fought the user's own window sizing, especially for a portrait stream).
 videoEl.addEventListener('resize', () => {
-  const width = videoEl.videoWidth
-  const height = videoEl.videoHeight
-  if (width === 0 || height === 0) return
-  const aspect = width / height
-  if (Math.abs(aspect - lastAppliedAspect) < ASPECT_EPSILON) return
-  lastAppliedAspect = aspect
-  window.desktopApi.resizeWindowToStream(width, height)
-  log('info', 'window following the stream aspect', { width, height })
+  if (videoEl.videoWidth === 0 || videoEl.videoHeight === 0) return
+  window.desktopApi.reportStreamSize(videoEl.videoWidth, videoEl.videoHeight)
 })
 
 let connectedName: string | null = null

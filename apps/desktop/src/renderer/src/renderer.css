@@ -141,9 +141,10 @@ body {
 }
 
 /*
-  The cast surface (Phase5). While receiving (`body.receiving`) the video
-  fills the entire window — a clean rect for the cast (and later OBS
-  capture, the Phase14 direction). While waiting it is simply hidden.
+  The cast surface (Phase5→14). While receiving (`body.receiving`) the video
+  takes over the whole window and letterboxes into it (`contain` — full width
+  or full height, black bars where the aspects differ; the window's shape is
+  the user's, never changed by the stream). While waiting it is simply hidden.
 */
 .video {
   flex: 1;

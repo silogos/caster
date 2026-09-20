@@ -57,9 +57,9 @@ export function createMainWindow(): BrowserWindow {
 }
 
 /**
- * A cast is live: relax the window's minimum size so a portrait stream can
- * actually fill the window (the waiting layout's 800px minimum would force
- * letterboxing for every portrait cast).
+ * A cast is live: relax the window's minimum size so the user can keep the
+ * window small (a portrait stream letterboxed into a compact window is a
+ * perfectly good receiver shape).
  */
 export function enterCastWindowLayout(window: BrowserWindow): void {
   window.setMinimumSize(CAST_MIN_WIDTH, CAST_MIN_HEIGHT)
@@ -71,9 +71,12 @@ export function leaveCastWindowLayout(window: BrowserWindow): void {
 }
 
 /**
- * Reshape the window to the stream's aspect (rotation included) so the
- * letterboxed video fills it edge-to-edge — the receiver's window behavior,
- * never a cast setting (overview.md). Geometry math: windowGeometry.ts.
+ * Snap the window to the stream's aspect — the ON-DEMAND "Match window to
+ * video" action (Phase14). The window's shape is otherwise the user's: by
+ * default the video letterboxes via CSS and the window never moves by
+ * itself (the early auto-reshape at cast start/rotation was found live to
+ * fight the user's own window sizing, especially for portrait streams).
+ * Geometry math: windowGeometry.ts.
  */
 export function resizeToStreamAspect(
   window: BrowserWindow,

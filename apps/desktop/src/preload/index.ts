@@ -30,8 +30,8 @@ const desktopApi: DesktopApi = {
   setCastActive: (active) => {
     ipcRenderer.invoke(IPC.window.castActive, active)
   },
-  resizeWindowToStream: (width, height) => {
-    ipcRenderer.invoke(IPC.window.resizeToStream, { width, height })
+  reportStreamSize: (width, height) => {
+    ipcRenderer.invoke(IPC.window.streamSize, { width, height })
   },
   setSessionInfoOverlay: (enabled) => {
     ipcRenderer.invoke(IPC.window.sessionInfoOverlay, enabled)

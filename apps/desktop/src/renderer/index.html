@@ -34,8 +34,10 @@
            track plays through the Web Audio mixer, so leaving the element
            unmuted would play the game audio twice. The muted element also
            satisfies autoplay under any gesture policy. While receiving
-           (`body.receiving`) the video fills the whole window — a clean
-           rect for the cast (and later OBS capture). -->
+           (`body.receiving`) the video takes over the whole window and
+           letterboxes into it (`contain` — full width or full height, blank
+           bars; the user's window shape is final) — a clean rect for the cast
+           (and OBS capture). -->
       <video class="video" id="video" hidden autoplay playsinline muted></video>
       <!-- The mic stream's keep-alive element (found live in Phase9): Chromium
            stops pulling a MediaStream that no media element holds once the
@@ -76,15 +78,17 @@
         <!-- Phase14 window controls — receiver window behavior, the desktop's
              own domain (overview.md): the optional session-info window lives
              OUTSIDE the receiver, so window capture (e.g. OBS) records a pure
-             video feed; "fit" undoes a manual resize in one click. -->
+             video feed. The video letterboxes into whatever shape the window
+             has (full width or full height, blank bars); "match" is the
+             one-click, on-demand way to snap the window to the video. -->
         <h3 class="modal-section-title">Window</h3>
         <div class="window-row">
           <label class="window-label" for="session-info-overlay">Session info window</label>
           <input type="checkbox" id="session-info-overlay" />
         </div>
         <div class="window-row">
-          <label class="window-label" for="fit-window">Window no longer matches the video?</label>
-          <button class="mixer-button" id="fit-window" type="button">Fit window to video</button>
+          <label class="window-label" for="fit-window">Window should match the video?</label>
+          <button class="mixer-button" id="fit-window" type="button">Match window to video</button>
         </div>
         <p class="modal-note">The info window rides outside the receiver, keeping a captured feed clean.</p>
       </div>
