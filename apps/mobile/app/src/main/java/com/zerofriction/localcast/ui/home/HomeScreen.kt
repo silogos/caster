@@ -5,21 +5,25 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,17 +34,35 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
+import com.zerofriction.localcast.config.CastSettings
+import com.zerofriction.localcast.config.CastSettingsStore
+import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.ui.settings.CastSettingsPanel
+import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
+/**
+ * The home page (Phase10 restructure): a **header** for the connection
+ * state (status + Start/Stop button) and, as its content, the cast settings
+ * themselves (overview.md: the mobile is the configuration owner; the desktop
+ * exposes none of this). The settings persist immediately and take effect on
+ * the next cast — the note under the header says so.
+ *
+ * While a cast runs, the content also shows the live controls for that cast
+ * (game-audio mute, mic on/off — Phases 7/8): settings apply to the *next*
+ * cast, the live toggles to the *current* one.
+ */
 @Composable
 fun HomeScreen(
     onStartCast: () -> Unit,
@@ -50,98 +72,143 @@ fun HomeScreen(
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
 
+    // The settings state (Phase10): the home page is its home now — one
+    // ViewModel scoped to the activity, backed by the persistent store.
+    val context = LocalContext.current
+    val settingsViewModel: SettingsViewModel = viewModel(
+        factory = remember(context) {
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                    val store = CastSettingsStore(context.applicationContext)
+                    return SettingsViewModel(store.load(), store::save) as T
+                }
+            }
+        },
+    )
+    val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+
     HomeContent(
         castState = castState,
         gameAudioState = gameAudioState,
         micState = micState,
+        settings = settings,
+        onSelectProfile = settingsViewModel::selectProfile,
+        onSelectLongEdge = settingsViewModel::selectLongEdge,
+        onSelectFps = settingsViewModel::selectFps,
+        onSetBitrateAuto = settingsViewModel::setBitrateAuto,
+        onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
+        onSetGameAudio = settingsViewModel::setGameAudio,
+        onSetMic = settingsViewModel::setMic,
         onStartCast = onStartCast,
     )
 }
 
-/**
- * The home screen is session-aware (Phase6): the cast service owns the
- * session, so this screen is the cast's status line — a running cast shows
- * who it's going to and how to stop it, without going through the scan screen.
- */
 @Composable
 fun HomeContent(
     castState: CastState,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
-    onStartCast: () -> Unit,
+    settings: CastSettings = CastSettings.default(),
+    onSelectProfile: (QualityProfile) -> Unit = {},
+    onSelectLongEdge: (Int) -> Unit = {},
+    onSelectFps: (Int) -> Unit = {},
+    onSetBitrateAuto: (Boolean) -> Unit = {},
+    onSetManualBitrateMax: (Int) -> Unit = {},
+    onSetGameAudio: (Boolean) -> Unit = {},
+    onSetMic: (Boolean) -> Unit = {},
+    onStartCast: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
-    Scaffold { innerPadding ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+    ) {
+        // ---- Header: the connection state + the cast trigger ----
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.home_title),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = when (val state = castState) {
+                        is CastState.Casting -> stringResource(R.string.casting_to, state.desktopName)
+                        is CastState.Starting -> stringResource(R.string.starting_cast)
+                        is CastState.Failed -> state.message
+                        CastState.Idle -> stringResource(R.string.home_not_connected)
+                    },
+                    fontSize = 14.sp,
+                    color = if (castState is CastState.Failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            when (castState) {
+                CastState.Idle, is CastState.Failed -> Button(onClick = onStartCast) {
+                    Text(stringResource(R.string.start_cast))
+                }
+
+                is CastState.Starting -> CircularProgressIndicator()
+
+                is CastState.Casting -> OutlinedButton(
+                    onClick = { CastService.requestStop(context) },
+                ) {
+                    Text(stringResource(R.string.stop_casting))
+                }
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.settings_changes_next_cast),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+
+        // ---- Content: live controls for the running cast (if any), then
+        // the settings for the next one ----
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+                .verticalScroll(rememberScrollState()),
         ) {
-            Text(
-                text = stringResource(R.string.home_title),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(8.dp))
-
-            when (val state = castState) {
-                CastState.Idle -> {
-                    Text(text = stringResource(R.string.home_not_connected), fontSize = 14.sp)
-                    Spacer(Modifier.height(24.dp))
-                    Button(
-                        // Phase3: opens the pairing scan (QR → WebSocket → handshake).
-                        onClick = onStartCast,
-                        modifier = Modifier.fillMaxWidth(0.6f),
-                    ) {
-                        Text(stringResource(R.string.start_cast))
-                    }
-                }
-
-                is CastState.Starting -> {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(12.dp))
-                    Text(text = stringResource(R.string.starting_cast), fontSize = 14.sp)
-                }
-
-                is CastState.Casting -> {
-                    Text(
-                        text = stringResource(R.string.casting_to, state.desktopName),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    GameAudioControls(gameAudioState)
-                    MicControls(micState = micState, gameAudioState = gameAudioState)
-                    if (BuildConfig.DEBUG) {
-                        DebugToneButton()
-                    }
-                    Spacer(Modifier.height(24.dp))
-                    OutlinedButton(
-                        onClick = { CastService.requestStop(context) },
-                        modifier = Modifier.fillMaxWidth(0.6f),
-                    ) {
-                        Text(stringResource(R.string.stop_casting))
-                    }
-                }
-
-                is CastState.Failed -> {
-                    Text(
-                        text = state.message,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    Button(
-                        onClick = onStartCast,
-                        modifier = Modifier.fillMaxWidth(0.6f),
-                    ) {
-                        Text(stringResource(R.string.start_cast))
-                    }
+            if (castState is CastState.Casting) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.live_cast_section),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                GameAudioControls(gameAudioState)
+                MicControls(micState = micState, gameAudioState = gameAudioState)
+                if (BuildConfig.DEBUG) {
+                    DebugToneButton()
                 }
             }
+
+            CastSettingsPanel(
+                settings = settings,
+                onSelectProfile = onSelectProfile,
+                onSelectLongEdge = onSelectLongEdge,
+                onSelectFps = onSelectFps,
+                onSetBitrateAuto = onSetBitrateAuto,
+                onSetManualBitrateMax = onSetManualBitrateMax,
+                onSetGameAudio = onSetGameAudio,
+                onSetMic = onSetMic,
+            )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -266,7 +333,7 @@ fun MicControls(micState: MicState, gameAudioState: GameAudioState) {
 
 /**
  * Debug-only capture test signal (Phase7): a loud continuous tone from this
- * app — one of the few capturable sources, since apps targeting API29+ opt
+ * app — one of the few capturable sources, since apps targeting API 29+ opt
  * OUT of playback capture by default. Audible on the desktop = the whole
  * game-audio chain works.
  */
@@ -288,14 +355,27 @@ fun DebugToneButton() {
     }
 }
 
-@Preview(showBackground = true, widthDp =360, heightDp = 640)
+@Preview(showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
 private fun HomeContentPreview() {
     LocalCastTheme {
         HomeContent(
+            castState = CastState.Idle,
+            gameAudioState = GameAudioState.Off,
+            settings = CastSettings.default(),
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 640)
+@Composable
+private fun HomeContentCastingPreview() {
+    LocalCastTheme {
+        HomeContent(
             castState = CastState.Casting("MacBook Pro"),
             gameAudioState = GameAudioState.Active,
-            onStartCast = {},
+            micState = MicState.Active,
+            settings = CastSettings.default(),
         )
     }
 }

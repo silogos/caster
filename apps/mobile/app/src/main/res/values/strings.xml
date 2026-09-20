@@ -57,6 +57,29 @@
     <string name="debug_play_test_tone">Debug: play test tone</string>
     <string name="debug_stop_test_tone">Debug: stop test tone</string>
 
+    <!-- Cast settings (Phase10) — the mobile is the configuration owner
+         (overview.md); the desktop exposes none of these. The home page's
+         content: header = connection state + cast button, body = settings. -->
+    <string name="settings_changes_next_cast">Changes take effect on the next cast.</string>
+    <string name="live_cast_section">This cast</string>
+    <string name="settings_sharescreen">Share screen</string>
+    <string name="settings_quality_profile">Quality profile</string>
+    <string name="profile_balanced">Balanced</string>
+    <string name="profile_sharp">Sharp</string>
+    <string name="profile_smooth">Smooth</string>
+    <string name="profile_light">Light</string>
+    <string name="settings_resolution">Resolution (long edge)</string>
+    <string name="settings_px">%1$d px</string>
+    <string name="settings_fps">Frame rate</string>
+    <string name="settings_fps_value">%1$d fps</string>
+    <string name="settings_bitrate">Bitrate</string>
+    <string name="settings_bitrate_auto">Automatic (follows the quality profile)</string>
+    <string name="settings_bitrate_max">Max %1$d Mbps</string>
+    <string name="settings_audio">Audio</string>
+    <string name="settings_game_audio">Include game audio</string>
+    <string name="settings_mic">Start with microphone on</string>
+    <string name="settings_mic_hint">You can also turn the microphone on and off during a cast.</string>
+
     <!--
       User-facing failure messages per docs/architecture/pairing.md §Failure modes.
       Technical detail (error codes) stays in logs — never shown here.

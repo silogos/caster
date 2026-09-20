@@ -22,6 +22,8 @@ class SenderStatsTest {
                     "framesEncoded" to 900L,
                     "framesDropped" to 3L,
                     "framesPerSecond" to 29.5,
+                    "frameWidth" to 800,
+                    "frameHeight" to 1280,
                     "encoderImplementation" to "OMX.qcom.video.encoder.avc",
                 ),
                 mapOf("type" to "candidate-pair", "nominated" to true, "state" to "succeeded", "currentRoundTripTime" to 0.0018),
@@ -34,6 +36,8 @@ class SenderStatsTest {
                 framesEncoded = 900L,
                 framesDropped = 3L,
                 framesPerSecond = 29.5,
+                frameWidth = 800,
+                frameHeight = 1280,
                 rttMs = 1L,
                 encoderImplementation = "OMX.qcom.video.encoder.avc",
             ),
@@ -60,6 +64,8 @@ class SenderStatsTest {
         assertEquals(10L, sample.bytesSent)
         assertEquals(0L, sample.framesEncoded)
         assertEquals(0.0, sample.framesPerSecond, 0.0)
+        assertEquals(0, sample.frameWidth)
+        assertEquals(0, sample.frameHeight)
         assertNull(sample.rttMs)
         assertNull(sample.encoderImplementation)
     }

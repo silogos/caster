@@ -19,8 +19,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             LocalCastTheme {
-                // Two screens so far — plain state-based navigation, no nav library
+                // Two screens — plain state-based navigation, no nav library
                 // (docs/development/mobile.md: add libraries when the need is real).
+                // Phase10: the home page itself carries the cast settings.
                 var showScan by rememberSaveable { mutableStateOf(false) }
                 if (showScan) {
                     ScanScreen(onBackToHome = { showScan = false })

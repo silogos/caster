@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 9 implemented — awaiting review (the audible live-cast listen — independent volumes, no clipping at defaults, long-session drift — is the remaining acceptance item; see [features/audio-mixer.md](../features/audio-mixer.md)).**
+Current status: **Phase 10 implemented — awaiting review (the on-device live-cast check — settings visibly changing the sent stream in stats — is the remaining acceptance item; see [features/cast-settings.md](../features/cast-settings.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -52,7 +52,7 @@ Current status: **Phase 9 implemented — awaiting review (the audible live-cast
 
 ## Phase 10 — Mobile Cast Configuration
 **Scope:** settings screen on mobile (quality profile, resolution, FPS, bitrate/auto, game-audio & mic toggles) per [overview.md](../architecture/overview.md) ownership rules; sender-side `RTCRtpSender` parameter application; changes take effect on next cast (or live if cheap).
-**Accept:** settings demonstrably change the sent stream (bitrate/resolution visible in stats); desktop exposes **no** cast settings; settings persist. Commit `feat: add mobile cast settings`.
+**Accept:** settings demonstrably change the sent stream (bitrate/resolution visible in stats); desktop exposes **no** cast settings; settings persist. Commit `feat: add mobile cast settings`. *(Implemented 2026-09-20: the home page is the settings hub — header = connection state + Start/Stop button, content = "This cast" live controls (while casting) + "Share screen" & "Audio" settings (a review-time restructure; no separate settings screen). Every change persists immediately (SharedPreferences, versioned JSON, corrupt → defaults) and the cast-start path reads the store fresh — "next cast" semantics; four named presets (balanced/sharp/smooth/light) plus tweakable resolution/fps, auto-or-manual bitrate (manual floor = half the ceiling); the derived profile label rides the display-only `session-info` ("custom" when tweaked past a preset). Desktop untouched — no cast settings exist there (Phase9's mixer is receiver/environment control). Sender stats now log frame size next to bitrate, so a settings change is visible in the ~1 Hz line. JVM tests 83/83, build green, UI + persistence verified on an emulator; remaining: the live-cast proof on the real device — [features/cast-settings.md](../features/cast-settings.md).)*
 
 ## Phase 11 — Thermal Profiles
 **Scope:** profile definitions ([thermal.md](../architecture/thermal.md)); profile → sender parameters; thermal status monitoring + diagnostics logging; **read-only** thermal state (no auto-degradation yet).
@@ -90,5 +90,5 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 ## Documentation produced along the way
 
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
-- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`
+- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.

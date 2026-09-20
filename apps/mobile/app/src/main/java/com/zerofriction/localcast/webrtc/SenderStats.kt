@@ -13,6 +13,9 @@ data class SenderSample(
     val framesEncoded: Long,
     val framesDropped: Long,
     val framesPerSecond: Double,
+    /** Sent frame size — the proof a Phase10 settings change reached the encoder. */
+    val frameWidth: Int,
+    val frameHeight: Int,
     /** Round-trip of the nominated candidate pair, ms — null until known. */
     val rttMs: Long?,
     /** e.g. "OMX.qcom.video.encoder.avc" vs the software encoder name. */
@@ -52,6 +55,8 @@ object SenderStats {
             framesEncoded = (video["framesEncoded"] as? Number)?.toLong() ?: 0L,
             framesDropped = (video["framesDropped"] as? Number)?.toLong() ?: 0L,
             framesPerSecond = (video["framesPerSecond"] as? Number)?.toDouble() ?: 0.0,
+            frameWidth = (video["frameWidth"] as? Number)?.toInt() ?: 0,
+            frameHeight = (video["frameHeight"] as? Number)?.toInt() ?:0,
             rttMs = rttSeconds?.let { (it * 1000).toLong() },
             encoderImplementation = video["encoderImplementation"] as? String,
         )
