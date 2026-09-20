@@ -45,6 +45,14 @@
     <string name="game_audio_cannot_capture">This app\'s audio can\'t be captured.</string>
     <string name="game_audio_unavailable">Game audio isn\'t available for this cast.</string>
 
+    <!-- Microphone (Phase 8) — simple, non-technical (AGENTS.md). -->
+    <string name="mic_off">Microphone is off for this cast.</string>
+    <string name="mic_needs_permission">Microphone needs permission to join the cast.</string>
+    <string name="mic_unavailable">Microphone isn\'t available for this cast.</string>
+    <string name="turn_on_mic">Turn on microphone</string>
+    <string name="turn_off_mic">Turn off microphone</string>
+    <string name="mic_headphones_hint">Tip: use headphones — otherwise the mic picks up the game audio playing from this phone.</string>
+
     <!-- Debug-only tone for verifying capture (Phase7, features/game-audio.md). -->
     <string name="debug_play_test_tone">Debug: play test tone</string>
     <string name="debug_stop_test_tone">Debug: stop test tone</string>

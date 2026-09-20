@@ -3,14 +3,17 @@ import { bitrateBps, sampleVideoReceive, type VideoReceiveSample } from './stats
 
 /**
  * The renderer's media half of the desktop (docs/architecture/desktop.md):
- * answer the mobile's offers, glue ICE, and hand the remote video track to the
- * `<video>` sink. The main process owns the socket — this class only speaks the
- * typed IPC surface below, so it is unit-testable in plain Node.
+ * answer the mobile's offers, glue ICE, and hand the remote tracks to the
+ * sinks — the `media` pc (screen + game audio) to the `<video>` sink, the
+ * `mic` pc to the audio sink (Phase8). The main process owns the socket —
+ * this class only speaks the typed IPC surface below, so it is unit-testable
+ * in plain Node.
  *
  * The desktop answers, never offers, and applies no inbound constraints beyond
  * decoding/rendering (webrtc.md) — the mobile is the offerer and configuration
- * owner. Phase5 handles the `media` pc only; a `mic` offer is logged and left
- * unanswered until Phase8 wires an audio pipeline.
+ * owner. The two pcs are independent answerer instances: a mic offer never
+ * disturbs the media pc, so the mobile can turn its mic on/off mid-cast
+ * (fresh mic offer = previous mic pc torn down).
  */
 
 export type Logger = (
@@ -37,8 +40,14 @@ export interface PeerConnectionLike {
   connectionState: string
 }
 
-/** Where the session's media goes (the VideoView in production). */
+/** Where the media pc's stream goes (the VideoView in production). */
 export interface VideoSink {
+  show(stream: unknown): void
+  clear(): void
+}
+
+/** Where the mic pc's stream goes (an <audio> element until Phase9's mixer). */
+export interface AudioSink {
   show(stream: unknown): void
   clear(): void
 }
@@ -50,17 +59,18 @@ export interface SignalingOut {
 }
 
 export interface ReceiverSessionOptions {
-  /** Fresh pc per offer (the mobile rebuilds its pc per session/re-auth). */
+  /** Fresh pc per offer (the mobile rebuilds its pcs per session/re-auth). */
   createPeerConnection: () => PeerConnectionLike
   signaling: SignalingOut
   sink: VideoSink
+  /** The mic pc's stream destination (Phase8; Web Audio per-stream volume is Phase9). */
+  micSink: AudioSink
   log: Logger
   /** getStats poll interval (webrtc.md: ~1 Hz); injectable for tests. */
   statsIntervalMs?: number
   now?: () => number
 }
 
-const PC_ID: PcId = 'media'
 const DEFAULT_STATS_INTERVAL_MS = 1_000
 
 interface ActivePc {
@@ -76,7 +86,8 @@ interface ActivePc {
 export class ReceiverSession {
   private readonly options: ReceiverSessionOptions
   private readonly statsIntervalMs: number
-  private active: ActivePc | null = null
+  /** One answerer per pc id (ADR-003: media and mic are independent). */
+  private readonly active: Map<PcId, ActivePc> = new Map()
   /** Set once the mobile's session is over for good (fresh QR → next cast needs a re-scan). */
   private closed = false
 
@@ -87,18 +98,14 @@ export class ReceiverSession {
 
   /** IPC push: an SDP offer arrived for one pc. The mobile is always the offerer. */
   async handleSdpOffer(message: SignalingSdpMessage): Promise<void> {
-    if (message.pc !== 'media') {
-      // Honest no-op: the mic pc gets its pipeline in Phase8; answering it now
-      // would put an audio track on a connection nothing can play.
-      this.options.log('info', `ignoring sdp-offer for pc=${message.pc} — audio arrives in a later phase`)
-      return
-    }
     if (this.closed) {
       this.options.log('warn', 'sdp-offer after teardown — ignoring')
       return
     }
-    // A new offer means the mobile (re)built its pc — drop any stale answerer.
-    this.stop()
+    const pcId = message.pc
+    // A new offer means the mobile (re)built that pc — drop any stale answerer
+    // for it, and only for it: the other pc keeps streaming untouched.
+    this.stop(pcId)
     const pc = this.options.createPeerConnection()
     const state: ActivePc = {
       pc,
@@ -108,16 +115,16 @@ export class ReceiverSession {
       lastSample: null,
       lastSampleAtMs: 0
     }
-    this.active = state
-    this.wireHandlers(state)
+    this.active.set(pcId, state)
+    this.wireHandlers(pcId, state)
 
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
       state.remoteDescriptionSet = true
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      this.options.signaling.sendSdpAnswer(PC_ID, answer.sdp)
-      this.options.log('info', 'sdp answer sent', { sdpBytes: answer.sdp.length })
+      this.options.signaling.sendSdpAnswer(pcId, answer.sdp)
+      this.options.log('info', `sdp answer sent (pc=${pcId})`, { sdpBytes: answer.sdp.length })
       // Candidates the mobile trickled while the answer was being built.
       const queued = state.pendingRemoteCandidates
       state.pendingRemoteCandidates = []
@@ -125,23 +132,23 @@ export class ReceiverSession {
         await pc.addIceCandidate(candidate)
       }
     } catch (error) {
-      this.options.log('error', 'answering sdp-offer failed', { error: String(error) })
-      this.stop()
-      this.options.sink.clear()
+      this.options.log('error', `answering sdp-offer failed (pc=${pcId})`, { error: String(error) })
+      this.stop(pcId)
+      this.clearSink(pcId)
     }
   }
 
   /** IPC push: an ICE candidate (or `candidate: null` = end-of-gathering) from the mobile. */
   async handleIceCandidate(message: SignalingIceMessage): Promise<void> {
-    if (message.pc !== 'media') return // no mic pc exists yet (Phase8)
-    const state = this.active
-    if (state === null || this.closed) {
-      this.options.log('warn', 'ice candidate with no active pc — ignoring')
+    const state = this.active.get(message.pc)
+    if (state === null || state === undefined) {
+      this.options.log('warn', `ice candidate with no active pc=${message.pc} — ignoring`)
       return
     }
+    if (this.closed) return
     if (message.candidate === null || message.candidate === undefined) {
       // End-of-gathering marker, not a candidate to add (webrtc.md).
-      this.options.log('debug', 'mobile finished ice gathering')
+      this.options.log('debug', `mobile finished ice gathering (pc=${message.pc})`)
       return
     }
     try {
@@ -151,7 +158,7 @@ export class ReceiverSession {
       }
       await state.pc.addIceCandidate(message.candidate)
     } catch (error) {
-      this.options.log('warn', 'addIceCandidate failed', { error: String(error) })
+      this.options.log('warn', `addIceCandidate failed (pc=${message.pc})`, { error: String(error) })
     }
   }
 
@@ -161,8 +168,11 @@ export class ReceiverSession {
    * returning mobile always sends a fresh offer.
    */
   handleMobileGone(): void {
-    this.stop()
+    for (const pcId of [...this.active.keys()]) {
+      this.stop(pcId)
+    }
     this.options.sink.clear()
+    this.options.micSink.clear()
   }
 
   /** Final teardown (window closing). */
@@ -171,32 +181,46 @@ export class ReceiverSession {
     this.handleMobileGone()
   }
 
-  private wireHandlers(state: ActivePc): void {
+  private wireHandlers(pcId: PcId, state: ActivePc): void {
     state.pc.onicecandidate = (event) => {
       // The whole candidate object goes on the wire verbatim (webrtc.md) —
       // including Chromium's mDNS-obfuscated host candidates (risk R4).
-      this.options.signaling.sendIceCandidate(PC_ID, event.candidate)
+      this.options.signaling.sendIceCandidate(pcId, event.candidate)
     }
     state.pc.ontrack = (event) => {
       const stream = event.streams[0]
       if (stream !== undefined) {
-        // Since Phase7 the mobile's media pc also carries the game-audio
-        // track in this same stream — both play through the <video> element
-        // (Web Audio routing with per-stream volume is Phase9's AudioMixer).
+        // The media pc's stream carries screen + game audio together
+        // (ADR-003); the mic pc's stream is the independent mic track. Both
+        // play through their element — Web Audio per-stream volume is
+        // Phase9's AudioMixer, not this class.
         const kind = (event.track as { kind?: string } | null)?.kind ?? 'unknown'
-        this.options.log('info', `${kind} track arrived — rendering`)
-        this.options.sink.show(stream)
+        this.options.log('info', `${kind} track arrived (pc=${pcId}) — rendering`)
+        if (pcId === 'media') {
+          this.options.sink.show(stream)
+        } else {
+          this.options.micSink.show(stream)
+        }
       }
     }
     state.pc.onconnectionstatechange = () => {
       const stateName = state.pc.connectionState
-      this.options.log('info', `connection ${stateName}`)
+      this.options.log('info', `connection ${stateName} (pc=${pcId})`)
       if (stateName === 'connected') {
-        this.startStats(state)
+        if (pcId === 'media') this.startStats(state)
       } else if (stateName === 'failed' || stateName === 'closed') {
         // ICE-restart/recovery is the mobile's call (it is the offerer); the
-        // desktop only stops polling and logs.
-        this.stopStats(state)
+        // desktop only stops polling and logs. The media pc's sink is only
+        // cleared when the whole session ends (handleMobileGone) — the mic
+        // pc, though, is per-toggle: 'closed' means the mobile turned the mic
+        // off and 'failed' won't recover without a fresh mic offer, so its
+        // sink stops immediately either way.
+        if (pcId === 'media') {
+          this.stopStats(state)
+        } else {
+          this.stop(pcId)
+          this.options.micSink.clear()
+        }
       }
     }
   }
@@ -242,14 +266,23 @@ export class ReceiverSession {
     }
   }
 
-  private stop(): void {
-    if (this.active === null) return
-    this.stopStats(this.active)
+  private stop(pcId: PcId): void {
+    const state = this.active.get(pcId)
+    if (state === undefined) return
+    this.stopStats(state)
     try {
-      this.active.pc.close()
+      state.pc.close()
     } catch {
       // A pc torn down mid-negotiation may already be closing.
     }
-    this.active = null
+    this.active.delete(pcId)
+  }
+
+  private clearSink(pcId: PcId): void {
+    if (pcId === 'media') {
+      this.options.sink.clear()
+    } else {
+      this.options.micSink.clear()
+    }
   }
 }

@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.pairing.PairingClient
@@ -54,6 +55,7 @@ import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.ui.home.DebugToneButton
 import com.zerofriction.localcast.ui.home.GameAudioControls
+import com.zerofriction.localcast.ui.home.MicControls
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
@@ -80,11 +82,13 @@ fun ScanScreen(
     val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
     val castState by viewModel.castState.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
+    val micState by CastService.micState.collectAsStateWithLifecycle()
 
     ScanContent(
         pairingState = pairingState,
         castState = castState,
         gameAudioState = gameAudioState,
+        micState = micState,
         releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
@@ -104,6 +108,7 @@ fun ScanContent(
     pairingState: PairingClient.State,
     castState: CastState = CastState.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
+    micState: MicState = MicState.Off,
     releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
@@ -159,6 +164,7 @@ fun ScanContent(
                         modifier = Modifier.padding(bottom = 16.dp),
                     )
                     GameAudioControls(gameAudioState)
+                    MicControls(micState = micState, gameAudioState = gameAudioState)
                     if (BuildConfig.DEBUG) {
                         DebugToneButton()
                     }
