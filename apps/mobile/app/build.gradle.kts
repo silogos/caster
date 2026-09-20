@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -36,6 +37,13 @@ android {
 
     buildFeatures {
         compose = true
+        // Scan screen gates its debug-only manual payload input on BuildConfig.DEBUG.
+        buildConfig = true
+    }
+
+    testOptions {
+        // android.util.Log is a stub in JVM unit tests; pairing/signaling log via it.
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -59,5 +67,14 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
+
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -9,13 +9,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -29,34 +25,24 @@ import com.zerofriction.localcast.R
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
-fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
+fun HomeScreen(
+    onStartCast: () -> Unit,
+    viewModel: HomeViewModel = viewModel(),
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     HomeContent(
         uiState = uiState,
-        onStartCastClicked = viewModel::onStartCastClicked,
-        onNoticeShown = viewModel::onNoticeShown,
+        onStartCast = onStartCast,
     )
 }
 
 @Composable
 fun HomeContent(
     uiState: HomeUiState,
-    onStartCastClicked: () -> Unit,
-    onNoticeShown: () -> Unit,
+    onStartCast: () -> Unit,
 ) {
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    uiState.notice?.let { notice ->
-        LaunchedEffect(notice) {
-            snackbarHostState.showSnackbar(notice)
-            onNoticeShown()
-        }
-    }
-
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-    ) { innerPadding ->
+    Scaffold { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -76,7 +62,8 @@ fun HomeContent(
             )
             Spacer(Modifier.height(24.dp))
             Button(
-                onClick = onStartCastClicked,
+                // Phase3: opens the pairing scan (QR → WebSocket → handshake).
+                onClick = onStartCast,
                 modifier = Modifier.fillMaxWidth(0.6f),
             ) {
                 Text(stringResource(R.string.start_cast))
@@ -91,8 +78,7 @@ private fun HomeContentPreview() {
     LocalCastTheme {
         HomeContent(
             uiState = HomeUiState(),
-            onStartCastClicked = {},
-            onNoticeShown = {},
+            onStartCast = {},
         )
     }
 }

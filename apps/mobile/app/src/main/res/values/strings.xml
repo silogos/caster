@@ -3,5 +3,30 @@
     <string name="app_name">Local Cast</string>
     <string name="home_title">Zero-Friction Local Cast</string>
     <string name="start_cast">Start Cast</string>
-    <string name="cast_not_implemented">Casting isn\'t wired up yet — it arrives in Phase 5.</string>
+
+    <!-- Scan / pairing screen (Phase 3). -->
+    <string name="scan_title">Scan the desktop\'s QR code</string>
+    <string name="scan_hint">Point the camera at the QR code shown on the desktop app.</string>
+    <string name="camera_permission_needed">Camera access is needed to scan the QR code.</string>
+    <string name="grant_camera">Grant camera access</string>
+    <string name="connecting">Connecting to the desktop…</string>
+    <string name="authenticating">Pairing…</string>
+    <string name="connected_to">Connected to %1$s</string>
+    <string name="disconnected">Connection to the desktop was lost. Scan again to reconnect.</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="scan_again">Scan again</string>
+    <string name="manual_payload_label">Debug: paste the QR payload JSON</string>
+    <string name="manual_payload_connect">Connect from payload</string>
+
+    <!--
+      User-facing failure messages per docs/architecture/pairing.md §Failure modes.
+      Technical detail (error codes) stays in logs — never shown here.
+    -->
+    <string name="pairing_error_not_zfc_qr">This isn\'t a Zero-Friction Cast QR code.</string>
+    <string name="pairing_error_unsupported_version">The desktop app is newer or older than this app. Please update.</string>
+    <string name="pairing_error_connect_unreachable">Couldn\'t reach the desktop. Make sure both devices are on the same Wi-Fi network.</string>
+    <string name="pairing_error_expired">This QR code has expired. Generate a new one on the desktop.</string>
+    <string name="pairing_error_bad_auth">Couldn\'t pair with this desktop. Scan the QR code shown on the desktop.</string>
+    <string name="pairing_error_busy">The desktop is already connected to another device.</string>
+    <string name="pairing_error_bad_version">The desktop app is newer or older than this app. Please update.</string>
 </resources>
