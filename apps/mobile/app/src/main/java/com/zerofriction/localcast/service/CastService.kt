@@ -286,6 +286,9 @@ class CastService : Service() {
                 _gameAudioState.value = gameAudioState
             },
             onVideoStats = { sample, _ -> feedAutoQuality(sample) },
+            // The display-only summary follows every live capture-format
+            // change (rotation, quality step) — the session owns the truth.
+            onCaptureFormat = { _, _, _ -> sendSessionInfo(mic = micSession !== null) },
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
@@ -350,18 +353,24 @@ class CastService : Service() {
 
     /**
      * Re-send the display-only summary (webrtc.md) — the media session sends
-     * it at build; this is the follow-up whenever the mic toggles mid-cast.
-     * `gameAudio` mirrors the media session's semantics: "part of this cast".
+     * it at build; this is the follow-up whenever the mic toggles or the
+     * capture format changes live (rotation, quality step). Size/fps come
+     * from the session's *live* capture format when it has one; the frozen
+     * recompute only covers the pre-cast window. `gameAudio` mirrors the
+     * media session's semantics: "part of this cast".
      */
     private fun sendSessionInfo(mic: Boolean) {
         val currentSignaling = signaling ?: return
         val currentConfig = config ?: return
-        val (width, height) = CaptureSize.scaleTo(currentConfig.longEdgePx, physicalWidth, physicalHeight)
+        val live = session?.currentCaptureFormat
+        val (width, height) = live?.let { it.width to it.height }
+            ?: CaptureSize.scaleTo(currentConfig.longEdgePx, physicalWidth, physicalHeight)
+        val fps = live?.fps ?: currentConfig.fps
         currentSignaling.sendSessionInfo(
             profile = currentConfig.profile,
             width = width,
             height = height,
-            fps = currentConfig.fps,
+            fps = fps,
             gameAudio = _gameAudioState.value != GameAudioState.Off,
             mic = mic,
         )

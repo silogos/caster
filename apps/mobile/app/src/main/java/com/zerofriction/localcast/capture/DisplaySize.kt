@@ -8,8 +8,11 @@ import android.view.WindowManager
 /**
  * The physical display size in px (mobile.md module `capture`). API 30+ has
  * window metrics that include system bars; on 29 the legacy real metrics are
- * the closest equivalent. libwebrtc's ScreenCapturerAndroid reconfigures its
- * virtual display on rotation itself — this is just the starting size.
+ * the closest equivalent. Read LIVE wherever it matters: the cast-start
+ * snapshot goes stale the moment the device rotates — the stock
+ * ScreenCapturerAndroid does NOT follow rotation on its own (found live in
+ * the Phase14 device session; MediaCastSession re-applies the capture format
+ * on every display change).
  */
 object DisplaySize {
 

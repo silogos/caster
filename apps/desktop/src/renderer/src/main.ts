@@ -76,14 +76,17 @@ const receiver = new ReceiverSession({
       // letterboxes into it (`contain` — the user's chosen window shape is
       // final); the stage's waiting layout disappears; the hover overlay
       // appears. The window relaxes its minimums so portrait streams fit a
-      // small window too.
+      // small window too. The imperative fill below re-asserts the element's
+      // full-window size at this exact moment.
       document.body.classList.add('receiving')
+      fillVideoWindow()
       castOverlayEl.hidden = false
       window.desktopApi.setCastActive(true)
     },
     clear: () => {
       videoEl.srcObject = null
       videoEl.hidden = true
+      releaseVideoWindow()
       mixer.detachStream('game')
       document.body.classList.remove('receiving')
       castOverlayEl.hidden = true
@@ -124,6 +127,25 @@ videoEl.addEventListener('resize', () => {
   if (videoEl.videoWidth === 0 || videoEl.videoHeight === 0) return
   window.desktopApi.reportStreamSize(videoEl.videoWidth, videoEl.videoHeight)
 })
+
+// The fill itself is imperative (Phase14, live-session follow-up): every
+// window-size change and every cast start re-asserts the video element's
+// full-window fill with inline styles, so it never depends on viewport-unit
+// (100vw/100vh) resolution — and survives any stylesheet state. The
+// `contain` letterbox then draws full width or full height, black bars for
+// the rest (renderer.css carries the same rules as the declarative base).
+function fillVideoWindow(): void {
+  videoEl.style.position = 'fixed'
+  videoEl.style.inset = '0'
+  videoEl.style.width = `${window.innerWidth}px`
+  videoEl.style.height = `${window.innerHeight}px`
+}
+
+function releaseVideoWindow(): void {
+  videoEl.removeAttribute('style')
+}
+
+window.addEventListener('resize', fillVideoWindow)
 
 let connectedName: string | null = null
 let sessionInfo: CastSessionInfo | null = null

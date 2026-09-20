@@ -25,4 +25,28 @@ object CaptureSize {
 
     /** Hardware H.264 encoders reject odd dimensions. */
     private fun even(value: Int): Int = if (value % 2 == 0) value else value - 1
+
+    /**
+     * The capture size the cast should use NOW, given the display's live
+     * bounds (rotation-aware) and the current quality target — or null when
+     * it is unchanged (so listeners can no-op on unrelated display changes).
+     *
+     * Found live in the Phase14 session (docs/features/obs-streaming.md): the
+     * stock `ScreenCapturerAndroid` does NOT follow device rotation — a cast
+     * that starts portrait keeps its portrait virtual display forever, and
+     * Android squeezes the rotated screen into it. The session re-applies
+     * this on every display change; the desktop letterboxes the flip
+     * automatically because its layout re-fits on the intrinsic-size change.
+     */
+    fun followDisplay(
+        longEdgePxLimit: Int,
+        currentWidth: Int,
+        currentHeight: Int,
+        displayWidth: Int,
+        displayHeight: Int,
+    ): Pair<Int, Int>? {
+        val target = scaleTo(longEdgePxLimit, displayWidth, displayHeight)
+        if (target.first == currentWidth && target.second == currentHeight) return null
+        return target
+    }
 }
