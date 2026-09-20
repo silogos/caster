@@ -1,17 +1,24 @@
 package com.zerofriction.localcast.config
 
 /**
- * Named cast quality presets (Phase10, roadmap): the settings screen's
- * one-tap profiles. A preset fixes the capture long edge, fps and the sender
- * bitrate window (webrtc.md sender targets); every value stays individually
- * tweakable afterwards — a config that no longer matches any preset is
- * labeled "custom" for the desktop's display-only status line
- * ([profileLabelFor]; session-info, webrtc.md).
+ * The cast's named profiles (Phase11, [thermal.md](../../../../docs/architecture/thermal.md)):
+ * one-tap presets that fix the capture long edge, fps and the sender bitrate
+ * window (webrtc.md sender targets) — the thermal strategy's primary
+ * mitigation, applied at cast start from this config module.
  *
- * BALANCED is the conservative Phase5 target the app shipped with; the
- * others are the same pipeline with wider targets, not new machinery.
- * Thermal-driven presets arrive in Phase11 (thermal.md) and will reuse this
- * type.
+ * Phase11 reconciled thermal.md's hypotheses (Cool540p30 · Balanced 720p30 ·
+ * Performance 720p60) with the Phase10 presets the app shipped with:
+ *540p/720p are the *short* edges of frames whose capture long edge is
+ * 960/1280 px here, and the tuned windows are the Phase10 values, relabeled
+ * (`light`→`cool`, `smooth`→`performance`; [CastSettingsCodec] migrates
+ * stored settings). SHARP stays as the fourth, fidelity-over-thermals
+ * preset — the user stays in control (thermal.md principle 2). Exact values
+ * are re-tuned from Phase15 measurements; until then this table is the
+ * shipped hypothesis.
+ *
+ * Every value stays individually tweakable after a preset — a config that
+ * no longer matches any preset is labeled "custom" for the desktop's
+ * display-only status line ([profileLabelFor]; session-info, webrtc.md).
  */
 enum class QualityProfile(
     val label: String,
@@ -20,6 +27,15 @@ enum class QualityProfile(
     val bitrateMinBps: Int,
     val bitrateMaxBps: Int,
 ) {
+    /** thermal.md Cool: long sessions, warm devices, battery priority — the least added heat. */
+    COOL(
+        label = "cool",
+        longEdgePx = 960,
+        fps = 30,
+        bitrateMinBps = 2_000_000,
+        bitrateMaxBps = 3_000_000,
+    ),
+    /** thermal.md Balanced (default): the good-enough window for most games. */
     BALANCED(
         label = CastConfig.DEFAULT_PROFILE,
         longEdgePx = 1280,
@@ -27,26 +43,21 @@ enum class QualityProfile(
         bitrateMinBps = 4_000_000,
         bitrateMaxBps = 6_000_000,
     ),
+    /** thermal.md Performance: fast-motion games; measurably more heat. */
+    PERFORMANCE(
+        label = "performance",
+        longEdgePx = 1280,
+        fps = 60,
+        bitrateMinBps = 6_000_000,
+        bitrateMaxBps = 10_000_000,
+    ),
+    /** Fidelity over thermals: most detail, most heat — the user's explicit choice. */
     SHARP(
         label = "sharp",
         longEdgePx = 1920,
         fps = 30,
         bitrateMinBps = 8_000_000,
         bitrateMaxBps = 12_000_000,
-    ),
-    SMOOTH(
-        label = "smooth",
-        longEdgePx = 1280,
-        fps = 60,
-        bitrateMinBps = 6_000_000,
-        bitrateMaxBps = 10_000_000,
-    ),
-    LIGHT(
-        label = "light",
-        longEdgePx = 960,
-        fps = 30,
-        bitrateMinBps = 2_000_000,
-        bitrateMaxBps = 3_000_000,
     ),
 }
 

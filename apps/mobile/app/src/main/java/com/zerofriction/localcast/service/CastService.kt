@@ -22,6 +22,9 @@ import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.signaling.SignalingClient
+import com.zerofriction.localcast.thermal.ThermalMonitor
+import com.zerofriction.localcast.thermal.ThermalSource
+import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.webrtc.MediaCastSession
 import com.zerofriction.localcast.webrtc.MicCastSession
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -98,6 +101,14 @@ class CastService : Service() {
         private val _micState = MutableStateFlow<MicState>(MicState.Off)
         val micState: StateFlow<MicState> = _micState.asStateFlow()
 
+        /**
+         * The thermal half (Phase11, thermal.md) — read-only diagnostics for
+         * the "This cast" section; resets to NONE between casts. Nothing in
+         * the app acts on it (no auto-degradation until Phase12).
+         */
+        private val _thermalState = MutableStateFlow(ThermalState())
+        val thermalState: StateFlow<ThermalState> = _thermalState.asStateFlow()
+
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
             // The handover must carry a *live* pairing (found live, 2026-09-20:
@@ -157,6 +168,9 @@ class CastService : Service() {
 
     /** The mic half (Phase8) — non-null while the mic is on for this cast. */
     private var micSession: MicCastSession? = null
+
+    /** Thermal monitoring (Phase11) — runs for exactly the cast's lifetime. */
+    private var thermalSource: ThermalSource? = null
 
     /** Kept from [StartArgs] for the `session-info` resends on mic toggles. */
     private var config: CastConfig? = null
@@ -230,6 +244,7 @@ class CastService : Service() {
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
+        startThermalMonitoring()
         // The mic rides along only when the config says so AND the runtime
         // permission is there (audio.md: off by default; denial is never
         // cast-fatal, the UI states the fact).
@@ -308,6 +323,35 @@ class CastService : Service() {
             PackageManager.PERMISSION_GRANTED
 
     /**
+     * Thermal monitoring for the running cast (Phase11, thermal.md):
+     * read-only — the ladder is displayed on the home screen and logged
+     * (headroom + battery temperature at [ThermalSource.SAMPLE_INTERVAL_MS]),
+     * but nothing changes cast parameters because of it. That is Phase12's
+     * job, if ever.
+     */
+    private fun startThermalMonitoring() {
+        val monitor = ThermalMonitor(
+            onState = { state -> _thermalState.value = state },
+            onTransition = { old, new ->
+                val snapshot = _thermalState.value
+                Log.i(
+                    TAG,
+                    "thermal: $old → $new" +
+                        ", headroom ${snapshot.headroom ?: "n/a"}" +
+                        ", battery ${snapshot.batteryTempC?.let { "$it°C" } ?: "n/a"}",
+                )
+            },
+        )
+        thermalSource = ThermalSource(applicationContext, monitor).also { it.start() }
+    }
+
+    private fun stopThermalMonitoring() {
+        thermalSource?.stop()
+        thermalSource = null
+        _thermalState.value = ThermalState()
+    }
+
+    /**
      * (Re-)declare the service's foreground type set. The `microphone` bit
      * rides along exactly while the mic session is on (CastForegroundTypes):
      * Android11+ silences a backgrounded app's mic unless its FGS carries the
@@ -355,6 +399,7 @@ class CastService : Service() {
         session = null
         micSession?.stop()
         micSession = null
+        stopThermalMonitoring()
         // The service owns the pairing connection now (Phase6): ending the
         // cast ends the pairing session too — `bye` invalidates it on the
         // desktop (fresh QR there), and the mobile must scan again to cast.
@@ -378,6 +423,7 @@ class CastService : Service() {
         session = null
         micSession?.stop()
         micSession = null
+        stopThermalMonitoring()
         signaling?.disconnect()
         signaling = null
         super.onDestroy()

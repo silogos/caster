@@ -11,12 +11,27 @@ import kotlinx.serialization.json.Json
  * plain-JVM unit-testable; [CastSettingsStore] is a thin wrapper. Follows the
  * repo's storage convention (same as the desktop mixer's `localStorage`): any
  * document this build can't fully validate degrades to defaults, logged by
- * the caller — a cast must never run on guessed values.
+ * the caller — a cast must never run on guessed values. v1 documents are
+ * still accepted: the only v1→v2 change is the Phase11 preset relabels
+ * ([LEGACY_PROFILE_LABELS]); every other v1 shape stays fully valid.
  */
 object CastSettingsCodec {
 
     /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 1
+    const val VERSION = 2
+
+    /** The Phase10 format — accepted only through [LEGACY_PROFILE_LABELS]. */
+    const val LEGACY_VERSION = 1
+
+    /**
+     * Phase11 preset relabels (`light`→`cool`, `smooth`→`performance`) —
+     * v1 documents keep their stored label, translated here. The send
+     * values are identical, so this is a rename, never a guess.
+     */
+    private val LEGACY_PROFILE_LABELS = mapOf(
+        "light" to "cool",
+        "smooth" to "performance",
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -60,8 +75,14 @@ object CastSettingsCodec {
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (stored.v != VERSION) return null
-        val profile = QualityProfile.entries.firstOrNull { it.label == stored.profile } ?: return null
+        if (stored.v != VERSION && stored.v != LEGACY_VERSION) return null
+        // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
+        val label = if (stored.v == LEGACY_VERSION) {
+            LEGACY_PROFILE_LABELS[stored.profile] ?: stored.profile
+        } else {
+            stored.profile
+        }
+        val profile = QualityProfile.entries.firstOrNull { it.label == label } ?: return null
         if (stored.longEdgePx !in CastSettingChoices.LONG_EDGE_CHOICES) return null
         if (stored.fps !in CastSettingChoices.FPS_CHOICES) return null
         if (stored.bitrateMinBps !in 1 until stored.bitrateMaxBps) return null

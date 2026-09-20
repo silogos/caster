@@ -35,8 +35,10 @@ import kotlin.math.roundToInt
  * the callbacks (SettingsViewModel) and take effect on the next cast: the
  * cast-start path reads the store fresh.
  *
- * Sections: *Share screen* (quality profile, resolution, frame rate,
- * bitrate) and *Audio* (game sound + mic defaults for the next cast).
+ * Sections: *Share screen* (profile, resolution, frame rate, bitrate) and
+ * *Audio* (game sound + mic defaults for the next cast). The profile row is
+ * the Phase11 thermal vocabulary (thermal.md): cool · balanced ·
+ * performance (+ sharp, fidelity over thermals).
  */
 @Composable
 fun CastSettingsPanel(
@@ -51,9 +53,11 @@ fun CastSettingsPanel(
 ) {
     Column {
         SectionLabel(R.string.settings_sharescreen)
-        // No chip selected when the values were tweaked past the preset —
-        // the honest "custom" state, not a fake preset match.
-        SubLabel(R.string.settings_quality_profile)
+        // The cast's named profiles (Phase11, thermal.md): thermal presets
+        // first-class — the intent line under the chips states each one's
+        // thermal cost. No chip selected when the values were tweaked past
+        // the preset — the honest "custom" state, not a fake preset match.
+        SubLabel(R.string.settings_profile)
         val effectiveProfile = settings.toConfig().profile
         ChipRow(QualityProfile.entries) { preset ->
             FilterChip(
@@ -62,6 +66,11 @@ fun CastSettingsPanel(
                 label = { Text(profileName(preset)) },
             )
         }
+        Text(
+            text = profileIntent(effectiveProfile),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         SubLabel(R.string.settings_resolution)
         ChipRow(CastSettingChoices.LONG_EDGE_CHOICES) { longEdge ->
@@ -178,10 +187,23 @@ private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean
 
 @Composable
 private fun profileName(profile: QualityProfile): String = when (profile) {
+    QualityProfile.COOL -> stringResource(R.string.profile_cool)
     QualityProfile.BALANCED -> stringResource(R.string.profile_balanced)
+    QualityProfile.PERFORMANCE -> stringResource(R.string.profile_performance)
     QualityProfile.SHARP -> stringResource(R.string.profile_sharp)
-    QualityProfile.SMOOTH -> stringResource(R.string.profile_smooth)
-    QualityProfile.LIGHT -> stringResource(R.string.profile_light)
+}
+
+/**
+ * The selected profile's thermal intent (thermal.md) — the user-facing half
+ * of why these presets exist: choosing among them *is* the thermal decision.
+ */
+@Composable
+private fun profileIntent(label: String): String = when (label) {
+    QualityProfile.COOL.label -> stringResource(R.string.profile_intent_cool)
+    QualityProfile.BALANCED.label -> stringResource(R.string.profile_intent_balanced)
+    QualityProfile.PERFORMANCE.label -> stringResource(R.string.profile_intent_performance)
+    QualityProfile.SHARP.label -> stringResource(R.string.profile_intent_sharp)
+    else -> stringResource(R.string.profile_intent_custom)
 }
 
 /** bps ↔ Mbps for the manual-bitrate slider's display range. */

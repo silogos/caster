@@ -48,6 +48,8 @@ import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.thermal.ThermalState
+import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.settings.CastSettingsPanel
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
@@ -71,6 +73,7 @@ fun HomeScreen(
     val castState by viewModel.castState.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
+    val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
 
     // The settings state (Phase10): the home page is its home now — one
     // ViewModel scoped to the activity, backed by the persistent store.
@@ -92,6 +95,7 @@ fun HomeScreen(
         castState = castState,
         gameAudioState = gameAudioState,
         micState = micState,
+        thermalState = thermalState,
         settings = settings,
         onSelectProfile = settingsViewModel::selectProfile,
         onSelectLongEdge = settingsViewModel::selectLongEdge,
@@ -109,6 +113,7 @@ fun HomeContent(
     castState: CastState,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
+    thermalState: ThermalState = ThermalState(),
     settings: CastSettings = CastSettings.default(),
     onSelectProfile: (QualityProfile) -> Unit = {},
     onSelectLongEdge: (Int) -> Unit = {},
@@ -193,6 +198,7 @@ fun HomeContent(
                 )
                 GameAudioControls(gameAudioState)
                 MicControls(micState = micState, gameAudioState = gameAudioState)
+                ThermalStatusLine(thermalState)
                 if (BuildConfig.DEBUG) {
                     DebugToneButton()
                 }
@@ -332,8 +338,33 @@ fun MicControls(micState: MicState, gameAudioState: GameAudioState) {
 }
 
 /**
+ * The thermal read-out of a running cast (Phase11, thermal.md): plain words
+ * for the platform ladder — read-only diagnostics, never a technical dump
+ * and never an automatic action (AGENTS.md; the numbers live in the service
+ * logs). The advice lines (cooler profile / stop) are suggestions for the
+ * user, the app changes nothing on its own.
+ */
+@Composable
+fun ThermalStatusLine(thermalState: ThermalState) {
+    val text = when (thermalState.status) {
+        ThermalStatus.NONE -> stringResource(R.string.thermal_normal)
+        ThermalStatus.LIGHT -> stringResource(R.string.thermal_light)
+        ThermalStatus.MODERATE -> stringResource(R.string.thermal_moderate)
+        ThermalStatus.SEVERE -> stringResource(R.string.thermal_severe)
+        ThermalStatus.CRITICAL, ThermalStatus.EMERGENCY,
+        ThermalStatus.SHUTDOWN,
+        -> stringResource(R.string.thermal_critical)
+    }
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/**
  * Debug-only capture test signal (Phase7): a loud continuous tone from this
- * app — one of the few capturable sources, since apps targeting API 29+ opt
+ * app — one of the few capturable sources, since apps targeting API29+ opt
  * OUT of playback capture by default. Audible on the desktop = the whole
  * game-audio chain works.
  */

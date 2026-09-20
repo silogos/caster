@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–10 (status: **Phase10 implemented — emulator UI check done; the on-device live-cast check remains; see [features/cast-settings.md](../features/cast-settings.md)**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–11 (status: **Phase11 implemented — the on-device checks (profile switches in sender stats, live thermal ladder) remain; see [features/thermal.md](../features/thermal.md)**).
 
 ## Prerequisites
 
@@ -18,6 +18,7 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
+Verified 2026-09-20 (Phase11): **94 unit tests** green (11 new: thermal ladder state machine + the `PowerManager` constant-mirror guard, preset relabels + v1→v2 settings migration, encoder-target distinctness). `assembleDebug` green; the thermal wiring (ladder listener, headroom, battery samples, home-screen read-out) is exercised on device in the remaining acceptance items ([features/thermal.md](../features/thermal.md)).
 Verified 2026-09-20 (Phase 10): **83 unit tests** green (21 new: quality presets/labels, settings codec, settings ViewModel, frame-size stats extraction). `assembleDebug` green; the settings UI (home page) and its persistence exercised on an API 34 emulator (screen render, preset pick, manual-bitrate floor derivation, restore after force-stop, toggle persistence) — the on-device live-cast check remains ([features/cast-settings.md](../features/cast-settings.md)).
 Verified 2026-09-20 (Phase 6): `assembleDebug` + **46 unit tests** green (3 new: pairing handover semantics). Live on device (Lenovo TB321FU / Android 16): camera-scan pairing → foreground service with the new notification; projection-revoked ends handled cleanly. The full lifecycle matrix is tabulated in [features/cast-session.md](../features/cast-session.md) and is the remaining hands-on item.
 Verified on 2026-09-20 (Phase 5): 43 unit tests green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end — details in [features/screen-capture.md](../features/screen-capture.md).
@@ -55,10 +56,13 @@ apps/mobile/
     ├── MainActivity.kt              # single activity; Home ⇄ Scan navigation (state-based, no nav lib). Phase10: the home page carries the cast settings.
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)
-    ├── config/                      # CastConfig + CastSettings: presets, JSON codec, persistence (Phases 5/10)
+    ├── config/                      # CastConfig + CastSettings: presets, JSON codec, persistence (Phases 5/10; thermal vocabulary in Phase11)
     ├── capture/                     # CaptureSize/DisplaySize math; projection via ScreenCapturerAndroid (Phase 5)
+    ├── audio/                        # PlaybackCaptureAudioSource (game audio, Phase 7), mic capture (Phase 8), GameAudioMonitor + GameAudioState/MicState
+    ├── thermal/                      # ThermalMonitor (ladder state machine) + ThermalSource (platform listener, headroom, battery) — read-only (Phase 11)
     ├── webrtc/                      # MediaCastSession (media PC), SdpCodecOrderer, IceCandidateJson, SenderStats (Phase 5)
     ├── service/                     # CastService — mediaProjection FGS owning the whole session (Phase 6)
+    ├── debug/                        # DebugTestTone launcher glue (debug builds only)
     └── ui/
         ├── home/                    # HomeScreen (header: cast state + button; content: settings + live controls) + HomeViewModel
         ├── settings/                # CastSettingsPanel (the home page's settings sections) + SettingsViewModel (Phase 10)

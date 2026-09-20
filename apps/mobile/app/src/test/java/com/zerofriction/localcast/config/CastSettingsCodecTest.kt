@@ -13,7 +13,7 @@ import org.junit.Test
 class CastSettingsCodecTest {
 
     private val custom = CastSettings(
-        profile = QualityProfile.SMOOTH,
+        profile = QualityProfile.PERFORMANCE,
         longEdgePx = 960,
         fps = 60,
         bitrateAuto = false,
@@ -49,15 +49,40 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a future version decodes to null`() {
-        val future = CastSettingsCodec.encode(custom).replace(""""v":1""", """"v":2""")
+        val future = CastSettingsCodec.encode(custom).replace(""""v":2""", """"v":3""")
         assertNull(CastSettingsCodec.decode(future))
     }
 
     @Test
     fun `an unknown preset label decodes to null`() {
         val encoded = CastSettingsCodec.encode(custom)
-            .replace(""""profile":"smooth"""", """"profile":"ultra"""")
+            .replace(""""profile":"performance"""", """"profile":"ultra"""")
         assertNull(CastSettingsCodec.decode(encoded))
+    }
+
+    // ---- v1 legacy documents (Phase10 shape, pre-thermal relabels) ----
+
+    /** A v1 document: downgraded version field, pre-rename label, same values. */
+    private fun v1Document(v2Document: String, legacyLabel: String): String = v2Document
+        .replace(""""v":2""", """"v":1""")
+        .replace(""""profile":"${custom.profile.label}"""", """"profile":"$legacyLabel"""")
+
+    @Test
+    fun `a v1 light document decodes as cool with the same values`() {
+        val stored = v1Document(CastSettingsCodec.encode(custom.copy(profile = QualityProfile.COOL)), legacyLabel = "light")
+        assertEquals(custom.copy(profile = QualityProfile.COOL), CastSettingsCodec.decode(stored))
+    }
+
+    @Test
+    fun `a v1 smooth document decodes as performance with the same values`() {
+        val stored = v1Document(CastSettingsCodec.encode(custom), legacyLabel = "smooth")
+        assertEquals(custom, CastSettingsCodec.decode(stored))
+    }
+
+    @Test
+    fun `a v1 document with an unknown label still decodes to null`() {
+        val stored = v1Document(CastSettingsCodec.encode(custom), legacyLabel = "ultra")
+        assertNull(CastSettingsCodec.decode(stored))
     }
 
     @Test

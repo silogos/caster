@@ -53,9 +53,11 @@ import com.zerofriction.localcast.pairing.PairingError
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.signaling.SignalingClient
+import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.ui.home.DebugToneButton
 import com.zerofriction.localcast.ui.home.GameAudioControls
 import com.zerofriction.localcast.ui.home.MicControls
+import com.zerofriction.localcast.ui.home.ThermalStatusLine
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
@@ -83,12 +85,14 @@ fun ScanScreen(
     val castState by viewModel.castState.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
+    val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
 
     ScanContent(
         pairingState = pairingState,
         castState = castState,
         gameAudioState = gameAudioState,
         micState = micState,
+        thermalState = thermalState,
         releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
@@ -109,6 +113,7 @@ fun ScanContent(
     castState: CastState = CastState.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
+    thermalState: ThermalState = ThermalState(),
     releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
@@ -165,6 +170,10 @@ fun ScanContent(
                     )
                     GameAudioControls(gameAudioState)
                     MicControls(micState = micState, gameAudioState = gameAudioState)
+                    // Phase11: the thermal read-out rides wherever the cast's
+                    // status is rendered — the scan screen is where the user
+                    // actually watches a started cast (found live in review).
+                    ThermalStatusLine(thermalState)
                     if (BuildConfig.DEBUG) {
                         DebugToneButton()
                     }

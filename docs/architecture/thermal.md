@@ -1,6 +1,6 @@
 # Thermal Strategy
 
-Status: Phase 0 (principles; profiles land in Phase 11, measurements in Phase 15).
+Status: Phase11 (profiles shipped as the settings presets; monitoring implemented, read-only; measurements in Phase 15).
 
 ## Principles
 
@@ -20,26 +20,32 @@ Status: Phase 0 (principles; profiles land in Phase 11, measurements in Phase 15
 
 The cast's goal: **keep added thermal load small enough that the cast is not what tips the device into throttling** during long sessions.
 
-## Initial profiles (hypotheses to validate in Phase 11/15)
+## Initial profiles (tuned in Phase11; to be re-tuned from Phase15 measurements)
 
-| Profile | Resolution | FPS | Bitrate target | Intent |
+Phase11 shipped these as the app's named profiles (`config/QualityProfile.kt`) — the settings screen's one-tap presets, applied at cast start from the config module. `light`/`smooth` from Phase10 were relabeled into the thermal vocabulary; the values are the tuned windows the app shipped with (codec v2 translates stored v1 documents). "540p/720p" name the *short* edge of a 16:9 frame; the capture target in the settings is the long edge in px.
+
+| Profile | Capture (long edge) | FPS | Bitrate window | Intent |
 |---|---|---|---|---|
-| Cool | 540p | 30 | ~3 Mbps | Long sessions, warm devices, battery priority |
-| Balanced (default) | 720p | 30 | 4–6 Mbps | The good-enough default for streaming |
-| Performance | 720p | 60 | ~8 Mbps | Fast-motion games; expect measurably more heat |
+| Cool (`cool`) | 960 px (≈540p) | 30 | 2–3 Mbps | Long sessions, warm devices, battery priority |
+| Balanced (default, `balanced`) | 1280 px (720p) | 30 | 4–6 Mbps | The good-enough default for streaming |
+| Performance (`performance`) | 1280 px (720p) | 60 | 6–10 Mbps | Fast-motion games; expect measurably more heat |
 
-Exact values are tuned from Phase 15 measurements; the tables in this doc are updated with the measured data when that happens.
+A fourth preset stays outside the thermal ladder: **Sharp** (`sharp`, 1920 px, 30 fps, 8–12 Mbps) — fidelity over thermals, the user's explicit choice (principle 2). Any manual tweak past a preset is labeled `custom`; the label derivation (`profileLabelFor`) is the display's source of truth, and the profiles→encoder mapping is pinned by a distinctness test (no two thermal profiles share a whole encoder target).
 
-## Monitoring inputs (Android, minSdk-compatible)
+Exact values are re-tuned from Phase 15 measurements; this table is updated with the measured data when that happens.
 
-- `PowerManager.OnThermalStatusChangedListener` (API 29) — the platform's `THERMAL_STATUS_*` ladder (`NONE → LIGHT → MODERATE → SEVERE → CRITICAL …`).
-- `PowerManager.getThermalHeadroom(expectedInSecond)` (API 30+) — forward-looking headroom forecast where available.
-- `BatteryManager` battery temperature/current — coarse but comparable across devices.
-- WebRTC sender stats (encoder implementation, dropped frames, target vs actual bitrate) as *indirect* thermal signals (encoder stress).
+## Monitoring inputs (Android, minSdk-compatible) — implemented in Phase11
+
+- `PowerManager.OnThermalStatusChangedListener` (API29) — the platform's `THERMAL_STATUS_*` ladder (`NONE → LIGHT → MODERATE → SEVERE → CRITICAL …`), mirrored in the pure `thermal/ThermalMonitor` (the mirror is pinned by a test against `PowerManager`'s constants).
+- `PowerManager.getThermalHeadroom(expectedInSecond)` (API 30+) — forward-looking headroom forecast; a 30 s horizon, sampled where the platform has it.
+- `BatteryManager` battery temperature (sticky `ACTION_BATTERY_CHANGED` broadcast) — coarse but comparable across devices.
+- WebRTC sender stats (encoder implementation, dropped frames, target vs. actual bitrate) as *indirect* thermal signals (encoder stress) — logged at ~1 Hz by `MediaCastSession` since Phase5/10.
+
+The `thermal` module's cadence: ladder changes are logged immediately (one INFO line per transition, with the latest headroom + battery temperature), facts are re-sampled every 10 s (DEBUG), and the "This cast" section on the home screen shows the ladder in plain words — read-only diagnostics, per below.
 
 ## How thermal data is used
 
-- **Phase 11:** read-only — the app displays thermal state in diagnostics and logs it; profiles remain user-selected.
+- **Phase11 (implemented):** read-only — the app displays thermal state in diagnostics (home screen "This cast" section + logcat) and logs it; profiles remain user-selected, and nothing in the app changes cast parameters because of thermal data.
 - **Phase 12 (only if the system is otherwise stable):** conservative adaptation with hysteresis — e.g., only step *down* one profile level after sustained `MODERATE`+ status (minutes, not seconds), notify the user, and never oscillate. Step back up only manually.
 - Phase 15 defines the measurement protocol: fixed-duration casts per profile on real hardware, logging temperature ladder, battery drain, FPS stability, and dropped frames.
 
