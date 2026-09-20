@@ -32,6 +32,13 @@ const desktopApi: DesktopApi = {
   },
   resizeWindowToStream: (width, height) => {
     ipcRenderer.invoke(IPC.window.resizeToStream, { width, height })
+  },
+  setSessionInfoOverlay: (enabled) => {
+    ipcRenderer.invoke(IPC.window.sessionInfoOverlay, enabled)
+  },
+  onSessionInfoOverlayChanged: (listener) => subscribe<boolean>(IPC.window.sessionInfoOverlay, listener),
+  fitWindowToStream: () => {
+    ipcRenderer.invoke(IPC.window.fitToStream)
   }
 }
 

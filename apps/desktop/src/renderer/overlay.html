@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cast info</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'"
+    />
+    <link rel="stylesheet" href="./src/overlay.css" />
+  </head>
+  <body>
+    <!-- The off-cast session-info window (Phase14): the cast summary lives
+         here, outside the receiver window, so window capture (e.g. OBS) of the
+         receiver stays a pure video feed. Draggable by the whole body; the
+         close button turns the overlay preference off (the Settings checkbox
+         follows via the pushed state). -->
+    <main class="overlay">
+      <p class="overlay-line" id="overlay-line"></p>
+      <button class="overlay-close" id="overlay-close" type="button" title="Close">✕</button>
+    </main>
+    <script type="module" src="./src/overlay.ts"></script>
+  </body>
+</html>

@@ -44,8 +44,6 @@
            audible path is the mixer's Web Audio graph; this element only
            holds the stream so it survives minimization/occlusion. -->
       <audio id="mic-audio" hidden autoplay muted></audio>
-      <p class="hint" id="hint">Scan with your Android device — the code is valid for 10 minutes and refreshes automatically</p>
-      <button class="button" id="regenerate" type="button">New QR code</button>
     </main>
     <!-- While receiving: a hover-revealed overlay (status line + the settings
          trigger). Invisible otherwise — the video rect stays clean. -->
@@ -75,6 +73,20 @@
           </div>
         </div>
         <p class="modal-note">Volume is this computer's playback control — cast quality is set on the phone.</p>
+        <!-- Phase14 window controls — receiver window behavior, the desktop's
+             own domain (overview.md): the optional session-info window lives
+             OUTSIDE the receiver, so window capture (e.g. OBS) records a pure
+             video feed; "fit" undoes a manual resize in one click. -->
+        <h3 class="modal-section-title">Window</h3>
+        <div class="window-row">
+          <label class="window-label" for="session-info-overlay">Session info window</label>
+          <input type="checkbox" id="session-info-overlay" />
+        </div>
+        <div class="window-row">
+          <label class="window-label" for="fit-window">Window no longer matches the video?</label>
+          <button class="mixer-button" id="fit-window" type="button">Fit window to video</button>
+        </div>
+        <p class="modal-note">The info window rides outside the receiver, keeping a captured feed clean.</p>
       </div>
     </div>
     <script type="module" src="./src/main.ts"></script>

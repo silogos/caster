@@ -20,7 +20,13 @@ export default defineConfig({
     root: 'src/renderer',
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/renderer/index.html') }
+        // Two pages: the receiver and the off-cast session-info window
+        // (Phase14) — window capture targets one window, so the info line
+        // lives outside the receiver page.
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          overlay: resolve(__dirname, 'src/renderer/overlay.html')
+        }
       }
     }
   }

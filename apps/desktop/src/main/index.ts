@@ -4,7 +4,15 @@ import { IPC } from '../shared/ipc'
 import type { MobileStateEvent, PairingSessionView } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
-import { createMainWindow, enterCastWindowLayout, leaveCastWindowLayout, resizeToStreamAspect } from './window'
+import {
+  createMainWindow,
+  createSessionInfoWindow,
+  enterCastWindowLayout,
+  leaveCastWindowLayout,
+  resizeToStreamAspect,
+  startCastKeepAwake,
+  stopCastKeepAwake
+} from './window'
 import { PairingServer } from './pairing/pairingServer'
 import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { logger } from './log'
@@ -19,6 +27,18 @@ const EXPIRY_SWEEP_INTERVAL_MS = 1_000
 
 let mainWindow: BrowserWindow | null = null
 let pairing: PairingServer | null = null
+// Phase14 receiver-window state, owned here because windows are main-process
+// domain (desktop.md process model):
+// - whether a cast is live (drives keep-awake, the relaxed minimums, and the
+//   session-info window's lifetime),
+// - the user's session-info-overlay preference,
+// - the latest mobile state + stream size, replayed to the overlay window when
+//   it opens and to a "fit window to video" request.
+let castActive = false
+let sessionInfoOverlayEnabled = false
+let sessionInfoWindow: BrowserWindow | null = null
+let lastMobileState: MobileStateEvent | null = null
+let lastStreamSize: { width: number; height: number } | null = null
 
 function pushToRenderer(
   channel: string,
@@ -26,6 +46,20 @@ function pushToRenderer(
 ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
+  }
+}
+
+/**
+ * Mobile state reaches BOTH renderer windows: the receiver (status line) and,
+ * while it exists, the off-cast session-info window (Phase14). The latest
+ * 'connected'/'session-info' event is cached so a mid-cast toggle can replay
+ * the current line into the freshly opened overlay.
+ */
+function pushMobileState(state: MobileStateEvent): void {
+  lastMobileState = state.state === 'waiting' ? null : state
+  pushToRenderer(IPC.pairing.mobileState, state)
+  if (sessionInfoWindow !== null && !sessionInfoWindow.isDestroyed()) {
+    sessionInfoWindow.webContents.send(IPC.pairing.mobileState, state)
   }
 }
 
@@ -58,8 +92,8 @@ app.whenReady().then(async () => {
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({
     desktopName: hostname(),
-    onMobileConnected: ({ name }) => pushToRenderer(IPC.pairing.mobileState, { state: 'connected', name }),
-    onMobileDisconnected: () => pushToRenderer(IPC.pairing.mobileState, { state: 'waiting' }),
+    onMobileConnected: ({ name }) => pushMobileState({ state: 'connected', name }),
+    onMobileDisconnected: () => pushMobileState({ state: 'waiting' }),
     onBye: (reason) => {
       logger.info(LOG_SCOPE, 'session ended', { reason })
       pairing?.createSession().catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
@@ -69,7 +103,7 @@ app.whenReady().then(async () => {
     // offers or inspects SDP/candidates itself (desktop.md process split).
     onSdpOffer: (offer) => pushToRenderer(IPC.signaling.sdpOffer, offer),
     onIceCandidate: (event) => pushToRenderer(IPC.signaling.iceCandidate, event),
-    onSessionInfo: (info) => pushToRenderer(IPC.pairing.mobileState, { state: 'session-info', info })
+    onSessionInfo: (info) => pushMobileState({ state: 'session-info', info })
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
 
@@ -111,15 +145,62 @@ app.whenReady().then(async () => {
     signaling.sendIceCandidate(message.pc, message.candidate)
   })
 
+  // Overlay lifecycle (Phase14): the window exists exactly while a cast is
+  // live AND the user wants it. The receiver's × and the Settings checkbox
+  // both funnel through setSessionInfoOverlayEnabled, so one state backs both.
+  const closeSessionInfoWindow = (): void => {
+    if (sessionInfoWindow !== null && !sessionInfoWindow.isDestroyed()) {
+      sessionInfoWindow.close()
+    }
+    sessionInfoWindow = null
+  }
+
+  const pushOverlayState = (enabled: boolean): void => {
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.window.sessionInfoOverlay, enabled)
+    }
+  }
+
+  const setSessionInfoOverlayEnabled = (enabled: boolean): void => {
+    sessionInfoOverlayEnabled = enabled
+    if (enabled && castActive && sessionInfoWindow === null) {
+      sessionInfoWindow = createSessionInfoWindow()
+      // Replay the current line into the fresh window (mid-cast toggles);
+      // 'waiting' never reaches here — the cache is cleared by then.
+      sessionInfoWindow.webContents.once('did-finish-load', () => {
+        if (sessionInfoWindow !== null && !sessionInfoWindow.isDestroyed() && lastMobileState !== null) {
+          sessionInfoWindow.webContents.send(IPC.pairing.mobileState, lastMobileState)
+        }
+      })
+      sessionInfoWindow.on('closed', () => {
+        sessionInfoWindow = null
+      })
+      logger.info(LOG_SCOPE, 'session-info window opened')
+    } else if (!enabled) {
+      closeSessionInfoWindow()
+    }
+    pushOverlayState(enabled)
+  }
+
   // Window behavior (overview.md: the receiver's own control — never a cast
   // setting). While a cast fills the window, the waiting layout's minimums
   // are relaxed so portrait streams can fill it; on cast end they're restored.
   ipcMain.handle(IPC.window.castActive, (_event, raw) => {
+    castActive = raw === true
     if (mainWindow === null || mainWindow.isDestroyed()) return
-    if (raw === true) {
+    if (castActive) {
       enterCastWindowLayout(mainWindow)
+      // 30+ min sessions: hold the display awake — sleep or a screensaver
+      // firing mid-cast would stall or pollute the captured feed (Phase14).
+      startCastKeepAwake()
+      if (sessionInfoOverlayEnabled) {
+        setSessionInfoOverlayEnabled(true)
+      }
     } else {
       leaveCastWindowLayout(mainWindow)
+      stopCastKeepAwake()
+      closeSessionInfoWindow()
+      lastStreamSize = null
     }
   })
   // The window follows the stream's aspect (rotation included) so the
@@ -131,11 +212,38 @@ app.whenReady().then(async () => {
       return
     }
     if (mainWindow === null || mainWindow.isDestroyed()) return
+    lastStreamSize = size
     resizeToStreamAspect(mainWindow, size.width, size.height)
     logger.info(LOG_SCOPE, 'window reshaped to the stream', { width: size.width, height: size.height })
   })
+  // Manual-resize polish (Phase14): one click back to edge-to-edge after the
+  // user has reshaped the window by hand — the same geometry as the automatic
+  // reshape (current content area, stream aspect, work-area clamps).
+  ipcMain.handle(IPC.window.fitToStream, () => {
+    if (mainWindow === null || mainWindow.isDestroyed()) return
+    if (!castActive || lastStreamSize === null) {
+      logger.warn(LOG_SCOPE, 'fit-to-stream requested with no live stream size — ignoring')
+      return
+    }
+    resizeToStreamAspect(mainWindow, lastStreamSize.width, lastStreamSize.height)
+    logger.info(LOG_SCOPE, 'window re-fitted to the stream', { width: lastStreamSize.width, height: lastStreamSize.height })
+  })
+  ipcMain.handle(IPC.window.sessionInfoOverlay, (_event, raw) => {
+    if (typeof raw !== 'boolean') {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed session-info-overlay state — dropping')
+      return
+    }
+    setSessionInfoOverlayEnabled(raw)
+  })
 
   mainWindow = createMainWindow()
+  // The receiver window is the product: if it is closed mid-cast, the session
+  // is over even if the companion overlay is still open — release the blocker
+  // and the overlay with it (window-all-closed then quits as before).
+  mainWindow.on('closed', () => {
+    stopCastKeepAwake()
+    closeSessionInfoWindow()
+  })
 
   app.on('activate', () => {
     // macOS: re-create the window when the dock icon is clicked with no windows.

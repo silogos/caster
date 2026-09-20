@@ -273,6 +273,39 @@ body.receiving:hover .cast-overlay {
   color: var(--fg-muted);
 }
 
+/* Phase14 window controls in the settings modal — window behavior only
+   (overview.md); never cast settings. */
+.modal-section-title {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.window-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.window-label {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.window-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--fg);
+  cursor: pointer;
+}
+
 /*
   Phase9's mixer (audio.md) — the receiver's one audio control: independent
   volume/mute per stream. Receiver/environment control only (overview.md):

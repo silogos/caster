@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phases 2–9 + 13 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, and the Phase13 pairing-hero screens — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md)).
+Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)).
 
 ## Role
 
@@ -11,8 +11,9 @@ It must **not** expose cast configuration. Forbidden on the desktop: resolution,
 Allowed desktop controls are **receiver/environment** controls only:
 
 - Game-audio volume, microphone volume (independent `GainNode`s — Phase9), reached through the hover-triggered settings modal
-- Window: fullscreen, aspect-ratio behavior — implemented as **the window following the stream's aspect** (cast start and rotation): content area preserved, clamped to the display work area, no stretch/crop
-- Stay-awake during an active cast (`powerSaveBlocker`)
+- Window: fullscreen, aspect-ratio behavior — implemented as **the window following the stream's aspect** (cast start and rotation): content area preserved, clamped to the display work area, no stretch/crop; plus a one-click **"Fit window to video"** re-fit after a manual resize (Phase14)
+- Stay-awake during an active cast (`powerSaveBlocker`, `prevent-display-sleep` — Phase14): the display is held awake for exactly the cast's lifetime
+- The optional **session-info window** (Phase14): the cast summary line in its own small frameless window, *outside* the receiver window, so window capture records a pure video feed
 - Regenerate pairing QR / cancel session
 
 Read-only session info (e.g. "Receiving 720p · 30 fps · Balanced profile", sent by mobile via `session-info`) may be displayed but never edited.
@@ -42,6 +43,8 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
 │             → AudioContext.destination                  │
 │  CastOverlay: hover-revealed status + settings trigger; │
 │  SettingsModal: the mixer (volume/mute per stream)       │
+│  SessionInfoWindow: optional off-cast cast summary       │
+│             (own BrowserWindow — Phase14)                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -54,14 +57,17 @@ Responsibility split: the main process owns **sockets, sessions, and the window*
 - ICE: no STUN/TURN; host candidates only. mDNS candidate caveats: [webrtc.md](webrtc.md).
 - Audio: each remote audio stream becomes a `MediaStreamAudioSourceNode` → its own `GainNode` → `AudioContext.destination`. No additional processing (no EQ, no echo cancellation on the receiver) unless a measured need appears.
 
-## Window design for OBS / streaming (Phase 14 target)
+## Window design for OBS / streaming (Phase 14)
 
-The receiver window is the product's "output device" for streamers. Early pieces landed in the review-time restructure after Phase9 (full-window video, hover overlay, window-follows-stream):
+The receiver window is the product's "output device" for streamers: OBS Window Capture records one window, so that window must contain **nothing but video**. The pieces, in landing order:
 
-- Stable, dark window (#000/near-black); while casting the video fills the window, and the window reshapes to the stream's aspect (cast start + rotation) so there is no persistent letterboxing; `contain` never stretches or crops.
-- Minimal UI: **no visible UI over the video** while casting — a hover-revealed overlay carries the status line and the settings trigger; the mixer lives in the modal it opens.
+- Stable, dark window (#000/near-black); while casting the video fills the window, and the window reshapes to the stream's aspect (cast start + rotation) so there is no persistent letterboxing; `contain` never stretches or crops. A **manual resize** letterboxes on purpose (the user's chosen shape) — and "Fit window to video" (settings modal) returns to edge-to-edge in one click, applying the same geometry as the automatic reshape.
+- Minimal UI: **no visible UI over the video** while casting — a hover-revealed overlay carries the status line and the settings trigger; the mixer and the window controls live in the modal it opens.
 - Smooth rendering: the `<video>` element is composited directly (no canvas copy) unless a measured reason appears.
-- Remaining Phase14 items: 30+ min OBS-session hardening, letterboxing polish for manually resized windows, optional session-info overlay off-cast.
+- **Session-info lives off-cast** (Phase14): the optional session-info window is a *second* BrowserWindow — small, frameless, always-on-top, draggable, closable — outside the captured window. It exists only while a cast is live and the user wants it (settings toggle, off by default; the overlay's ✕ and the checkbox share one state pushed from the main process). The status line is formatted by one pure module (`sessionInfoLine.ts`) rendered in both places.
+- **Stay-awake** (Phase14): `powerSaveBlocker` (`prevent-display-sleep`) is started when a cast goes live and stopped when it ends — a 30-minute session must not stall on display sleep or a screensaver firing into the captured feed. Closing the receiver window mid-cast releases the blocker and the session-info window with it.
+
+Remaining: the acceptance itself — the 30+ min OBS Window Capture session on real hardware ([features/obs-streaming.md](../features/obs-streaming.md)).
 
 ## Lifecycle states
 
