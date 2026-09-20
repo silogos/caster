@@ -16,6 +16,7 @@ import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.capture.DisplaySize
+import com.zerofriction.localcast.capture.ScreenCapturer
 import com.zerofriction.localcast.signaling.SignalingClient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -31,7 +32,6 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpParameters
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
-import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
@@ -117,7 +117,7 @@ class MediaCastSession(
     private var eglBase: EglBase? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
-    private var capturer: ScreenCapturerAndroid? = null
+    private var capturer: ScreenCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
 
@@ -275,7 +275,7 @@ class MediaCastSession(
             videoSource = source
             val helper = SurfaceTextureHelper.create("CaptureThread", egl.eglBaseContext)
             surfaceTextureHelper = helper
-            val newCapturer = ScreenCapturerAndroid(projectionPermissionIntent, projectionCallback)
+            val newCapturer = ScreenCapturer(projectionPermissionIntent, projectionCallback)
             capturer = newCapturer
             newCapturer.initialize(helper, context, source.capturerObserver)
             newCapturer.startCapture(width, height, config.fps)
