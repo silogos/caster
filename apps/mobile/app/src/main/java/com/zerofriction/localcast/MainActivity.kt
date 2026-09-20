@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
                 // (docs/development/mobile.md: add libraries when the need is real).
                 var showScan by rememberSaveable { mutableStateOf(false) }
                 if (showScan) {
-                    ScanScreen()
+                    ScanScreen(onBackToHome = { showScan = false })
                 } else {
                     HomeScreen(onStartCast = { showScan = true })
                 }

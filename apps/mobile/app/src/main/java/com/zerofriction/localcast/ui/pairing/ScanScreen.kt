@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.pairing.PairingClient
@@ -48,18 +52,39 @@ import com.zerofriction.localcast.pairing.PairingError
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.signaling.SignalingClient
+import com.zerofriction.localcast.ui.home.DebugToneButton
+import com.zerofriction.localcast.ui.home.GameAudioControls
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
 fun ScanScreen(
     viewModel: ScanViewModel = viewModel(),
+    /**
+     * The system back button leaves the scan screen. Without it, back
+     * backgrounds the whole app and rememberSaveable reopens the scan screen
+     * on return — a dead end (found live in Phase7). The cast is service-owned
+     * and survives; an un-cast pairing is dropped by the ViewModel as usual.
+     */
+    onBackToHome: () -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val backDispatcher = (context as? ComponentActivity)?.onBackPressedDispatcher
+    DisposableEffect(backDispatcher, onBackToHome) {
+        val callback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = onBackToHome()
+        }
+        backDispatcher?.addCallback(callback)
+        onDispose { callback.remove() }
+    }
+
     val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
     val castState by viewModel.castState.collectAsStateWithLifecycle()
+    val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
 
     ScanContent(
         pairingState = pairingState,
         castState = castState,
+        gameAudioState = gameAudioState,
         releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
@@ -78,6 +103,7 @@ fun ScanScreen(
 fun ScanContent(
     pairingState: PairingClient.State,
     castState: CastState = CastState.Idle,
+    gameAudioState: GameAudioState = GameAudioState.Off,
     releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
@@ -132,6 +158,10 @@ fun ScanContent(
                         fontSize = 14.sp,
                         modifier = Modifier.padding(bottom = 16.dp),
                     )
+                    GameAudioControls(gameAudioState)
+                    if (BuildConfig.DEBUG) {
+                        DebugToneButton()
+                    }
                     OutlinedButton(onClick = { CastService.requestStop(context) }) {
                         Text(stringResource(R.string.stop_casting))
                     }
@@ -305,7 +335,7 @@ private fun CastControls(
                     context,
                     CastService.StartArgs(
                         signaling = signaling,
-                        config = CastConfig.phase5Default(),
+                        config = CastConfig.default(),
                         projectionIntent = consentData,
                         physicalWidth = width,
                         physicalHeight = height,
@@ -319,13 +349,28 @@ private fun CastControls(
         projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }
 
-    fun requestConsentAndStart() {
+    fun requestNotificationsOrConsent() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        }
+    }
+
+    // Phase7: the platform requires RECORD_AUDIO for playback capture (and
+    // to start the WebRTC ADM). Non-fatal on denial — the cast then runs
+    // video-only and the home screen says game audio is off.
+    val recordAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        requestNotificationsOrConsent()
+    }
+
+    fun requestConsentAndStart() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            requestNotificationsOrConsent()
         }
     }
 

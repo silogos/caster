@@ -42,6 +42,9 @@ const receiver = new ReceiverSession({
     show: (stream) => {
       videoEl.srcObject = stream as MediaStream
       videoEl.hidden = false
+      // Belt and braces next to the unmuted markup: the stream carries the
+      // phone's game audio too (Phase7), and it plays through this element.
+      videoEl.muted = false
       videoEl.play().catch((error) => log('warn', 'autoplay was blocked', { error: String(error) }))
       qrCardEl.hidden = true
       hintEl.hidden = true

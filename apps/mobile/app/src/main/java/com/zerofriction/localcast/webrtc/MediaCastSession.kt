@@ -1,16 +1,23 @@
 package com.zerofriction.localcast.webrtc
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import androidx.core.content.ContextCompat
+import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.signaling.SignalingClient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
@@ -29,9 +36,9 @@ import org.webrtc.VideoTrack
 
 /**
  * The mobile's media half (mobile.md module `webrtc`): the `media` PC —
- * screen video in, offer/answer over signaling, ICE trickling, ~1 Hz getStats
- * logging (webrtc.md). The `mic` PC (factory B) arrives in Phase8 (ADR-003);
- * game audio joins this same PC in Phase7.
+ * screen video + game audio in, offer/answer over signaling, ICE trickling,
+ * ~1 Hz getStats logging (webrtc.md). The `mic` PC (factory B) arrives in
+ * Phase8 (ADR-003).
  *
  * The mobile is always the offerer (webrtc.md): the offer encodes this
  * session's send parameters — H.264 first, VP8 fallback ([SdpCodecOrderer]),
@@ -59,6 +66,9 @@ class MediaCastSession(
 
     /** Session state changes, delivered from the session thread. */
     private val onState: (State) -> Unit = {},
+
+    /** Game-audio state changes (Phase7) — Off/Active/Muted/Silent/Failed (audio.md). */
+    private val onGameAudioState: (GameAudioState) -> Unit = {},
 ) {
 
     enum class State { STARTING, NEGOTIATING, STREAMING, CLOSED }
@@ -94,6 +104,11 @@ class MediaCastSession(
     private var capturer: ScreenCapturerAndroid? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
+
+    /** Game audio (Phase7) — null means game audio is off for this cast. */
+    private var audio: PlaybackCaptureAudioSource? = null
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
 
     /** Desktop candidates that arrived before the answer set the remote description. */
     private val pendingCandidates = mutableListOf<IceCandidate>()
@@ -157,6 +172,18 @@ class MediaCastSession(
         post { teardown() }
     }
 
+    /**
+     * User mute of the game-audio track (audio.md): zeroes the captured
+     * frames sender-side — the Opus stream keeps flowing, no renegotiation,
+     * and the video track is untouched. No-op when game audio is off.
+     */
+    fun setGameAudioMuted(muted: Boolean) {
+        post { audio?.setMuted(muted) }
+    }
+
+    /** The current game-audio state (safe from any thread — read-only). */
+    val gameAudioState: GameAudioState get() = audio?.state ?: GameAudioState.Off
+
     // ---- Everything below runs (or is posted to) the session thread ----
 
     private fun post(block: () -> Unit) {
@@ -175,10 +202,24 @@ class MediaCastSession(
             )
             val egl = EglBase.create()
             eglBase = egl
-            val newFactory = PeerConnectionFactory.builder()
+            // Game audio rides the media pc (ADR-003): factory A's ADM is the
+            // playback-capture ADM. The projection doesn't exist yet — the
+            // audio source fetches it lazily at record start (one consent =
+            // one projection, reused from the capturer).
+            val newAudio = if (config.gameAudio && hasRecordAudioPermission()) {
+                PlaybackCaptureAudioSource(context, projection = { capturer?.mediaProjection }, onState = onGameAudioState)
+            } else {
+                if (config.gameAudio) {
+                    Log.w(TAG, "RECORD_AUDIO not granted — casting without game audio")
+                }
+                null
+            }
+            audio = newAudio
+            val factoryBuilder = PeerConnectionFactory.builder()
                 .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
-                .createPeerConnectionFactory()
+            if (newAudio !== null) factoryBuilder.setAudioDeviceModule(newAudio.adm)
+            val newFactory = factoryBuilder.createPeerConnectionFactory()
             factory = newFactory
 
             val (width, height) = CaptureSize.scaleTo(config.longEdgePx, physicalWidth, physicalHeight)
@@ -196,6 +237,24 @@ class MediaCastSession(
             val track = newFactory.createVideoTrack(VIDEO_TRACK_ID, source)
             videoTrack = track
 
+            if (newAudio !== null) {
+                val constraints = MediaConstraints().apply {
+                    // Captured playback is finished audio (audio.md): refuse
+                    // the APM's mic-shaped processing on it.
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                }
+                val newAudioSource = newFactory.createAudioSource(constraints)
+                audioSource = newAudioSource
+                val newAudioTrack = newFactory.createAudioTrack(AUDIO_TRACK_ID, newAudioSource)
+                audioTrack = newAudioTrack
+            }
+
+            // The monitor's initial value has no transition to report —
+            // publish the starting state explicitly (Off = not in this cast).
+            onGameAudioState(if (newAudio !== null) GameAudioState.Active else GameAudioState.Off)
+
             // Display-only summary for the desktop status line (webrtc.md) —
             // not configuration; the desktop never acts on it.
             signaling.sendSessionInfo(
@@ -203,7 +262,7 @@ class MediaCastSession(
                 width = width,
                 height = height,
                 fps = config.fps,
-                gameAudio = false,
+                gameAudio = newAudio !== null,
                 mic = false,
             )
 
@@ -213,6 +272,10 @@ class MediaCastSession(
             fatal(Failure.Error(t.message ?: t.javaClass.simpleName))
         }
     }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
 
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
     private fun negotiate() {
@@ -238,6 +301,12 @@ class MediaCastSession(
         if (trackSender === null) {
             fatal(Failure.Error("addTrack returned null — native track wiring failed"))
             return
+        }
+        // Game audio rides the same pc + stream as the video (ADR-003) — the
+        // desktop plays both from one MediaStream.
+        val currentAudioTrack = audioTrack
+        if (currentAudioTrack !== null) {
+            newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
         }
         onState(State.NEGOTIATING)
 
@@ -301,9 +370,11 @@ class MediaCastSession(
      * Sender-side parameters from the config module only (webrtc.md): the
      * bitrate window and BALANCED degradation. Called once the answer exists;
      * if the pc refuses (early states), the values reapply on the next call.
+     * Targets the *video* sender explicitly — since Phase7 the pc also carries
+     * an audio sender, and `senders` order is not a contract.
      */
     private fun applySenderParameters(currentPc: PeerConnection) {
-        val sender = currentPc.senders.firstOrNull() ?: return
+        val sender = currentPc.senders.firstOrNull { it.track()?.kind() == "video" } ?: return
         val parameters = sender.parameters
         if (parameters.encodings.isEmpty()) return
         parameters.encodings.first().apply {
@@ -353,6 +424,8 @@ class MediaCastSession(
             when (newState) {
                 PeerConnection.PeerConnectionState.CONNECTED -> {
                     onState(State.STREAMING)
+                    // Silence detection only counts while actually connected (audio.md).
+                    audio?.setStreaming(true)
                     scheduleStats()
                 }
                 PeerConnection.PeerConnectionState.FAILED -> {
@@ -433,6 +506,13 @@ class MediaCastSession(
         videoTrack = null
         videoSource?.dispose()
         videoSource = null
+        audioTrack?.dispose()
+        audioTrack = null
+        audioSource?.dispose()
+        audioSource = null
+        // The audio ADM is owned (and released) by the factory below —
+        // JavaAudioDeviceModule.release() must not be called from app code.
+        audio = null
         surfaceTextureHelper?.dispose()
         surfaceTextureHelper = null
         factory?.dispose()
@@ -465,6 +545,7 @@ class MediaCastSession(
 
         private const val PC_ID = "media"
         private const val VIDEO_TRACK_ID = "zfc-video"
+        private const val AUDIO_TRACK_ID = "zfc-game-audio"
         private const val STREAM_ID = "zfc-media"
     }
 }
