@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { IPC } from '../shared/ipc'
 import type { MobileStateEvent, PairingSessionView } from '../shared/types'
+import type { PcId } from '../shared/types'
+import { isPcId } from './signaling/envelope'
 import { createMainWindow } from './window'
 import { PairingServer } from './pairing/pairingServer'
 import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
@@ -18,10 +20,28 @@ const EXPIRY_SWEEP_INTERVAL_MS = 1_000
 let mainWindow: BrowserWindow | null = null
 let pairing: PairingServer | null = null
 
-function pushToRenderer(channel: string, payload: PairingSessionView | null | MobileStateEvent): void {
+function pushToRenderer(
+  channel: string,
+  payload: PairingSessionView | null | MobileStateEvent | { pc: PcId; sdp: string } | { pc: PcId; candidate: unknown }
+): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
   }
+}
+
+/** IPC input from the renderer is untrusted at the process boundary — validate before it reaches the socket. */
+function asSdpMessage(raw: unknown): { pc: PcId; sdp: string } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { pc, sdp } = raw as Record<string, unknown>
+  if (!isPcId(pc) || typeof sdp !== 'string' || sdp.length === 0) return null
+  return { pc, sdp }
+}
+
+function asIceMessage(raw: unknown): { pc: PcId; candidate: unknown } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { pc, candidate } = raw as Record<string, unknown>
+  if (!isPcId(pc) || !('candidate' in (raw as Record<string, unknown>))) return null
+  return { pc, candidate }
 }
 
 app.whenReady().then(async () => {
@@ -35,12 +55,11 @@ app.whenReady().then(async () => {
       logger.info(LOG_SCOPE, 'session ended', { reason })
       pairing?.createSession().catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
     },
-    // Phase4: signaling is dumb plumbing — media messages are logged, and the
-    // ReceiverSession (Phase5) will consume/answer them. session-info is the
-    // one message the desktop displays (status line, webrtc.md).
-    onSdpOffer: ({ pc }) => logger.info(LOG_SCOPE, `sdp-offer received for pc=${pc} — answering is Phase5`),
-    onIceCandidate: ({ pc, candidate }) =>
-      logger.debug(LOG_SCOPE, `ice candidate for pc=${pc}`, { candidate: candidate === null ? 'end-of-gathering' : 'host' }),
+    // Media plumbing (webrtc.md): the main process relays SDP/ICE frames
+    // between the socket and the renderer's ReceiverSession — it never answers
+    // offers or inspects SDP/candidates itself (desktop.md process split).
+    onSdpOffer: (offer) => pushToRenderer(IPC.signaling.sdpOffer, offer),
+    onIceCandidate: (event) => pushToRenderer(IPC.signaling.iceCandidate, event),
     onSessionInfo: (info) => pushToRenderer(IPC.pairing.mobileState, { state: 'session-info', info })
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
@@ -62,6 +81,25 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
     return pairing!.createSession()
+  })
+
+  // Renderer (ReceiverSession) → socket: the desktop's half of the media plumbing.
+  ipcMain.handle(IPC.signaling.sendSdpAnswer, (_event, raw) => {
+    const message = asSdpMessage(raw)
+    if (message === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed sdp-answer — dropping')
+      return
+    }
+    logger.info(LOG_SCOPE, `sdp-answer for pc=${message.pc}`)
+    signaling.sendSdpAnswer(message.pc, message.sdp)
+  })
+  ipcMain.handle(IPC.signaling.sendIceCandidate, (_event, raw) => {
+    const message = asIceMessage(raw)
+    if (message === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed ice candidate — dropping')
+      return
+    }
+    signaling.sendIceCandidate(message.pc, message.candidate)
   })
 
   mainWindow = createMainWindow()

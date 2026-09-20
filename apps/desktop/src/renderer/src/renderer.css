@@ -93,3 +93,21 @@ body {
   opacity: 0.5;
   cursor: default;
 }
+
+/*
+  The cast surface (Phase5). Letterboxed, near-black stage — the full OBS-grade
+  window treatment (stable size, controls outside the video rect) is Phase14;
+  this is the minimal honest version.
+*/
+.video {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  background: #000;
+  border-radius: 12px;
+}
+
+.video[hidden] {
+  display: none;
+}

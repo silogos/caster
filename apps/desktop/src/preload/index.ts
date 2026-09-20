@@ -1,20 +1,31 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { DesktopApi } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView } from '../shared/types'
+import type {
+  MobileStateEvent,
+  PairingSessionView,
+  SignalingIceMessage,
+  SignalingSdpMessage
+} from '../shared/types'
+
+function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
+  const wrapped = (_event: IpcRendererEvent, payload: T): void => listener(payload)
+  ipcRenderer.on(channel, wrapped)
+  return () => ipcRenderer.removeListener(channel, wrapped)
+}
 
 const desktopApi: DesktopApi = {
   getPairingSession: () => ipcRenderer.invoke(IPC.pairing.getSession),
   regeneratePairingSession: () => ipcRenderer.invoke(IPC.pairing.regenerate),
-  onPairingSessionUpdated: (listener) => {
-    const wrapped = (_event: IpcRendererEvent, session: PairingSessionView | null): void => listener(session)
-    ipcRenderer.on(IPC.pairing.sessionUpdated, wrapped)
-    return () => ipcRenderer.removeListener(IPC.pairing.sessionUpdated, wrapped)
+  onPairingSessionUpdated: (listener) => subscribe<PairingSessionView | null>(IPC.pairing.sessionUpdated, listener),
+  onMobileStateChanged: (listener) => subscribe<MobileStateEvent>(IPC.pairing.mobileState, listener),
+  onSignalingSdpOffer: (listener) => subscribe<SignalingSdpMessage>(IPC.signaling.sdpOffer, listener),
+  onSignalingIceCandidate: (listener) => subscribe<SignalingIceMessage>(IPC.signaling.iceCandidate, listener),
+  sendSdpAnswer: (pc, sdp) => {
+    ipcRenderer.invoke(IPC.signaling.sendSdpAnswer, { pc, sdp } satisfies SignalingSdpMessage)
   },
-  onMobileStateChanged: (listener) => {
-    const wrapped = (_event: IpcRendererEvent, state: MobileStateEvent): void => listener(state)
-    ipcRenderer.on(IPC.pairing.mobileState, wrapped)
-    return () => ipcRenderer.removeListener(IPC.pairing.mobileState, wrapped)
+  sendIceCandidate: (pc, candidate) => {
+    ipcRenderer.invoke(IPC.signaling.sendIceCandidate, { pc, candidate } satisfies SignalingIceMessage)
   }
 }
 

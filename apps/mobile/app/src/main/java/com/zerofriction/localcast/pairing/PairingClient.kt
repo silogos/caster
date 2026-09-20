@@ -52,6 +52,13 @@ class PairingClient(
     /** Name from the last successful auth — shown during reconnect ("Reconnecting to …"). */
     private var lastDesktopName: String? = null
 
+    /**
+     * The live signaling connection, once a QR scan started one — the cast
+     * service (Phase5) subscribes to media events and sends SDP/ICE through it.
+     * Null before the first scan or after [reset].
+     */
+    fun signalingClient(): SignalingClient? = signaling
+
     /** Entry point for both the camera scan and the debug manual payload input. */
     fun startFromQrText(qrText: String) {
         reset()

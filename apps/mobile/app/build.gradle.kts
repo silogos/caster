@@ -74,6 +74,8 @@ dependencies {
     implementation(libs.mlkit.barcode.scanning)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    // WebRTC media transport (Phase 5): prebuilt libwebrtc, org.webrtc API (ADR-001).
+    implementation(libs.stream.webrtc.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

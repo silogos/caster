@@ -1,7 +1,10 @@
 package com.zerofriction.localcast.ui.pairing
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -38,8 +41,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.capture.DisplaySize
+import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
+import com.zerofriction.localcast.service.CastState
+import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
@@ -47,9 +55,12 @@ fun ScanScreen(
     viewModel: ScanViewModel = viewModel(),
 ) {
     val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
+    val castState by viewModel.castState.collectAsStateWithLifecycle()
 
     ScanContent(
         pairingState = pairingState,
+        castState = castState,
+        signalingClient = viewModel::signalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
         onDisconnect = viewModel::onDisconnect,
@@ -59,6 +70,8 @@ fun ScanScreen(
 @Composable
 fun ScanContent(
     pairingState: PairingClient.State,
+    castState: CastState = CastState.Idle,
+    signalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
     onDisconnect: () -> Unit,
@@ -189,10 +202,96 @@ fun ScanContent(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(24.dp))
+                    CastControls(castState = castState, desktopName = state.desktopName, signalingClient = signalingClient)
+                    Spacer(Modifier.height(16.dp))
                     Button(onClick = onDisconnect) {
                         Text(stringResource(R.string.disconnect))
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The Phase5 cast controls shown while paired. `Start casting` runs the
+ * MediaProjection consent (per session, never pre-granted — mobile.md) and
+ * then hands the consent result to the foreground service; the notification
+ * permission is requested first on 13+ but is not fatal — the cast runs
+ * either way, only the FGS notification's visibility depends on it.
+ */
+@Composable
+private fun CastControls(
+    castState: CastState,
+    desktopName: String,
+    signalingClient: () -> SignalingClient?,
+) {
+    val context = LocalContext.current
+    val mediaProjectionManager = remember { context.getSystemService(MediaProjectionManager::class.java) }
+
+    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val consentData = result.data
+        val signaling = signalingClient()
+        if (result.resultCode == Activity.RESULT_OK && consentData != null && signaling != null) {
+            val (width, height) = DisplaySize.physicalPx(context)
+            CastService.start(
+                context,
+                CastService.StartArgs(
+                    signaling = signaling,
+                    config = CastConfig.phase5Default(),
+                    projectionIntent = consentData,
+                    physicalWidth = width,
+                    physicalHeight = height,
+                ),
+            )
+        }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+    }
+
+    fun requestConsentAndStart() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        }
+    }
+
+    when (castState) {
+        CastState.Idle, is CastState.Failed -> {
+            if (castState is CastState.Failed) {
+                Text(
+                    text = castState.message,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+            }
+            Button(onClick = ::requestConsentAndStart) {
+                Text(stringResource(R.string.start_casting))
+            }
+        }
+
+        CastState.Starting -> {
+            CircularProgressIndicator()
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.starting_cast),
+                fontSize = 15.sp,
+            )
+        }
+
+        CastState.Casting -> {
+            Text(
+                text = stringResource(R.string.casting_to, desktopName),
+                fontSize = 15.sp,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+            OutlinedButton(onClick = { CastService.requestStop(context) }) {
+                Text(stringResource(R.string.stop_casting))
             }
         }
     }
