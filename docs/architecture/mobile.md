@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phases 1–10 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md); the mic on its own `mic` PC since Phase 8, [features/microphone.md](../features/microphone.md); the configuration-owner settings UI (home page) + persistence since Phase 10, [features/cast-settings.md](../features/cast-settings.md)).
+Status: Phases 1–12 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md); the mic on its own `mic` PC since Phase 8, [features/microphone.md](../features/microphone.md); the configuration-owner settings UI (home page) + persistence since Phase 10, [features/cast-settings.md](../features/cast-settings.md); thermal profiles + read-only monitoring since Phase 11, [features/thermal.md](../features/thermal.md); stats/thermal-driven auto quality since Phase 12, [features/adaptive-quality.md](../features/adaptive-quality.md)).
 
 ## Role
 
@@ -33,11 +33,12 @@ com.zerofriction.localcast/
 ├── audio/         # PlaybackCapture ADM (game audio), mic capture
 ├── service/       # CastService: foreground service owning the whole cast session
 ├── config/        # Cast settings (presets, persistence, the one CastConfig conversion)
-├── thermal/       # Thermal status monitoring + profile application
+├── thermal/       # Thermal status monitoring (read-only diagnostics; Phase11)
+├── adaptive/      # Auto-quality policy machine: stats + thermal in, announced level changes out (Phase12)
 └── diagnostics/   # Structured logging facade
 ```
 
-Dependency direction: `ui` and `service` drive the session; `pairing`, `signaling`, `webrtc`, `capture`, `audio`, `thermal`, `config` are independent of UI. `signaling` knows nothing about media; `webrtc` knows nothing about sockets.
+Dependency direction: `ui` and `service` drive the session; `pairing`, `signaling`, `webrtc`, `capture`, `audio`, `thermal`, `adaptive`, `config` are independent of UI. `adaptive` is pure policy (no Android, no WebRTC types) — `service` feeds it samples and applies its announcements to `webrtc`. `signaling` knows nothing about media; `webrtc` knows nothing about sockets.
 
 ## Session architecture
 

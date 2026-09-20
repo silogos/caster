@@ -86,6 +86,25 @@
     <string name="settings_mic">Start with microphone on</string>
     <string name="settings_mic_hint">You can also turn the microphone on and off during a cast.</string>
 
+    <!-- Auto quality (Phase12, thermal.md) — a cast setting like any other:
+             conservative step-downs with hysteresis, announced, reversible;
+             the switch is the "user can disable" acceptance criterion. -->
+    <string name="settings_auto_quality">Automatic quality</string>
+    <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
+
+    <!-- Auto-quality transitions (Phase12) — plain words for what the policy
+             did (AGENTS.md); the thresholds and holds stay in the logs. -->
+    <string name="adaptive_lowered_thermal">The phone got hot, so the quality was lowered to %1$s.</string>
+    <string name="adaptive_lowered_stream">The stream struggled, so the quality was lowered to %1$s.</string>
+    <string name="adaptive_raised">The stream stayed healthy, so the quality went back up to %1$s.</string>
+    <string name="adaptive_restored">Quality restored to %1$s.</string>
+    <string name="adaptive_your_settings">your settings</string>
+    <string name="adaptive_restore">Restore quality</string>
+    <string name="adaptive_notification_lowered_thermal">Phone is hot — cast quality lowered to %1$s.</string>
+    <string name="adaptive_notification_lowered_stream">Connection trouble — cast quality lowered to %1$s.</string>
+    <string name="adaptive_notification_raised">Cast quality raised to %1$s.</string>
+    <string name="adaptive_notification_restored">Cast quality restored.</string>
+
     <!-- Thermal read-out (Phase11, thermal.md) — read-only diagnostics in the
          "This cast" section, plain words only (AGENTS.md); the platform
          ladder/headroom/battery numbers stay in the service logs. -->

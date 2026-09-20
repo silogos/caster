@@ -30,6 +30,12 @@ data class CastConfig(
     val gameAudio: Boolean,
     /** Start the cast with the microphone on (audio.md: off by default). */
     val mic: Boolean,
+    /**
+     * Stats/thermal-driven auto quality (Phase12, [thermal.md]):
+     * conservative one-level step-downs with hysteresis, announced and
+     * reversible — off leaves the cast exactly at the user's settings.
+     */
+    val autoQuality: Boolean,
 ) {
     companion object {
         /** webrtc.md: initial sender targets (adjusted in Phases 10–12). */
@@ -46,6 +52,9 @@ data class CastConfig(
         /** audio.md/Phase8: the mic needs an explicit user action, not a default. */
         const val DEFAULT_MIC = false
 
+        /** thermal.md Phase12: auto quality is part of the good default cast; a switch turns it off. */
+        const val DEFAULT_AUTO_QUALITY = true
+
         fun default(): CastConfig = CastConfig(
             profile = DEFAULT_PROFILE,
             longEdgePx = DEFAULT_LONG_EDGE_PX,
@@ -55,6 +64,7 @@ data class CastConfig(
             degradationPreference = DEGRADATION_BALANCED,
             gameAudio = DEFAULT_GAME_AUDIO,
             mic = DEFAULT_MIC,
+            autoQuality = DEFAULT_AUTO_QUALITY,
         )
     }
 }

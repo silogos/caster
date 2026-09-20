@@ -40,12 +40,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.adaptive.AdaptiveQualityController
+import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.debug.DebugTestTone
+import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.thermal.ThermalState
@@ -74,6 +78,7 @@ fun HomeScreen(
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
+    val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
 
     // The settings state (Phase10): the home page is its home now — one
     // ViewModel scoped to the activity, backed by the persistent store.
@@ -96,6 +101,7 @@ fun HomeScreen(
         gameAudioState = gameAudioState,
         micState = micState,
         thermalState = thermalState,
+        adaptiveState = adaptiveState,
         settings = settings,
         onSelectProfile = settingsViewModel::selectProfile,
         onSelectLongEdge = settingsViewModel::selectLongEdge,
@@ -104,6 +110,7 @@ fun HomeScreen(
         onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
         onSetGameAudio = settingsViewModel::setGameAudio,
         onSetMic = settingsViewModel::setMic,
+        onSetAutoQuality = settingsViewModel::setAutoQuality,
         onStartCast = onStartCast,
     )
 }
@@ -114,6 +121,7 @@ fun HomeContent(
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
     thermalState: ThermalState = ThermalState(),
+    adaptiveState: AdaptiveUiState = AdaptiveUiState(),
     settings: CastSettings = CastSettings.default(),
     onSelectProfile: (QualityProfile) -> Unit = {},
     onSelectLongEdge: (Int) -> Unit = {},
@@ -122,6 +130,7 @@ fun HomeContent(
     onSetManualBitrateMax: (Int) -> Unit = {},
     onSetGameAudio: (Boolean) -> Unit = {},
     onSetMic: (Boolean) -> Unit = {},
+    onSetAutoQuality: (Boolean) -> Unit = {},
     onStartCast: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -199,6 +208,7 @@ fun HomeContent(
                 GameAudioControls(gameAudioState)
                 MicControls(micState = micState, gameAudioState = gameAudioState)
                 ThermalStatusLine(thermalState)
+                AdaptiveStatusLine(adaptiveState)
                 if (BuildConfig.DEBUG) {
                     DebugToneButton()
                 }
@@ -213,6 +223,7 @@ fun HomeContent(
                 onSetManualBitrateMax = onSetManualBitrateMax,
                 onSetGameAudio = onSetGameAudio,
                 onSetMic = onSetMic,
+                onSetAutoQuality = onSetAutoQuality,
             )
             Spacer(Modifier.height(24.dp))
         }
@@ -360,6 +371,59 @@ fun ThermalStatusLine(thermalState: ThermalState) {
         fontSize = 13.sp,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+/**
+ * The auto-quality read-out of a running cast (Phase12, thermal.md): plain
+ * words for what the policy did — the current level against the ceiling
+ * (the user's settings at cast start) and, when one fired, what happened
+ * and why. Quiet while nothing changed: no line, no log noise.
+ */
+@Composable
+fun AdaptiveStatusLine(adaptiveState: AdaptiveUiState) {
+    val context = LocalContext.current
+    val ceiling = adaptiveState.ceiling ?: return
+    val current = adaptiveState.current ?: return
+    if (current == ceiling && adaptiveState.lastChange == null) return
+    val change = adaptiveState.lastChange ?: return
+    Column(modifier = Modifier.padding(top = 4.dp)) {
+        Text(
+            text = when {
+                change.direction == AdaptiveQualityController.Direction.DOWN &&
+                    change.reason == AdaptiveQualityController.Reason.THERMAL ->
+                    stringResource(R.string.adaptive_lowered_thermal, levelName(change.to))
+
+                change.direction == AdaptiveQualityController.Direction.DOWN ->
+                    stringResource(R.string.adaptive_lowered_stream, levelName(change.to))
+
+                change.reason == AdaptiveQualityController.Reason.USER ->
+                    stringResource(R.string.adaptive_restored, levelName(change.to))
+
+                else -> stringResource(R.string.adaptive_raised, levelName(change.to))
+            },
+            fontSize = 13.sp,
+        )
+        if (current != ceiling) {
+            OutlinedButton(
+                onClick = { CastService.requestRestoreQuality(context) },
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Text(stringResource(R.string.adaptive_restore))
+            }
+        }
+    }
+}
+
+/** Localized name for a quality level — "your settings" for a tweaked top rung. */
+@Composable
+private fun levelName(level: QualityLevel): String = when (
+    matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
+) {
+    QualityProfile.COOL -> stringResource(R.string.profile_cool)
+    QualityProfile.BALANCED -> stringResource(R.string.profile_balanced)
+    QualityProfile.PERFORMANCE -> stringResource(R.string.profile_performance)
+    QualityProfile.SHARP -> stringResource(R.string.profile_sharp)
+    null -> stringResource(R.string.adaptive_your_settings)
 }
 
 /**

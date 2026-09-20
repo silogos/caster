@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 11 implemented — awaiting review (the on-device items — profile switches visible in sender stats, and a live thermal-ladder read — remain; see [features/thermal.md](../features/thermal.md) and [features/cast-settings.md](../features/cast-settings.md)).**
+Current status: **Phase 12 implemented — awaiting review (the on-device acceptance items — a live network/thermal-driven step-down and recovery, and the disabled-switch check — need the phone in hand; see [features/adaptive-quality.md](../features/adaptive-quality.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -58,9 +58,9 @@ Current status: **Phase 11 implemented — awaiting review (the on-device items 
 **Scope:** profile definitions ([thermal.md](../architecture/thermal.md)); profile → sender parameters; thermal status monitoring + diagnostics logging; **read-only** thermal state (no auto-degradation yet).
 **Accept:** profiles switch measurably distinct encoder configs; thermal ladder visible in diagnostics; docs updated with any tuned values. Commit `feat: add thermal profiles`. *(Implemented 2026-09-20: the Phase10 presets became the thermal vocabulary — `light`→`cool`, `smooth`→`performance`, values unchanged (thermal.md's hypotheses, tuned to the shipped windows); the profile→sender-parameters chain is the existing preset→CastConfig→capturer/sender path, now covered by a distinctness test. New `thermal` module: pure `ThermalMonitor` (ladder state machine, JVM-tested incl. a mirror guard against `PowerManager`'s own constants) + `ThermalSource` (platform listener API29, headroom API30+, battery temperature, 10 s samples). Read-only everywhere: the "This cast" section shows a plain-words thermal line, transitions + headroom + battery go to logcat (Phase15's trail); nothing changes cast parameters. Stored settings v1 documents migrate via the codec (v2, legacy label translation). Mobile JVM 94/94, `assembleDebug` green. Remaining: on-device profile-switch stats check + a live thermal-ladder read — [features/thermal.md](../features/thermal.md).)*
 
-## Phase 12 — Auto Quality / Adaptive Streaming
+## Phase 12 — Auto Quality / Adaptive Streaming ✅
 **Scope (only after the system is stable):** stats-driven adaptation with hysteresis and user notification; inputs: dropped frames, RTT, packet loss, encoder stress, thermal status.
-**Accept:** controlled step-downs/ups without oscillation; user can disable; every transition logged and user-visible. Commit `feat: add adaptive quality`.
+**Accept:** controlled step-downs/ups without oscillation; user can disable; every transition logged and user-visible. Commit `feat: add adaptive quality`. *(Implemented 2026-09-20: pure `adaptive/AdaptiveQualityController` policy machine (thermal.md's policy, named holds/dwell constants) fed by ~1 Hz sender stats — drops, RTT, and newly extracted receiver loss — plus the Phase11 thermal ladder; sustained MODERATE+ (120 s) or stream trouble (30 s) walks the preset ladder one rung at a time with a 90 s dwell; recovery needs 180 clean seconds and never exceeds the user's ceiling, thermal descents recover only via the new "Restore quality" button. Steps apply live without renegotiation (`changeQuality`: capture format + sender window) and are announced four ways: log line, cast-notification text, fresh display-only `session-info`, plain-words line in "This cast". "Automatic quality" switch in the settings (persisted, settings v3 with a key-migration fix for the Phase11 codec bump). Mobile JVM 121/121 (20-case policy acceptance matrix), `assembleDebug` green, desktop 74/74 untouched. Remaining: the on-device step-down/recovery/disable checks — [features/adaptive-quality.md](../features/adaptive-quality.md).)*
 
 ## Phase 13 — Production Pairing UX
 **Scope:** polished pairing screens on both sides per the spec mockups (desktop QR hero + "Scan with your Android device"; mobile scan → "Desktop found / Connected → START CAST"); minimal-step happy path; friendly error states.
@@ -90,5 +90,5 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 ## Documentation produced along the way
 
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
-- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`
+- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`, `features/thermal.md`, `features/adaptive-quality.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.

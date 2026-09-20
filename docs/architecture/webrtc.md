@@ -111,6 +111,6 @@ States (both sides): pairing → connecting → negotiating → connecting(ICE) 
 
 Signaling/ICE failures map to the simple user-facing messages defined in [pairing.md](pairing.md) §Failure modes; the raw codes stay in logs.
 
-## Statistics (input for later adaptive quality)
+## Statistics (input for adaptive quality)
 
-Each side polls `getStats()` locally (~1 Hz) from Phase 5 onward and logs: RTT, packetsLost, jitter, framesEncoded/dropped, encoder implementation (HW/SW), bitrate. This data is the measured basis for Phase 12 (adaptive streaming) — no quality automation ships before then.
+Each side polls `getStats()` locally (~1 Hz) from Phase 5 onward and logs: RTT, packetsLost, jitter, framesEncoded/dropped, encoder implementation (HW/SW), bitrate. The mobile sender additionally extracts its sample (cumulative counters, RTT, the desktop receiver's `remote-inbound-rtp` loss fraction) into a plain data object — the input for Phase 12's adaptive quality ([thermal.md](thermal.md) §How thermal data is used); the desktop only logs. Since Phase 12 the sender also applies the policy's steps live (`changeQuality`: capture format + sender bitrate window, no renegotiation); the display-only `session-info` summary follows what is actually being sent.

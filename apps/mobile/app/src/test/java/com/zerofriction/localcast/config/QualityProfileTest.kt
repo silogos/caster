@@ -1,6 +1,7 @@
 package com.zerofriction.localcast.config
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -58,6 +59,7 @@ class QualityProfileTest {
                 bitrateMaxBps = preset.bitrateMaxBps,
                 gameAudio = true,
                 mic = false,
+                autoQuality = true,
             ).toConfig()
             assertEquals(preset.label, config.profile)
         }
@@ -93,5 +95,23 @@ class QualityProfileTest {
         assertEquals(false, config.gameAudio)
         assertEquals(true, config.mic)
         assertEquals(CastConfig.DEGRADATION_BALANCED, config.degradationPreference)
+    }
+
+    @Test
+    fun `toConfig carries the auto-quality switch through`() {
+        assertEquals(true, CastSettings.default().toConfig().autoQuality)
+        assertEquals(false, CastSettings.default().copy(autoQuality = false).toConfig().autoQuality)
+    }
+
+    /** Phase12: the inverse mapping — naming an auto-quality level for the user. */
+    @Test
+    fun `matchingProfile inverts the preset targets`() {
+        for (preset in QualityProfile.entries) {
+            assertEquals(
+                preset,
+                matchingProfile(preset.longEdgePx, preset.fps, preset.bitrateMinBps, preset.bitrateMaxBps),
+            )
+        }
+        assertNull(matchingProfile(longEdgePx = 1280, fps = 30, bitrateMinBps = 4_000_000, bitrateMaxBps = 5_000_000))
     }
 }

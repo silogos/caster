@@ -55,9 +55,11 @@ import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.ui.home.DebugToneButton
+import com.zerofriction.localcast.ui.home.AdaptiveStatusLine
 import com.zerofriction.localcast.ui.home.GameAudioControls
 import com.zerofriction.localcast.ui.home.MicControls
 import com.zerofriction.localcast.ui.home.ThermalStatusLine
+import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 @Composable
@@ -86,6 +88,7 @@ fun ScanScreen(
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
+    val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
 
     ScanContent(
         pairingState = pairingState,
@@ -93,6 +96,7 @@ fun ScanScreen(
         gameAudioState = gameAudioState,
         micState = micState,
         thermalState = thermalState,
+        adaptiveState = adaptiveState,
         releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
@@ -114,6 +118,7 @@ fun ScanContent(
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
     thermalState: ThermalState = ThermalState(),
+    adaptiveState: AdaptiveUiState = AdaptiveUiState(),
     releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
@@ -174,6 +179,7 @@ fun ScanContent(
                     // status is rendered — the scan screen is where the user
                     // actually watches a started cast (found live in review).
                     ThermalStatusLine(thermalState)
+                    AdaptiveStatusLine(adaptiveState)
                     if (BuildConfig.DEBUG) {
                         DebugToneButton()
                     }

@@ -30,6 +30,8 @@ data class CastSettings(
     val gameAudio: Boolean,
     /** Start the cast with the microphone on (audio.md: off by default). */
     val mic: Boolean,
+    /** Stats/thermal-driven auto quality (Phase12, thermal.md) — on by default. */
+    val autoQuality: Boolean,
 ) {
     fun toConfig(): CastConfig = CastConfig(
         profile = profileLabelFor(longEdgePx, fps, bitrateMinBps, bitrateMaxBps),
@@ -40,6 +42,7 @@ data class CastSettings(
         degradationPreference = CastConfig.DEGRADATION_BALANCED,
         gameAudio = gameAudio,
         mic = mic,
+        autoQuality = autoQuality,
     )
 
     companion object {
@@ -55,6 +58,7 @@ data class CastSettings(
                 bitrateMaxBps = preset.bitrateMaxBps,
                 gameAudio = CastConfig.DEFAULT_GAME_AUDIO,
                 mic = CastConfig.DEFAULT_MIC,
+                autoQuality = CastConfig.DEFAULT_AUTO_QUALITY,
             )
         }
     }

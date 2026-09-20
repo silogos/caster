@@ -2,6 +2,7 @@ package com.zerofriction.localcast.config
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -21,6 +22,7 @@ class CastSettingsCodecTest {
         bitrateMaxBps = 6_000_000,
         gameAudio = false,
         mic = true,
+        autoQuality = true,
     )
 
     @Test
@@ -49,7 +51,7 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a future version decodes to null`() {
-        val future = CastSettingsCodec.encode(custom).replace(""""v":2""", """"v":3""")
+        val future = CastSettingsCodec.encode(custom).replace(""""v":3""", """"v":4""")
         assertNull(CastSettingsCodec.decode(future))
     }
 
@@ -63,8 +65,8 @@ class CastSettingsCodecTest {
     // ---- v1 legacy documents (Phase10 shape, pre-thermal relabels) ----
 
     /** A v1 document: downgraded version field, pre-rename label, same values. */
-    private fun v1Document(v2Document: String, legacyLabel: String): String = v2Document
-        .replace(""""v":2""", """"v":1""")
+    private fun v1Document(v3Document: String, legacyLabel: String): String = v3Document
+        .replace(""""v":3""", """"v":1""")
         .replace(""""profile":"${custom.profile.label}"""", """"profile":"$legacyLabel"""")
 
     @Test
@@ -83,6 +85,30 @@ class CastSettingsCodecTest {
     fun `a v1 document with an unknown label still decodes to null`() {
         val stored = v1Document(CastSettingsCodec.encode(custom), legacyLabel = "ultra")
         assertNull(CastSettingsCodec.decode(stored))
+    }
+
+    // ---- v2 legacy documents (Phase11 shape, pre-auto-quality) ----
+
+    /** A v2 document: only the version field downgraded — no `autoQuality` key at all. */
+    private fun v2Document(v3Document: String): String = v3Document
+        .replace(""""v":3""", """"v":2""")
+        .replace(""",""autoQuality":true""", "")
+
+    @Test
+    fun `a v2 document decodes with the auto-quality default on`() {
+        val stored = v2Document(CastSettingsCodec.encode(custom.copy(autoQuality = true)))
+        assertEquals(custom, CastSettingsCodec.decode(stored))
+    }
+
+    @Test
+    fun `a v3 document with the switch off round-trips it`() {
+        val off = custom.copy(autoQuality = false)
+        assertEquals(off, CastSettingsCodec.decode(CastSettingsCodec.encode(off)))
+    }
+
+    @Test
+    fun `the round-trip document carries the v3 version`() {
+        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":3"""))
     }
 
     @Test

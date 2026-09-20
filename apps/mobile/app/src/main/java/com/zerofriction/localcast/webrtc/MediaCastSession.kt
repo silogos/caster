@@ -69,6 +69,12 @@ class MediaCastSession(
 
     /** Game-audio state changes (Phase7) — Off/Active/Muted/Silent/Failed (audio.md). */
     private val onGameAudioState: (GameAudioState) -> Unit = {},
+
+    /**
+     * Every ~1 Hz video sender sample (Phase12's auto-quality input). Called
+     * from the session thread with the sample and the measured send bitrate.
+     */
+    private val onVideoStats: (SenderSample, Long) -> Unit = { _, _ -> },
 ) {
 
     enum class State { STARTING, NEGOTIATING, STREAMING, CLOSED }
@@ -120,6 +126,14 @@ class MediaCastSession(
     private var lastBytesSent = 0L
     private var lastStatsAtMs = 0L
     private val statsIntervalMs = statsIntervalMs
+
+    /**
+     * The sender's *live* bitrate window (Phase12): starts at the config's,
+     * moved by [changeQuality] when auto quality steps. [applySenderParameters]
+     * and the `session-info` summary both read this, never the frozen config.
+     */
+    private var liveBitrateMinBps = config.bitrateMinBps
+    private var liveBitrateMaxBps = config.bitrateMaxBps
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -370,23 +384,49 @@ class MediaCastSession(
 
     /**
      * Sender-side parameters from the config module only (webrtc.md): the
-     * bitrate window and BALANCED degradation. Called once the answer exists;
-     * if the pc refuses (early states), the values reapply on the next call.
-     * Targets the *video* sender explicitly — since Phase7 the pc also carries
-     * an audio sender, and `senders` order is not a contract.
+     * *live* bitrate window ([liveBitrateMinBps]/[liveBitrateMaxBps] — the
+     * config's at cast start, moved by [changeQuality]) and BALANCED
+     * degradation. Called once the answer exists; if the pc refuses (early
+     * states), the values reapply on the next call. Targets the *video*
+     * sender explicitly — since Phase7 the pc also carries an audio sender,
+     * and `senders` order is not a contract.
      */
     private fun applySenderParameters(currentPc: PeerConnection) {
         val sender = currentPc.senders.firstOrNull { it.track()?.kind() == "video" } ?: return
         val parameters = sender.parameters
         if (parameters.encodings.isEmpty()) return
         parameters.encodings.first().apply {
-            minBitrateBps = config.bitrateMinBps
-            maxBitrateBps = config.bitrateMaxBps
+            minBitrateBps = liveBitrateMinBps
+            maxBitrateBps = liveBitrateMaxBps
         }
         parameters.degradationPreference = RtpParameters.DegradationPreference.BALANCED
         val result = sender.setParameters(parameters)
         if (!result) {
             Log.w(TAG, "setParameters rejected — bitrate/degradation targets may not be applied")
+        }
+    }
+
+    /**
+     * One auto-quality step, applied live (Phase12, thermal.md — no
+     * renegotiation): the capture pipeline reconfigures to the new
+     * resolution/fps and the video sender's bitrate window moves. Runs on the
+     * session thread; safe to call from any thread. The desktop's display-only
+     * status line follows via the service's fresh `session-info`.
+     */
+    fun changeQuality(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int) {
+        post {
+            if (!active) return@post
+            val newCapturer = capturer
+            if (newCapturer !== null) {
+                val (width, height) = CaptureSize.scaleTo(longEdgePx, physicalWidth, physicalHeight)
+                newCapturer.changeCaptureFormat(width, height, fps)
+                Log.i(TAG, "adaptive quality: capture → ${width}x${height} @ ${fps} fps")
+            }
+            liveBitrateMinBps = bitrateMinBps
+            liveBitrateMaxBps = bitrateMaxBps
+            val currentPc = pc
+            if (currentPc !== null) applySenderParameters(currentPc)
+            Log.i(TAG, "adaptive quality: bitrate window → ${bitrateMinBps / 1_000}–${bitrateMaxBps / 1_000} kbps")
         }
     }
 
@@ -476,6 +516,7 @@ class MediaCastSession(
                     )
                     lastBytesSent = sample.bytesSent
                     lastStatsAtMs = nowMs
+                    onVideoStats(sample, bitrateBps)
                 }
             }
             if (active) {

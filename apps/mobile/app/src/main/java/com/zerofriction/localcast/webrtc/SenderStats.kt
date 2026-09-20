@@ -5,8 +5,8 @@ package com.zerofriction.localcast.webrtc
  * from the raw `members` maps so this is plain-Kotlin unit-testable (the
  * report itself is native and only exists on a device).
  *
- * These numbers are the input for Phase12 (adaptive quality) — Phase5 only
- * logs them (webrtc.md: ~1 Hz, no quality automation before Phase12).
+ * These numbers feed Phase12's adaptive quality (the `adaptive` module) —
+ * and are logged at ~1 Hz (webrtc.md).
  */
 data class SenderSample(
     val bytesSent: Long,
@@ -20,6 +20,8 @@ data class SenderSample(
     val rttMs: Long?,
     /** e.g. "OMX.qcom.video.encoder.avc" vs the software encoder name. */
     val encoderImplementation: String?,
+    /** Remote receiver's reported loss fraction (0..1) — the link-struggle signal for Phase12. */
+    val fractionLost: Double?,
 )
 
 /**
@@ -39,10 +41,17 @@ object SenderStats {
     fun sampleVideoSend(entries: Iterable<Map<String, Any>>): SenderSample? {
         var outbound: Map<String, Any>? = null
         var rttSeconds: Double? = null
+        var fractionLost: Double? = null
         for (entry in entries) {
             when (entry["type"]) {
                 "outbound-rtp" ->
                     if (entry["kind"] == "video") outbound = entry
+                // The sending side's view of the desktop's receiver — only
+                // the receiver knows what actually arrived (and what didn't).
+                "remote-inbound-rtp" ->
+                    if (entry["kind"] == "video") {
+                        fractionLost = (entry["fractionLost"] as? Number)?.toDouble()
+                    }
                 "candidate-pair" ->
                     if (entry["nominated"] == true && entry["state"] == "succeeded") {
                         rttSeconds = (entry["currentRoundTripTime"] as? Number)?.toDouble()
@@ -59,6 +68,7 @@ object SenderStats {
             frameHeight = (video["frameHeight"] as? Number)?.toInt() ?:0,
             rttMs = rttSeconds?.let { (it * 1000).toLong() },
             encoderImplementation = video["encoderImplementation"] as? String,
+            fractionLost = fractionLost,
         )
     }
 
