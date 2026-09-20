@@ -50,6 +50,6 @@ Lenovo TB321FU (Android 16) → MacBook Pro (macOS, Electron 44) over the LAN Wi
 
 - Video only — no audio of any kind; a `mic` offer is logged and unanswered (Phases 7–8).
 - Cast settings are the fixed conservative profile; no UI, no live changes (Phase 10–11).
-- The pairing/cast session still lives with the scan screen (Phase 3 decision): leaving the screen stops the cast. CastService (Phase 6) takes ownership of the whole session.
-- `CastService`'s notification uses a placeholder icon; no restart after process death (`START_NOT_STICKY`) — both Phase 6 work.
+- ~~The pairing/cast session still lives with the scan screen~~ **Resolved in Phase 6** — `CastService` owns the whole session ([cast-session.md](cast-session.md)).
+- ~~`CastService`'s notification uses a placeholder icon; no restart after process death~~ **Resolved/deliberate in Phase 6** — real icon + Stop action; still `START_NOT_STICKY` by design (consent is single-use) ([cast-session.md](cast-session.md)).
 - One cast at a time (v1 non-goal: multi-desktop).

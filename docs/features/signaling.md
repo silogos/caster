@@ -50,4 +50,4 @@ Signaling is proven **form-agnostic for candidates**: a Chromium mDNS-obfuscated
 - `sdp-offer`/`ice`/`session-info` arrive but nobody answers or consumes them yet — the ReceiverSession (desktop) and the `webrtc` module (mobile) are Phase 5. The desktop logs offers with an explicit "answering is Phase 5" marker.
 - The reconnecting mobile rebuilds PeerConnections on re-auth — a Phase 5 concern (there are no PCs to rebuild yet).
 - The desktop heartbeat starts only after `auth-ok`; there is no heartbeat during the 10 s handshake window (the handshake deadline covers that phase).
-- The mobile session still lives and dies with the scan screen (ViewModel-scoped, Phase 3 decision); the cast service (Phase 6) takes ownership later.
+- The mobile session lives with the scan screen *until a cast starts* — from then on the connection is handed to the cast service and owned by it (Phase 6, [cast-session.md](cast-session.md)).

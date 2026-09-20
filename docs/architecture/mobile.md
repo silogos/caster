@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phases 1–5 (implemented; the media pipeline `webrtc`/`capture`/`config`/`service` exists since Phase 5 — [features/screen-capture.md](../features/screen-capture.md)).
+Status: Phases 1–6 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase 6, [features/cast-session.md](../features/cast-session.md)).
 
 ## Role
 
@@ -41,9 +41,11 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 
 ## Session architecture
 
-- **`CastService`** is a **foreground service** (type `mediaProjection`) that owns the cast session: MediaProjection, both PeerConnections, audio capture, and the notification. The Activity is only UI; the cast must survive the app being backgrounded while a game runs.
-- **Ordering constraint (Android 14+):** the service must enter the foreground *before* `createVirtualDisplay`/projection starts, and the media-projection consent result must be obtained *before* the service starts. The full lifecycle design (consent → service → projection → teardown) is Phase 6 work.
-- Session state is exposed to the UI as a `StateFlow` (Idle / Pairing / Connecting / Casting / Error), not via callbacks scattered across classes.
+- **`CastService`** is a **foreground service** (type `mediaProjection`) that owns the whole cast session: MediaProjection, the peer connections, **and the pairing signaling connection** (handed over by the pairing machine at cast start — Phase6). The Activity is only UI; the cast survives the app being backgrounded while a game runs, the scan screen being left, and the task being removed.
+- **Ordering constraint (Android 14+):** the service enters the foreground *before* `createVirtualDisplay`/projection starts, and the media-projection consent result is obtained *before* the service starts. Implemented: consent → handover → foreground → projection.
+- **Stop policy (Phase6 decision):** ending a cast ends the pairing session too (`bye` → the desktop shows a fresh QR; a new cast means a new scan). The service must stop for clean resource release, and no background process can be trusted to hold the socket. Every lifecycle edge (user stop via app or notification, projection revoked, desktop gone, process death) funnels through one idempotent teardown — no leaked projections/displays (the acceptance matrix lives in [features/cast-session.md](../features/cast-session.md)).
+- Session state is exposed to the UI as a `StateFlow` (`Idle` / `Starting` / `Casting` / `Failed`), rendered by both the home and scan screens — not via callbacks scattered across classes.
+- **Consent mode pitfall (Android 14+):** the projection dialog defaults to *Share one app*; a single-app share ends the moment that app leaves the foreground. Users must choose *Share full screen*. Handled cleanly (it is a normal projection-revoked stop), but worth a UX affordance later (Phase13).
 
 ## Permissions
 
