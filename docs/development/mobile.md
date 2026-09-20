@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–5 (status: **Phase 5 complete — verified on device**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–6 (status: **Phase 6 implemented — lifecycle matrix partially verified; see [features/cast-session.md](../features/cast-session.md)**).
 
 ## Prerequisites
 
@@ -18,7 +18,8 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
-Verified on 2026-09-20 (Phase 5): `assembleDebug` + **43 unit tests** green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end on a Lenovo TB321FU / Android 16 — details in [features/screen-capture.md](../features/screen-capture.md).
+Verified 2026-09-20 (Phase 6): `assembleDebug` + **46 unit tests** green (3 new: pairing handover semantics). Live on device (Lenovo TB321FU / Android 16): camera-scan pairing → foreground service with the new notification; projection-revoked ends handled cleanly. The full lifecycle matrix is tabulated in [features/cast-session.md](../features/cast-session.md) and is the remaining hands-on item.
+Verified on 2026-09-20 (Phase 5): 43 unit tests green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end — details in [features/screen-capture.md](../features/screen-capture.md).
 Previously (Phase 4): 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
 Previously (Phase 3): real-device QR scan verified — details in [features/pairing.md](../features/pairing.md).
 
@@ -56,9 +57,9 @@ apps/mobile/
     ├── config/                      # CastConfig — every cast setting lives here (Phase 5)
     ├── capture/                     # CaptureSize/DisplaySize math; projection via ScreenCapturerAndroid (Phase 5)
     ├── webrtc/                      # MediaCastSession (media PC), SdpCodecOrderer, IceCandidateJson, SenderStats (Phase 5)
-    ├── service/                    # CastService — minimal mediaProjection FGS (Phase 5; full lifecycle in Phase 6)
+    ├── service/                     # CastService — mediaProjection FGS owning the whole session (Phase 6)
     └── ui/
-        ├── home/                    # HomeScreen + HomeViewModel + HomeUiState
+        ├── home/                    # HomeScreen + HomeViewModel (renders CastService.state)
         ├── pairing/                 # ScanScreen + ScanViewModel + QrCamera (CameraX + ML Kit)
         └── theme/                   # dark-first Material 3 theme
 ```
@@ -72,12 +73,11 @@ The package skeleton follows [architecture/mobile.md](../architecture/mobile.md)
 
 ## Permissions
 
-- `INTERNET` (signaling WebSocket), `CAMERA` (QR scanning only, requested at the scan screen). Nothing else — later phases add theirs with their feature.
-- **Cleartext is allowed via `network_security_config.xml`**: the signaling channel is plain `ws://` on the LAN by design ([ADR-002](../decisions/ADR-002-pairing-and-signaling-security.md)); Android blocks cleartext by default. Do not remove this without changing the transport.
+- `INTERNET` (signaling WebSocket), `CAMERA` (QR scanning only, requested at the scan screen), `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` (cast service), `POST_NOTIFICATIONS` (cast notification visibility, requested before the first cast; not fatal). **Cleartext is allowed via `network_security_config.xml`**: the signaling channel is plain `ws://` on the LAN by design ([ADR-002](../decisions/ADR-002-pairing-and-signaling-security.md)); Android blocks cleartext by default. Do not remove this without changing the transport.
 
 ## Not implemented yet (by design)
 
-WebRTC/casting (Phases 5–6), game audio (Phase 7), microphone (Phase 8), settings UI (Phase 10), thermal (Phase 11). Heartbeat/reconnect/backoff and SDP/ICE signaling arrive in Phase 4.
+Game audio (Phase 7), microphone (Phase 8), settings UI (Phase 10), thermal (Phase 11). Casting (Phases 5–6) is implemented — see [features/screen-capture.md](../features/screen-capture.md) and [features/cast-session.md](../features/cast-session.md).
 
 ## Conventions
 

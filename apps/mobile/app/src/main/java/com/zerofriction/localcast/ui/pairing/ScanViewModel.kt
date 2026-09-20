@@ -13,10 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Drives the scan screen: QR text arrives (camera scan or the debug manual
  * input) and is handed to the pairing state machine, whose state is rendered
- * 1:1. Phase5 adds the cast trigger on top of a successful pair: the screen
- * collects the foreground service's cast state and hands it the live
- * signaling client. The session still lives and dies with this screen
- * (Phase3 decision); the cast service (Phase6) takes ownership later.
+ * 1:1. Phase6: starting a cast hands the live signaling connection to the
+ * cast service (which owns it from then on) — the scan screen renders
+ * `CastService.state` while a cast runs, and leaving it never ends the cast.
  */
 class ScanViewModel(
     private val pairingClient: PairingClient =
@@ -28,8 +27,12 @@ class ScanViewModel(
     /** The cast service's state — what the cast controls render. */
     val castState: StateFlow<CastState> = CastService.state
 
-    /** Live signaling connection of the current pairing, if any. */
-    fun signalingClient(): SignalingClient? = pairingClient.signalingClient()
+    /**
+     * Hand the live signaling connection of the current pairing to the cast
+     * service (consent collected). Null if nothing live is owned — the cast
+     * can't start and the user rescans.
+     */
+    fun releaseSignalingClient(): SignalingClient? = pairingClient.releaseSignaling()
 
     fun onQrScanned(qrText: String) {
         // Camera frames keep flowing while the UI transitions; only a fresh
@@ -56,6 +59,8 @@ class ScanViewModel(
     }
 
     override fun onCleared() {
+        // After a handover the pairing machine owns nothing, so this cannot
+        // end a running cast — it only drops an un-cast pairing.
         pairingClient.reset()
     }
 }

@@ -33,6 +33,9 @@ export function createMainWindow(): BrowserWindow {
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
+    // Dev: load the vite dev server (openDevTools alone leaves the window
+    // blank — the URL must actually be loaded; found during Phase6 verification).
+    window.loadURL(process.env['ELECTRON_RENDERER_URL'])
     window.webContents.openDevTools({ mode: 'detach' })
   } else {
     window.loadFile(join(__dirname, '../renderer/index.html'))

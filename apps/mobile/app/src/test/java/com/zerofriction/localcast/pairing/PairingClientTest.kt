@@ -119,6 +119,57 @@ class PairingClientTest {
         assertEquals(PairingClient.State.Failed(PairingError.CONNECT_UNREACHABLE), client.state.value)
     }
 
+    // ---- Phase6: the handover of the connection to the cast service ----
+
+    @org.junit.Test
+    fun `releaseSignaling hands the live connection over without ending it`() {
+        val fake = FakeTransport()
+        val client = newClient(fake)
+        client.startFromQrText(VALID_PAYLOAD)
+        fake.listener?.onTransportOpen()
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE))
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME))
+        fake.sentFrames.clear() // handshake frames
+
+        val live = client.releaseSignaling()
+
+        org.junit.Assert.assertNotNull(live)
+        assertEquals(PairingClient.State.Idle, client.state.value)
+        // The connection was not ended: no `bye`, nothing else on the wire…
+        assertEquals(0, fake.sentFrames.size)
+
+        // …and leaving the scan screen afterwards must not kill the cast's
+        // connection: reset() owns nothing anymore and stays harmless.
+        client.reset()
+        assertEquals(0, fake.sentFrames.size)
+        assertEquals(PairingClient.State.Idle, client.state.value)
+    }
+
+    @org.junit.Test
+    fun `events from a released connection no longer drive the pairing machine`() {
+        val fake = FakeTransport()
+        val client = newClient(fake)
+        client.startFromQrText(VALID_PAYLOAD)
+        fake.listener?.onTransportOpen()
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE))
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME))
+
+        client.releaseSignaling()
+
+        // The service-owned connection ends while the old pairing machine is
+        // still around — the machine must not flip to Ended; the cast service
+        // owns that story now.
+        fake.listener?.onTransportText(byeFrame("window-closed"))
+        assertEquals(PairingClient.State.Idle, client.state.value)
+    }
+
+    @org.junit.Test
+    fun `releaseSignaling returns null when nothing live is owned`() {
+        val client = newClient(FakeTransport())
+
+        assertEquals(null, client.releaseSignaling())
+    }
+
     private fun parseFrame(raw: String): Envelope {
         val parsed = EnvelopeCodec.parse(raw)
         assertTrue(parsed is EnvelopeParseResult.Valid)

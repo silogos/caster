@@ -60,18 +60,25 @@ fun ScanScreen(
     ScanContent(
         pairingState = pairingState,
         castState = castState,
-        signalingClient = viewModel::signalingClient,
+        releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
         onDisconnect = viewModel::onDisconnect,
     )
 }
 
+/**
+ * Phase6 render rules: the cast service owns the session, so a running cast
+ * (Starting/Casting) takes precedence over the pairing machine — while a cast
+ * is live there is nothing to scan and the pairing machine owns nothing. A
+ * Failed cast falls through to the scan UI: ending the cast ends the pairing
+ * session too (the desktop shows a fresh QR), so the user rescans.
+ */
 @Composable
 fun ScanContent(
     pairingState: PairingClient.State,
     castState: CastState = CastState.Idle,
-    signalingClient: () -> SignalingClient? = { null },
+    releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
     onDisconnect: () -> Unit,
@@ -103,109 +110,110 @@ fun ScanContent(
             )
             Spacer(Modifier.height(16.dp))
 
-            when (val state = pairingState) {
-                PairingClient.State.Idle,
-                is PairingClient.State.Failed,
-                PairingClient.State.Ended -> {
-                    when (state) {
-                        is PairingClient.State.Failed ->
+            when (castState) {
+                is CastState.Starting -> {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.starting_cast),
+                        fontSize = 15.sp,
+                    )
+                }
+
+                is CastState.Casting -> {
+                    Text(
+                        text = stringResource(R.string.casting_to, castState.desktopName),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.casting_background_hint),
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(bottom = 16.dp),
+                    )
+                    OutlinedButton(onClick = { CastService.requestStop(context) }) {
+                        Text(stringResource(R.string.stop_casting))
+                    }
+                }
+
+                is CastState.Failed -> {
+                    Text(
+                        text = castState.message,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 16.dp),
+                    )
+                    ScanUi(
+                        hasCameraPermission = hasCameraPermission,
+                        onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        onQrScanned = onQrScanned,
+                        onManualPayloadSubmit = onManualPayloadSubmit,
+                    )
+                }
+
+                CastState.Idle -> when (val state = pairingState) {
+                    PairingClient.State.Idle,
+                    is PairingClient.State.Failed,
+                    PairingClient.State.Ended -> {
+                        if (state is PairingClient.State.Failed) {
                             Text(
                                 text = pairingErrorMessage(state.error),
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(bottom = 16.dp),
                             )
-                        PairingClient.State.Ended ->
+                        }
+                        if (state == PairingClient.State.Ended) {
                             Text(
                                 text = stringResource(R.string.session_ended),
                                 fontSize = 15.sp,
                                 modifier = Modifier.padding(bottom = 16.dp),
                             )
-                        else -> {}
-                    }
-
-                    if (!hasCameraPermission) {
-                        Text(
-                            text = stringResource(R.string.camera_permission_needed),
-                            fontSize = 15.sp,
-                            modifier = Modifier.padding(bottom = 16.dp),
-                        )
-                        Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                            Text(stringResource(R.string.grant_camera))
                         }
-                    } else {
-                        Text(
-                            text = stringResource(R.string.scan_hint),
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(bottom = 16.dp),
-                        )
-                        QrCamera(
-                            onQrText = onQrScanned,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(320.dp),
+                        ScanUi(
+                            hasCameraPermission = hasCameraPermission,
+                            onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                            onQrScanned = onQrScanned,
+                            onManualPayloadSubmit = onManualPayloadSubmit,
                         )
                     }
 
-                    if (BuildConfig.DEBUG) {
-                        // Debug-only: lets the WebSocket+handshake path be tested on an
-                        // emulator, which cannot scan a real desktop QR (Phase3 decision).
-                        var manualPayload by rememberSaveable { mutableStateOf("") }
-                        OutlinedTextField(
-                            value = manualPayload,
-                            onValueChange = { manualPayload = it },
-                            label = { Text(stringResource(R.string.manual_payload_label)) },
-                            visualTransformation = PasswordVisualTransformation(),
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 16.dp),
-                        )
-                        OutlinedButton(
-                            onClick = {
-                                if (manualPayload.isNotBlank()) onManualPayloadSubmit(manualPayload)
+                    PairingClient.State.Connecting, PairingClient.State.Authenticating -> {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            text = if (state == PairingClient.State.Connecting) {
+                                stringResource(R.string.connecting)
+                            } else {
+                                stringResource(R.string.authenticating)
                             },
-                            modifier = Modifier.padding(top = 8.dp),
-                        ) {
-                            Text(stringResource(R.string.manual_payload_connect))
-                        }
+                            fontSize = 15.sp,
+                        )
                     }
-                }
 
-                PairingClient.State.Connecting, PairingClient.State.Authenticating -> {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = if (state == PairingClient.State.Connecting) {
-                            stringResource(R.string.connecting)
-                        } else {
-                            stringResource(R.string.authenticating)
-                        },
-                        fontSize = 15.sp,
-                    )
-                }
+                    is PairingClient.State.Reconnecting -> {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            text = state.desktopName?.let { stringResource(R.string.reconnecting_to, it) }
+                                ?: stringResource(R.string.reconnecting),
+                            fontSize = 15.sp,
+                        )
+                    }
 
-                is PairingClient.State.Reconnecting -> {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = state.desktopName?.let { stringResource(R.string.reconnecting_to, it) }
-                            ?: stringResource(R.string.reconnecting),
-                        fontSize = 15.sp,
-                    )
-                }
-
-                is PairingClient.State.Connected -> {
-                    Text(
-                        text = stringResource(R.string.connected_to, state.desktopName),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    CastControls(castState = castState, desktopName = state.desktopName, signalingClient = signalingClient)
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = onDisconnect) {
-                        Text(stringResource(R.string.disconnect))
+                    is PairingClient.State.Connected -> {
+                        Text(
+                            text = stringResource(R.string.connected_to, state.desktopName),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        CastControls(castState = castState, desktopName = state.desktopName, releaseSignalingClient = releaseSignalingClient)
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = onDisconnect) {
+                            Text(stringResource(R.string.disconnect))
+                        }
                     }
                 }
             }
@@ -213,37 +221,98 @@ fun ScanContent(
     }
 }
 
+/** The scanner (camera / debug manual input) for every state that needs a QR. */
+@Composable
+private fun ScanUi(
+    hasCameraPermission: Boolean,
+    onGrantCamera: () -> Unit,
+    onQrScanned: (String) -> Unit,
+    onManualPayloadSubmit: (String) -> Unit,
+) {
+    if (!hasCameraPermission) {
+        Text(
+            text = stringResource(R.string.camera_permission_needed),
+            fontSize = 15.sp,
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
+        Button(onClick = onGrantCamera) {
+            Text(stringResource(R.string.grant_camera))
+        }
+    } else {
+        Text(
+            text = stringResource(R.string.scan_hint),
+            fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
+        QrCamera(
+            onQrText = onQrScanned,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(320.dp),
+        )
+    }
+
+    if (BuildConfig.DEBUG) {
+        // Debug-only: lets the WebSocket+handshake path be tested on an
+        // emulator, which cannot scan a real desktop QR (Phase3 decision).
+        var manualPayload by rememberSaveable { mutableStateOf("") }
+        OutlinedTextField(
+            value = manualPayload,
+            onValueChange = { manualPayload = it },
+            label = { Text(stringResource(R.string.manual_payload_label)) },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+        )
+        OutlinedButton(
+            onClick = {
+                if (manualPayload.isNotBlank()) onManualPayloadSubmit(manualPayload)
+            },
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            Text(stringResource(R.string.manual_payload_connect))
+        }
+    }
+}
+
 /**
- * The Phase5 cast controls shown while paired. `Start casting` runs the
+ * The cast trigger, shown while paired. `Start casting` runs the
  * MediaProjection consent (per session, never pre-granted — mobile.md) and
- * then hands the consent result to the foreground service; the notification
- * permission is requested first on 13+ but is not fatal — the cast runs
- * either way, only the FGS notification's visibility depends on it.
+ * then hands the pairing's signaling connection to the foreground service —
+ * Phase6 ownership: the service owns it from here on, so this screen can be
+ * left freely while the cast runs. The notification permission is requested
+ * first on 13+ but is not fatal — the cast runs either way, only the FGS
+ * notification's visibility depends on it.
  */
 @Composable
 private fun CastControls(
     castState: CastState,
     desktopName: String,
-    signalingClient: () -> SignalingClient?,
+    releaseSignalingClient: () -> SignalingClient?,
 ) {
     val context = LocalContext.current
     val mediaProjectionManager = remember { context.getSystemService(MediaProjectionManager::class.java) }
 
     val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val consentData = result.data
-        val signaling = signalingClient()
-        if (result.resultCode == Activity.RESULT_OK && consentData != null && signaling != null) {
-            val (width, height) = DisplaySize.physicalPx(context)
-            CastService.start(
-                context,
-                CastService.StartArgs(
-                    signaling = signaling,
-                    config = CastConfig.phase5Default(),
-                    projectionIntent = consentData,
-                    physicalWidth = width,
-                    physicalHeight = height,
-                ),
-            )
+        if (result.resultCode == Activity.RESULT_OK && consentData != null) {
+            val signaling = releaseSignalingClient()
+            if (signaling != null) {
+                val (width, height) = DisplaySize.physicalPx(context)
+                CastService.start(
+                    context,
+                    CastService.StartArgs(
+                        signaling = signaling,
+                        config = CastConfig.phase5Default(),
+                        projectionIntent = consentData,
+                        physicalWidth = width,
+                        physicalHeight = height,
+                        desktopName = desktopName,
+                    ),
+                )
+            }
         }
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -260,40 +329,13 @@ private fun CastControls(
         }
     }
 
+    // Starting/Casting is rendered by the outer card; here only the trigger.
     when (castState) {
-        CastState.Idle, is CastState.Failed -> {
-            if (castState is CastState.Failed) {
-                Text(
-                    text = castState.message,
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-            }
-            Button(onClick = ::requestConsentAndStart) {
-                Text(stringResource(R.string.start_casting))
-            }
+        CastState.Idle, is CastState.Failed -> Button(onClick = ::requestConsentAndStart) {
+            Text(stringResource(R.string.start_casting))
         }
 
-        CastState.Starting -> {
-            CircularProgressIndicator()
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = stringResource(R.string.starting_cast),
-                fontSize = 15.sp,
-            )
-        }
-
-        CastState.Casting -> {
-            Text(
-                text = stringResource(R.string.casting_to, desktopName),
-                fontSize = 15.sp,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
-            OutlinedButton(onClick = { CastService.requestStop(context) }) {
-                Text(stringResource(R.string.stop_casting))
-            }
-        }
+        is CastState.Starting, is CastState.Casting -> Unit
     }
 }
 
@@ -315,6 +357,7 @@ private fun ScanContentPreview() {
     LocalCastTheme {
         ScanContent(
             pairingState = PairingClient.State.Idle,
+            castState = CastState.Casting("MacBook Pro"),
             onQrScanned = {},
             onManualPayloadSubmit = {},
             onDisconnect = {},

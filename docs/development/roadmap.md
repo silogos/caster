@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 5 complete — awaiting review.**
+Current status: **Phase 6 implemented — awaiting review (on-device lifecycle matrix pending a hands-on session; see [features/cast-session.md](../features/cast-session.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -35,8 +35,8 @@ Current status: **Phase 5 complete — awaiting review.**
 **Accept (measured, on device):** connection succeeds; latency eyeballed/measured acceptable; quality acceptable; survives rotation; documents behavior when backgrounded. Findings written into `features/screen-capture.md`. Commit `feat: add webrtc video`. *(Implemented 2026-09-20: desktop vitest 48/48, mobile 43/43, and verified live on device (Lenovo TB321FU / Android 16 → macOS) — camera-scanned QR → real cast of YouTube/PUBG at ~4–6 Mbps, RTT 5–10 ms, ≈0.3% decoder drops; backgrounding via FGS verified. Honest gaps: glass-to-glass latency not formally measured; rotation validated only partially (settings-forced rotation doesn't move the sensor libwebrtc keys off) — both flagged for Phase 6/15. A minimal CastService FGS shipped *early* because Android 14+ requires it before projection — rationale in [features/screen-capture.md](../features/screen-capture.md).)*
 
 ## Phase 6 — Foreground Service + Stable Screen Capture
-**Scope:** move capture into `CastService` (FGS type `mediaProjection`); Android 14+ ordering; notification; full lifecycle matrix — screen locked, app backgrounded, rotation, service stopped, permission revoked (`onStop` callback), network loss, desktop closed; resource release.
-**Accept:** cast continues during gameplay; every lifecycle edge ends in a clean state (no leaked projections/displays); documented in `architecture/mobile.md` + `features/cast-session.md`. Commit `feat: add android screen capture` (service rework).
+**Scope:** move capture into `CastService` (FGS type `mediaProjection`); Android14+ ordering; notification; full lifecycle matrix — screen locked, app backgrounded, rotation, service stopped, permission revoked (`onStop` callback), network loss, desktop closed; resource release.
+**Accept:** cast continues during gameplay; every lifecycle edge ends in a clean state (no leaked projections/displays); documented in `architecture/mobile.md` + `features/cast-session.md`. Commit `feat: add android screen capture` (service rework). *(Implemented 2026-09-20: the service now owns the whole session (signaling handed over at cast start, cast survives leaving the scan screen/app), richer `CastState` on home+scan, notification with Stop action, first-class failure taxonomy (revoked/desktop-ended/connection-lost), start-validation against dead handovers (bug found live). JVM tests 46/46. Live-verified on device: camera-scan pairing → running FGS with the new notification; projection-revoked path ended casts cleanly (`bye` twice). The remaining lifecycle matrix needs the device in hand — cases + expectations tabulated in [features/cast-session.md](../features/cast-session.md); the device was in active personal use during the verification window and remote driving was deliberately halted.)*
 
 ## Phase 7 — Internal/Game Audio
 **Scope:** **validation spike first** (ADR-003): custom playback-capture ADM over the `media` PC. Then the feature: `AudioPlaybackCaptureConfiguration`, usage filter, silent-input detection + UI state, mute/unmute.
