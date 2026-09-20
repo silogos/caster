@@ -2,9 +2,12 @@ package com.zerofriction.localcast.pairing
 
 import android.util.Log
 import com.zerofriction.localcast.signaling.Handshake
+import com.zerofriction.localcast.signaling.HandlerSignalingScheduler
 import com.zerofriction.localcast.signaling.OkHttpSignalingTransport
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.signaling.SignalingError
+import com.zerofriction.localcast.signaling.SignalingScheduler
+import com.zerofriction.localcast.signaling.SignalingTransport
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,10 +18,13 @@ import kotlinx.coroutines.flow.update
  * payload parsing and this machine; it knows nothing about UI or media).
  *
  * Flow: scanned QR text → parse payload v1 → connect (hosts in order) →
- * hello/challenge/auth/auth-ok. States map 1:1 to what the scan screen shows.
+ * hello/challenge/auth/auth-ok → authorized. Phase4: an authorized connection
+ * that drops auto-reconnects (SignalingClient) while the session is valid;
+ * `bye` from the desktop ends the session cleanly.
  */
 class PairingClient(
-    private val transportFactory: () -> com.zerofriction.localcast.signaling.SignalingTransport,
+    private val transportFactory: () -> SignalingTransport,
+    private val schedulerFactory: () -> SignalingScheduler,
     private val userAgentProvider: () -> String,
 ) {
     sealed interface State {
@@ -30,7 +36,11 @@ class PairingClient(
 
         data class Connected(val desktopName: String) : State
 
-        data class Disconnected(val desktopName: String) : State
+        /** Auto-reconnecting after a drop; retrying until the session expires. */
+        data class Reconnecting(val desktopName: String?) : State
+
+        /** The desktop ended the session (`bye`) — scan again for a fresh one. */
+        data object Ended : State
 
         data class Failed(val error: PairingError) : State
     }
@@ -39,6 +49,8 @@ class PairingClient(
     val state: StateFlow<State> = _state.asStateFlow()
 
     private var signaling: SignalingClient? = null
+    /** Name from the last successful auth — shown during reconnect ("Reconnecting to …"). */
+    private var lastDesktopName: String? = null
 
     /** Entry point for both the camera scan and the debug manual payload input. */
     fun startFromQrText(qrText: String) {
@@ -56,19 +68,28 @@ class PairingClient(
             sessionId = payload.s,
             secret = Handshake.decodeSecret(payload.k),
             userAgent = userAgentProvider(),
+            expiresAtUnixSeconds = payload.e,
             transport = transportFactory(),
+            scheduler = schedulerFactory(),
         )
         signaling = client
         client.connect { event ->
             when (event) {
                 SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
-                is SignalingClient.Event.Authorized ->
-                    _state.update { State.Connected(event.desktopName) }
+                is SignalingClient.Event.Authorized -> {
+                    lastDesktopName = event.desktopName
+                    _state.value = State.Connected(event.desktopName)
+                }
+                is SignalingClient.Event.Reconnecting ->
+                    _state.value = State.Reconnecting(lastDesktopName)
+                is SignalingClient.Event.SdpAnswer,
+                is SignalingClient.Event.IceCandidate,
+                -> Unit // media plumbing — consumed by the webrtc module (Phase5)
+                is SignalingClient.Event.SessionEnded -> {
+                    lastDesktopName = null
+                    _state.value = State.Ended
+                }
                 is SignalingClient.Event.Failed -> _state.value = State.Failed(PairingError.fromSignaling(event.error))
-                SignalingClient.Event.Disconnected ->
-                    _state.update { current ->
-                        (current as? State.Connected)?.let { State.Disconnected(it.desktopName) } ?: State.Idle
-                    }
             }
         }
     }
@@ -130,5 +151,6 @@ enum class PairingError {
 }
 
 /** Production defaults — the UI constructs PairingClient with these. */
-fun defaultTransportFactory(): com.zerofriction.localcast.signaling.SignalingTransport =
-    OkHttpSignalingTransport()
+fun defaultTransportFactory(): SignalingTransport = OkHttpSignalingTransport()
+
+fun defaultSignalingScheduler(): SignalingScheduler = HandlerSignalingScheduler()

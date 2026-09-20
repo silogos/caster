@@ -2,11 +2,16 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { PairingServer } from '../pairing/pairingServer'
 import {
   encodeEnvelope,
+  isPcId,
   parseEnvelope,
   type Envelope,
   type EnvelopePayload,
   type EnvelopeType,
-  type HelloPayload
+  type HelloPayload,
+  type IcePayload,
+  type PcId,
+  type SessionInfoPayload,
+  type SdpPayload
 } from './envelope'
 import { computeMac, createNonce, negotiateProtocol, verifyMac } from './handshake'
 import { deviceNameFromUa } from './ua'
@@ -14,10 +19,10 @@ import { logger } from '../log'
 
 /**
  * WebSocket signaling endpoint — ws://<host>:<port>/zfc/v1 (docs/architecture/webrtc.md).
- * Phase3 implements connection + pairing handshake only: hello → challenge →
- * auth → auth-ok, plus `bye` session invalidation. Media messages (sdp-*, ice,
- * ping/pong) are Phase4+; pre-auth only hello/auth are accepted, anything else
- * is answered with `bad-message`. Electron-import-free for plain-Node tests.
+ * Dumb, reliable message plumbing: pairing handshake, then the full Phase4
+ * message set (sdp-*, ice, ping/pong, session-info, bye, error) forwarded to
+ * consumers as typed events — no media logic lives here (webrtc.md).
+ * Electron-import-free for plain-Node loopback tests.
  */
 
 const LOG_SCOPE = 'signaling'
@@ -30,6 +35,10 @@ const HANDSHAKE_TIMEOUT_MS = 10_000
 /** Failed-auth rate limit per address: 1 s doubling, capped (pairing.md). */
 const RATE_LIMIT_INITIAL_MS = 1_000
 const RATE_LIMIT_MAX_MS = 30_000
+/** App-level heartbeat cadence (webrtc.md: ping every 5 s). */
+export const HEARTBEAT_INTERVAL_MS = 5_000
+/** A peer silent longer than this is considered gone (webrtc.md: 15 s). */
+export const HEARTBEAT_TIMEOUT_MS = 15_000
 
 export const ERROR_CODES = {
   badVersion: 'bad-version',
@@ -40,15 +49,34 @@ export const ERROR_CODES = {
   badMessage: 'bad-message'
 } as const
 
+/** Inbound SDP/ICE from the mobile — forwarded, never inspected (webrtc.md). */
+export interface SdpOfferEvent {
+  pc: PcId
+  sdp: string
+}
+export interface IceCandidateEvent {
+  pc: PcId
+  /** Opaque candidate object; `null` marks end-of-gathering for this pc. */
+  candidate: unknown
+}
+
 export interface SignalingServerOptions {
   /** Shown in auth-ok; the mobile displays "Connected to <name>". */
   desktopName: string
   /** Injected clock for tests. */
   now?: () => number
+  /** Heartbeat cadence/timeout — injectable so tests use tight values (webrtc.md). */
+  heartbeatIntervalMs?: number
+  heartbeatTimeoutMs?: number
   onMobileConnected?: (event: { sid: string; ua: string; name: string }) => void
   onMobileDisconnected?: (event: { sid: string }) => void
-  /** `bye` from the mobile — the coordinator invalidates the session and shows a fresh QR. */
-  onBye?: () => void
+  /** `bye` from either side — the coordinator invalidates the session and shows a fresh QR. */
+  onBye?: (reason?: string) => void
+  /** Media plumbing events for the (Phase5) ReceiverSession — SDP offers are never answered here. */
+  onSdpOffer?: (event: SdpOfferEvent) => void
+  onIceCandidate?: (event: IceCandidateEvent) => void
+  /** Display-only summary for the status line (webrtc.md) — never acted on. */
+  onSessionInfo?: (info: SessionInfoPayload) => void
 }
 
 interface ConnectionState {
@@ -63,12 +91,17 @@ interface ConnectionState {
   sendSeq: number
   lastReceivedSeq: number
   handshakeTimer: NodeJS.Timeout | null
+  heartbeatTimer: NodeJS.Timeout | null
+  /** Injected-clock timestamp of the last inbound frame (heartbeat silence, webrtc.md). */
+  lastSeenAt: number
 }
 
 export class SignalingServer {
   private pairing: PairingServer | null = null
   private readonly desktopName: string
   private readonly now: () => number
+  private readonly heartbeatIntervalMs: number
+  private readonly heartbeatTimeoutMs: number
   private readonly options: SignalingServerOptions
   private wss: WebSocketServer | null = null
   private port = 0
@@ -80,6 +113,8 @@ export class SignalingServer {
   constructor(options: SignalingServerOptions) {
     this.desktopName = options.desktopName
     this.now = options.now ?? Date.now
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS
     this.options = options
   }
 
@@ -135,6 +170,7 @@ export class SignalingServer {
   stop(): void {
     for (const conn of this.connections.values()) {
       this.clearHandshakeTimer(conn)
+      this.clearHeartbeatTimer(conn)
       conn.socket.terminate()
     }
     this.connections.clear()
@@ -150,6 +186,44 @@ export class SignalingServer {
       }
     }
   }
+
+  // ---- Desktop → mobile senders (the ReceiverSession's half of the plumbing, Phase5+) ----
+
+  /** Send the SDP answer for one PeerConnection (mobile is always the offerer, webrtc.md). */
+  sendSdpAnswer(pc: PcId, sdp: string): void {
+    this.withAuthorized((conn) => this.send(conn, 'sdp-answer', { pc, sdp } satisfies SdpPayload))
+  }
+
+  /** Trickled candidate for one pc; `candidate: null` marks end-of-gathering. */
+  sendIceCandidate(pc: PcId, candidate: unknown): void {
+    this.withAuthorized((conn) => this.send(conn, 'ice', { pc, candidate } satisfies IcePayload))
+  }
+
+  /**
+   * Desktop-initiated graceful end: `bye` invalidates the session immediately
+   * (webrtc.md), so this sends bye, closes the socket, and fires onBye for the
+   * coordinator to show a fresh QR.
+   */
+  sendBye(reason: string): void {
+    this.withAuthorized((conn) => {
+      logger.info(LOG_SCOPE, `bye to ${conn.remote}`, { reason })
+      this.send(conn, 'bye', { reason })
+      this.store.invalidate()
+      conn.socket.close(1000, 'bye')
+      this.options.onBye?.(reason)
+    })
+  }
+
+  private withAuthorized(action: (conn: ConnectionState) => void): void {
+    const conn = [...this.connections.values()].find((c) => c.phase === 'authorized')
+    if (conn === undefined) {
+      logger.warn(LOG_SCOPE, 'send with no authorized mobile connected — dropping message')
+      return
+    }
+    action(conn)
+  }
+
+  // ---- Connection handling ----
 
   private onConnection(socket: WebSocket, remote: string): void {
     if (this.pairing === null) {
@@ -179,7 +253,9 @@ export class SignalingServer {
           logger.info(LOG_SCOPE, `closing ${remote}: handshake did not complete in time`)
           socket.close(1008, 'handshake-timeout')
         }
-      }, HANDSHAKE_TIMEOUT_MS)
+      }, HANDSHAKE_TIMEOUT_MS),
+      heartbeatTimer: null,
+      lastSeenAt: 0
     }
     this.connections.set(conn.socketId, conn)
 
@@ -197,6 +273,9 @@ export class SignalingServer {
   }
 
   private onMessage(conn: ConnectionState, raw: string): void {
+    // Any inbound frame is liveness for the heartbeat (webrtc.md: silence >15 s = gone).
+    conn.lastSeenAt = this.now()
+
     const parsed = parseEnvelope(raw)
     if (!parsed.ok) {
       // bad-version is terminal; bad-message keeps the socket open only for
@@ -221,10 +300,6 @@ export class SignalingServer {
       this.sendError(conn, ERROR_CODES.badMessage, `expected auth, got ${envelope.type}`)
       return
     }
-    if (conn.phase === 'authorized' && envelope.type !== 'bye') {
-      this.sendError(conn, ERROR_CODES.badMessage, `unexpected ${envelope.type} before Phase4`)
-      return
-    }
 
     switch (envelope.type) {
       case 'hello':
@@ -234,13 +309,34 @@ export class SignalingServer {
         this.onAuth(conn, envelope)
         break
       case 'bye':
-        this.onBye(conn)
+        this.onBye(conn, envelope)
         break
       case 'error':
         logger.info(LOG_SCOPE, `mobile reported ${String((envelope.payload as { code?: string }).code ?? 'error')}`)
         break
+      case 'sdp-offer':
+        this.onSdpOffer(conn, envelope)
+        break
+      case 'ice':
+        this.onIce(conn, envelope)
+        break
+      case 'session-info':
+        this.onSessionInfo(conn, envelope)
+        break
+      case 'ping':
+        this.onPing(conn, envelope)
+        break
+      case 'pong':
+        // Liveness only — lastSeenAt was reset above.
+        break
+      case 'sdp-answer':
+        this.sendError(conn, ERROR_CODES.badMessage, 'desktop is the answerer, not the offerer')
+        break
+      case 'challenge':
+      case 'auth-ok':
+        this.sendError(conn, ERROR_CODES.badMessage, `unexpected ${envelope.type}`)
+        break
       default:
-        // challenge/auth-ok are desktop→mobile only.
         this.sendError(conn, ERROR_CODES.badMessage, `unexpected ${envelope.type}`)
     }
   }
@@ -308,21 +404,106 @@ export class SignalingServer {
 
     conn.phase = 'authorized'
     this.clearHandshakeTimer(conn)
+    this.startHeartbeat(conn)
     this.send(conn, 'auth-ok', { name: this.desktopName, proto })
     const name = deviceNameFromUa(conn.hello.ua)
     logger.info(LOG_SCOPE, `mobile authorized`, { name })
     this.options.onMobileConnected?.({ sid, ua: conn.hello.ua, name })
   }
 
-  private onBye(conn: ConnectionState): void {
-    logger.info(LOG_SCOPE, `bye from ${conn.remote}`)
+  private onSdpOffer(conn: ConnectionState, envelope: Envelope): void {
+    if (conn.phase !== 'authorized') {
+      this.rejectPreAuth(conn, envelope.type)
+      return
+    }
+    const payload = envelope.payload as SdpPayload
+    if (!isPcId(payload.pc) || typeof payload.sdp !== 'string' || payload.sdp.length === 0) {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed sdp-offer payload')
+      return
+    }
+    this.options.onSdpOffer?.({ pc: payload.pc, sdp: payload.sdp })
+  }
+
+  private onIce(conn: ConnectionState, envelope: Envelope): void {
+    if (conn.phase !== 'authorized') {
+      this.rejectPreAuth(conn, envelope.type)
+      return
+    }
+    const payload = envelope.payload as IcePayload
+    // `candidate` may be null (end-of-gathering) but the key must be present.
+    if (!isPcId(payload.pc) || !('candidate' in (envelope.payload as Record<string, unknown>))) {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed ice payload')
+      return
+    }
+    this.options.onIceCandidate?.({ pc: payload.pc, candidate: payload.candidate })
+  }
+
+  private onSessionInfo(conn: ConnectionState, envelope: Envelope): void {
+    if (conn.phase !== 'authorized') {
+      this.rejectPreAuth(conn, envelope.type)
+      return
+    }
+    const info = envelope.payload as SessionInfoPayload
+    const wellFormed =
+      typeof info.profile === 'string' &&
+      typeof info.width === 'number' &&
+      typeof info.height === 'number' &&
+      typeof info.fps === 'number' &&
+      typeof info.gameAudio === 'boolean' &&
+      typeof info.mic === 'boolean'
+    if (!wellFormed) {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed session-info payload')
+      return
+    }
+    logger.info(LOG_SCOPE, 'session-info from mobile', { profile: info.profile })
+    this.options.onSessionInfo?.(info)
+  }
+
+  private onPing(conn: ConnectionState, envelope: Envelope): void {
+    if (conn.phase !== 'authorized') {
+      this.rejectPreAuth(conn, envelope.type)
+      return
+    }
+    const t = (envelope.payload as { t?: unknown }).t
+    if (typeof t !== 'number') {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed ping payload')
+      return
+    }
+    this.send(conn, 'pong', { t })
+  }
+
+  private onBye(conn: ConnectionState, envelope: Envelope): void {
+    const reason = (envelope.payload as { reason?: unknown }).reason
+    logger.info(LOG_SCOPE, `bye from ${conn.remote}`, {
+      reason: typeof reason === 'string' ? reason : undefined
+    })
     this.store.invalidate()
     conn.socket.close(1000, 'bye')
-    this.options.onBye?.()
+    this.options.onBye?.(typeof reason === 'string' ? reason : undefined)
+  }
+
+  private rejectPreAuth(conn: ConnectionState, type: string): void {
+    // webrtc.md: only hello/auth are accepted until auth-ok.
+    this.sendError(conn, ERROR_CODES.badMessage, `unexpected ${type} before auth`)
+  }
+
+  /** Heartbeat (webrtc.md): ping every interval; a peer silent > timeout is gone. */
+  private startHeartbeat(conn: ConnectionState): void {
+    conn.lastSeenAt = this.now()
+    conn.heartbeatTimer = setInterval(() => {
+      if (this.now() - conn.lastSeenAt > this.heartbeatTimeoutMs) {
+        logger.info(LOG_SCOPE, `mobile ${conn.remote} silent > ${this.heartbeatTimeoutMs} ms — closing`)
+        this.clearHeartbeatTimer(conn)
+        conn.socket.close(1000, 'heartbeat-timeout')
+        return
+      }
+      this.send(conn, 'ping', { t: this.now() })
+    }, this.heartbeatIntervalMs)
   }
 
   private onClose(conn: ConnectionState): void {
     this.clearHandshakeTimer(conn)
+    this.clearHeartbeatTimer(conn)
     this.connections.delete(conn.socketId)
     if (conn.phase === 'authorized') {
       this.store.release(conn.socketId)
@@ -349,7 +530,7 @@ export class SignalingServer {
 
   private recordAuthFailure(conn: ConnectionState): void {
     const record = this.authFailures.get(conn.remote) ?? { fails: 0, blockedUntil: 0 }
-    record.fails += 1
+    record.fails +=1
     record.blockedUntil = this.now() + Math.min(RATE_LIMIT_INITIAL_MS * 2 ** (record.fails - 1), RATE_LIMIT_MAX_MS)
     this.authFailures.set(conn.remote, record)
   }
@@ -362,6 +543,13 @@ export class SignalingServer {
     if (conn.handshakeTimer !== null) {
       clearTimeout(conn.handshakeTimer)
       conn.handshakeTimer = null
+    }
+  }
+
+  private clearHeartbeatTimer(conn: ConnectionState): void {
+    if (conn.heartbeatTimer !== null) {
+      clearInterval(conn.heartbeatTimer)
+      conn.heartbeatTimer = null
     }
   }
 }

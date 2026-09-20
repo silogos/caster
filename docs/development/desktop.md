@@ -22,7 +22,8 @@ From the repo root: `npm run desktop:dev` / `desktop:build` / `desktop:start` / 
 
 Launch with CDP for scripted UI checks: `npx electron out/main/index.js --remote-debugging-port=9222`, then `node scripts/read-qr-payload.mjs 9222` to extract the live QR payload.
 
-Verified on 2026-09-20 (Phase 3): typecheck green, 20 unit tests green, production build launches and serves a real pairing session over the LAN (details: [features/pairing.md](../features/pairing.md)).
+Verified on 2026-09-20 (Phase 4): typecheck green, vitest 31/31 green — 11 new loopback protocol tests (full message set, heartbeat, bye both ways, reconnect-within-TTL, expiry); production build verified live via CDP (details: [features/signaling.md](../features/signaling.md)).
+Previously (Phase 3): real-device pairing scan verified — details in [features/pairing.md](../features/pairing.md).
 
 ## Pinned toolchain (apps/desktop/package.json)
 
@@ -79,6 +80,7 @@ WebRTC and media (Phases 5+), audio mixer (Phase 9), packaging/installer (deferr
 
 - 2026-09-20 (Phase 2): typecheck green; 3 unit tests green (QR scannability round-trip); production build verified live via CDP; idle RAM baseline ~364–376 MB summed RSS across the 6 Electron processes (RSS double-counts shared pages; main-process `phys_footprint` 41 MB) — compare real load in Phases 5/15.
 - 2026-09-20 (Phase 3): typecheck green; vitest **20/20** green — session lifecycle tests, HMAC vector, and loopback protocol tests over a real `ws` server (a scripted phone scans the QR PNG, then success/`unknown-session`/`bad-auth`+rate-limit/`busy`+reconnect/`bad-version`/recoverable `bad-message`/`expired`/`bye` paths). Production build launches, serves a real session on the LAN (verified via CDP payload extraction); real-device pairing scan verified — a Lenovo TB321FU (Android 16) scanned the QR and completed the handshake, desktop showed "Connected to TB321FU".
+- 2026-09-20 (Phase 4): typecheck green; vitest **31/31** green — new `signalingProtocol.test.ts` loopback suite (11 tests): full message set (recorded SDP blobs; ICE incl. a Chromium mDNS `*.local` candidate + `candidate: null`; ping→pong; session-info), heartbeat (keeps a ponging phone, closes a silent one), `bye` both directions, reconnect-within-TTL, expiry refusal. Live check against the production build: scripted phone over the LAN — heartbeat ping observed, session-info rendered on the status line, desktop back to a fresh QR after `bye`. Details: [features/signaling.md](../features/signaling.md).
 
 ## Conventions
 

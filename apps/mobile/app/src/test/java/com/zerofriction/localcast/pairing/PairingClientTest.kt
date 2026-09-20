@@ -5,6 +5,7 @@ import com.zerofriction.localcast.signaling.EnvelopeCodec
 import com.zerofriction.localcast.signaling.EnvelopeParseResult
 import com.zerofriction.localcast.signaling.Handshake
 import com.zerofriction.localcast.signaling.Payloads
+import com.zerofriction.localcast.signaling.SignalingScheduler
 import com.zerofriction.localcast.signaling.SignalingTransport
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -20,9 +21,39 @@ import org.junit.Assert.assertTrue
 class PairingClientTest {
 
     @org.junit.Test
+    fun `maps a post-auth drop to Reconnecting and a desktop bye to Ended`() {
+        val fake = FakeTransport()
+        val client = newClient(fake)
+        // The stock payload's `e` is a fixed past date — reconnect needs a live session.
+        val livePayload = VALID_PAYLOAD.replace(
+            "\"e\":1758300000",
+            "\"e\":${System.currentTimeMillis() / 1000 + 600}",
+        )
+        client.startFromQrText(livePayload)
+
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeAt(0) // hello
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE))
+        fake.sentFrames.removeAt(0) // auth
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME))
+        assertEquals(PairingClient.State.Connected(TEST_DESKTOP_NAME), client.state.value)
+
+        // Wi-Fi blip: the drop becomes a Reconnecting state carrying the name.
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        assertEquals(PairingClient.State.Reconnecting(TEST_DESKTOP_NAME), client.state.value)
+
+        // Desktop-initiated bye: clean end, scan again (webrtc.md).
+        fake.listener?.onTransportText(byeFrame("window-closed"))
+        assertEquals(PairingClient.State.Ended, client.state.value)
+    }
+
+    private fun newClient(fake: FakeTransport): PairingClient =
+        PairingClient({ fake }, { IdleScheduler() }) { TEST_UA }
+
+    @org.junit.Test
     fun `completes the handshake and reaches Connected`() {
         val fake = FakeTransport()
-        val client = PairingClient({ fake }) { TEST_UA }
+        val client = newClient(fake)
 
         client.startFromQrText(VALID_PAYLOAD)
 
@@ -52,7 +83,7 @@ class PairingClientTest {
     @org.junit.Test
     fun `maps a terminal error to the matching user-facing failure`() {
         val fake = FakeTransport()
-        val client = PairingClient({ fake }) { TEST_UA }
+        val client = newClient(fake)
 
         client.startFromQrText(VALID_PAYLOAD)
         fake.listener?.onTransportOpen()
@@ -65,7 +96,7 @@ class PairingClientTest {
     @org.junit.Test
     fun `rejects a non-zfc QR without opening any connection`() {
         val fake = FakeTransport()
-        val client = PairingClient({ fake }) { TEST_UA }
+        val client = newClient(fake)
 
         client.startFromQrText("https://example.com")
 
@@ -77,7 +108,7 @@ class PairingClientTest {
     fun `tries every candidate host before giving up as unreachable`() {
         val twoHostPayload = VALID_PAYLOAD.replace("192.168.137.1", "10.0.0.9")
         val fake = FakeTransport(failOnOpen = true)
-        val client = PairingClient({ fake }) { TEST_UA }
+        val client = newClient(fake)
 
         client.startFromQrText(twoHostPayload)
 
@@ -109,6 +140,9 @@ class PairingClientTest {
 
     private fun errorFrame(code: String): String =
         EnvelopeCodec.encode(Envelope.TYPE_ERROR, 1, VECTOR_SID, buildJsonObject { put("code", code) })
+
+    private fun byeFrame(reason: String): String =
+        EnvelopeCodec.encode(Envelope.TYPE_BYE, 1, VECTOR_SID, buildJsonObject { put("reason", reason) })
 
     private companion object {
         const val TEST_UA = "ZeroFrictionCast/0.1.0 (Android 15; Pixel8)"
@@ -147,5 +181,12 @@ private class FakeTransport(private val failOnOpen: Boolean = false) : Signaling
 
     override fun close(code: Int, reason: String) {
         listener?.onTransportClosed(code, reason)
+    }
+}
+
+/** Never fires scheduled work — lifecycle timing is SignalingClientTest's concern. */
+private class IdleScheduler : SignalingScheduler {
+    override fun postDelayed(delayMs: Long, action: () -> Unit): () -> Unit = {
+        // never run: reconnect timers stay dormant in these tests
     }
 }

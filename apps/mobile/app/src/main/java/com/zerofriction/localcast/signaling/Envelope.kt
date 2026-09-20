@@ -2,6 +2,8 @@ package com.zerofriction.localcast.signaling
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -9,9 +11,9 @@ import kotlinx.serialization.json.put
 
 /**
  * Message envelope for the signaling WebSocket — docs/architecture/webrtc.md.
- * Every frame is JSON text: {v, type, seq, sid, payload}. Phase3 implements the
- * pairing-related types only; Phase4 adds sdp-offer/answer, ice, ping/pong,
- * session-info.
+ * Every frame is JSON text: {v, type, seq, sid, payload}. The full Phase4
+ * message set: pairing (hello/challenge/auth/auth-ok), media plumbing
+ * (sdp-offer/sdp-answer/ice/session-info), lifecycle (ping/pong/bye/error).
  */
 @Serializable
 data class Envelope(
@@ -32,6 +34,16 @@ data class Envelope(
         const val TYPE_AUTH_OK = "auth-ok"
         const val TYPE_ERROR = "error"
         const val TYPE_BYE = "bye"
+        const val TYPE_SDP_OFFER = "sdp-offer"
+        const val TYPE_SDP_ANSWER = "sdp-answer"
+        const val TYPE_ICE = "ice"
+        const val TYPE_SESSION_INFO = "session-info"
+        const val TYPE_PING = "ping"
+        const val TYPE_PONG = "pong"
+
+        /** PeerConnection discriminators — both PCs share one channel (ADR-003). */
+        const val PC_MEDIA = "media"
+        const val PC_MIC = "mic"
 
         /** Max envelope size per webrtc.md. */
         const val MAX_BYTES = 256 * 1024
@@ -56,6 +68,9 @@ object ErrorCodes {
     const val BAD_AUTH = "bad-auth"
     const val BUSY = "busy"
     const val BAD_VERSION = "bad-version"
+
+    /** Recoverable (webrtc.md): the connection stays open after it. */
+    const val BAD_MESSAGE = "bad-message"
 }
 
 object EnvelopeCodec {
@@ -82,8 +97,14 @@ object EnvelopeCodec {
     }
 }
 
-/** Typed payload field accessors for the Phase3 message set. */
+/**
+ * Typed payload builders/accessors (webrtc.md message table). Media payloads
+ * treat SDP as an opaque blob and candidates as opaque JSON — signaling is
+ * data plumbing, never media logic.
+ */
 object Payloads {
+
+    // ---- pairing (Phase3) ----
 
     fun hello(userAgent: String, protoMin: Int, protoMax: Int): JsonObject = buildJsonObject {
         put("ua", userAgent)
@@ -94,8 +115,6 @@ object Payloads {
     fun auth(mac: String): JsonObject = buildJsonObject {
         put("mac", mac)
     }
-
-    fun bye(): JsonObject = buildJsonObject {}
 
     fun challengeNonce(envelope: Envelope): String? =
         envelope.payload["n"]?.jsonPrimitive?.content
@@ -114,4 +133,66 @@ object Payloads {
 
     fun errorCode(envelope: Envelope): String? =
         envelope.payload["code"]?.jsonPrimitive?.content
+
+    // ---- lifecycle (Phase4) ----
+
+    fun bye(reason: String? = null): JsonObject = buildJsonObject {
+        reason?.let { put("reason", it) }
+    }
+
+    fun byeReason(envelope: Envelope): String? =
+        envelope.payload["reason"]?.jsonPrimitive?.content
+
+    /** Heartbeat timestamps are epoch milliseconds (webrtc.md ping/pong {t}). */
+    fun ping(t: Long): JsonObject = buildJsonObject {
+        put("t", t)
+    }
+
+    fun pingT(envelope: Envelope): Long? =
+        envelope.payload["t"]?.jsonPrimitive?.content?.toLongOrNull()
+
+    // ---- media plumbing (Phase4; consumed by webrtc in Phase5) ----
+
+    fun sdp(pc: String, sdp: String): JsonObject = buildJsonObject {
+        put("pc", pc)
+        put("sdp", sdp)
+    }
+
+    /** `candidate: null` marks end-of-gathering for `pc` (webrtc.md). */
+    fun ice(pc: String, candidate: JsonElement?): JsonObject = buildJsonObject {
+        put("pc", pc)
+        put("candidate", candidate ?: JsonNull)
+    }
+
+    fun sessionInfo(
+        profile: String,
+        width: Int,
+        height: Int,
+        fps: Int,
+        gameAudio: Boolean,
+        mic: Boolean,
+    ): JsonObject = buildJsonObject {
+        put("profile", profile)
+        put("width", width)
+        put("height", height)
+        put("fps", fps)
+        put("gameAudio", gameAudio)
+        put("mic", mic)
+    }
+
+    /** `pc` from an sdp-offer, sdp-answer or ice frame; null unless it names a known PeerConnection. */
+    fun pc(envelope: Envelope): String? {
+        val pc = envelope.payload["pc"]?.jsonPrimitive?.content
+        return if (pc == Envelope.PC_MEDIA || pc == Envelope.PC_MIC) pc else null
+    }
+
+    fun sdpText(envelope: Envelope): String? =
+        envelope.payload["sdp"]?.jsonPrimitive?.content
+
+    /**
+     * The candidate element as-is; `JsonNull` = end-of-gathering,
+     * null = key missing (malformed frame).
+     */
+    fun iceCandidate(envelope: Envelope): JsonElement? =
+        envelope.payload["candidate"]
 }

@@ -31,9 +31,17 @@ app.whenReady().then(async () => {
     desktopName: hostname(),
     onMobileConnected: ({ name }) => pushToRenderer(IPC.pairing.mobileState, { state: 'connected', name }),
     onMobileDisconnected: () => pushToRenderer(IPC.pairing.mobileState, { state: 'waiting' }),
-    onBye: () => {
+    onBye: (reason) => {
+      logger.info(LOG_SCOPE, 'session ended', { reason })
       pairing?.createSession().catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
-    }
+    },
+    // Phase4: signaling is dumb plumbing — media messages are logged, and the
+    // ReceiverSession (Phase5) will consume/answer them. session-info is the
+    // one message the desktop displays (status line, webrtc.md).
+    onSdpOffer: ({ pc }) => logger.info(LOG_SCOPE, `sdp-offer received for pc=${pc} — answering is Phase5`),
+    onIceCandidate: ({ pc, candidate }) =>
+      logger.debug(LOG_SCOPE, `ice candidate for pc=${pc}`, { candidate: candidate === null ? 'end-of-gathering' : 'host' }),
+    onSessionInfo: (info) => pushToRenderer(IPC.pairing.mobileState, { state: 'session-info', info })
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
 

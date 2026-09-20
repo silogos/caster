@@ -93,7 +93,7 @@ fun ScanContent(
             when (val state = pairingState) {
                 PairingClient.State.Idle,
                 is PairingClient.State.Failed,
-                is PairingClient.State.Disconnected -> {
+                PairingClient.State.Ended -> {
                     when (state) {
                         is PairingClient.State.Failed ->
                             Text(
@@ -102,9 +102,9 @@ fun ScanContent(
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(bottom = 16.dp),
                             )
-                        is PairingClient.State.Disconnected ->
+                        PairingClient.State.Ended ->
                             Text(
-                                text = stringResource(R.string.disconnected),
+                                text = stringResource(R.string.session_ended),
                                 fontSize = 15.sp,
                                 modifier = Modifier.padding(bottom = 16.dp),
                             )
@@ -168,6 +168,16 @@ fun ScanContent(
                         } else {
                             stringResource(R.string.authenticating)
                         },
+                        fontSize = 15.sp,
+                    )
+                }
+
+                is PairingClient.State.Reconnecting -> {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = state.desktopName?.let { stringResource(R.string.reconnecting_to, it) }
+                            ?: stringResource(R.string.reconnecting),
                         fontSize = 15.sp,
                     )
                 }
