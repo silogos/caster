@@ -471,6 +471,7 @@ class MediaCastSession(
                         TAG,
                         "stats: ${bitrateBps / 1_000} kbps, ${sample.framesEncoded} encoded" +
                             ", ${sample.framesDropped} dropped, ${sample.framesPerSecond} fps" +
+                            ", ${sample.frameWidth}x${sample.frameHeight}" +
                             ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}",
                     )
                     lastBytesSent = sample.bytesSent

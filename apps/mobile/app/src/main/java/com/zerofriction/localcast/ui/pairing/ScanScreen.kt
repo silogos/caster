@@ -47,7 +47,7 @@ import com.zerofriction.localcast.R
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.DisplaySize
-import com.zerofriction.localcast.config.CastConfig
+import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
 import com.zerofriction.localcast.service.CastState
@@ -337,11 +337,14 @@ private fun CastControls(
             val signaling = releaseSignalingClient()
             if (signaling != null) {
                 val (width, height) = DisplaySize.physicalPx(context)
+                // Phase10: the cast uses the persisted settings, read fresh at
+                // start — settings changes take effect on the next cast.
+                val settings = CastSettingsStore(context).load()
                 CastService.start(
                     context,
                     CastService.StartArgs(
                         signaling = signaling,
-                        config = CastConfig.default(),
+                        config = settings.toConfig(),
                         projectionIntent = consentData,
                         physicalWidth = width,
                         physicalHeight = height,

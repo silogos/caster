@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–6 (status: **Phase 6 implemented — lifecycle matrix partially verified; see [features/cast-session.md](../features/cast-session.md)**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–10 (status: **Phase10 implemented — emulator UI check done; the on-device live-cast check remains; see [features/cast-settings.md](../features/cast-settings.md)**).
 
 ## Prerequisites
 
@@ -18,6 +18,7 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
+Verified 2026-09-20 (Phase 10): **83 unit tests** green (21 new: quality presets/labels, settings codec, settings ViewModel, frame-size stats extraction). `assembleDebug` green; the settings screen and its persistence exercised on an API 34 emulator (screen render, preset pick, manual-bitrate floor derivation, restore after force-stop, toggle persistence) — the on-device live-cast check remains ([features/cast-settings.md](../features/cast-settings.md)).
 Verified 2026-09-20 (Phase 6): `assembleDebug` + **46 unit tests** green (3 new: pairing handover semantics). Live on device (Lenovo TB321FU / Android 16): camera-scan pairing → foreground service with the new notification; projection-revoked ends handled cleanly. The full lifecycle matrix is tabulated in [features/cast-session.md](../features/cast-session.md) and is the remaining hands-on item.
 Verified on 2026-09-20 (Phase 5): 43 unit tests green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end — details in [features/screen-capture.md](../features/screen-capture.md).
 Previously (Phase 4): 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
@@ -51,10 +52,10 @@ apps/mobile/
 ├── settings.gradle.kts / build.gradle.kts / gradle.properties
 ├── gradle/libs.versions.toml        # every pinned version lives here
 └── app/src/main/java/com/zerofriction/localcast/
-    ├── MainActivity.kt              # single activity; Home ⇄ Scan navigation (state-based, no nav lib yet)
+    ├── MainActivity.kt              # single activity; Home ⇄ Scan ⇄ Settings navigation (state-based, no nav lib yet)
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)
-    ├── config/                      # CastConfig — every cast setting lives here (Phase 5)
+    ├── config/                      # CastConfig + CastSettings: presets, JSON codec, persistence (Phases 5/10)
     ├── capture/                     # CaptureSize/DisplaySize math; projection via ScreenCapturerAndroid (Phase 5)
     ├── webrtc/                      # MediaCastSession (media PC), SdpCodecOrderer, IceCandidateJson, SenderStats (Phase 5)
     ├── service/                     # CastService — mediaProjection FGS owning the whole session (Phase 6)
@@ -70,6 +71,7 @@ The package skeleton follows [architecture/mobile.md](../architecture/mobile.md)
 
 - **Phase 1**: buildable/installable app, single-activity Compose UI, dark theme, home screen (title, `Status: Not connected`, **Start Cast**).
 - **Phase 3 — pairing**: Start Cast opens the scan screen; camera scans the desktop's QR (payload v1), connects over WebSocket, runs the HMAC handshake, and shows "Connected to \<desktop name\>" (or the mapped, non-technical failure message). **Disconnect** sends `bye` — the desktop returns to a fresh QR. Runtime CAMERA permission with rationale; debug builds add a manual "paste payload JSON" input for emulator verification. Details: [features/pairing.md](../features/pairing.md).
+- **Phase 10 — cast settings**: the configuration-owner UI — quality presets (balanced/sharp/smooth/light), resolution/fps tweaks, auto-or-manual bitrate, audio defaults for the next cast. Every change persists immediately (versioned JSON in SharedPreferences; corrupt → defaults); the cast-start path reads the store fresh, so changes take effect on the next cast. Details: [features/cast-settings.md](../features/cast-settings.md).
 
 ## Permissions
 
@@ -77,7 +79,7 @@ The package skeleton follows [architecture/mobile.md](../architecture/mobile.md)
 
 ## Not implemented yet (by design)
 
-Game audio (Phase 7), microphone (Phase 8), settings UI (Phase 10), thermal (Phase 11). Casting (Phases 5–6) is implemented — see [features/screen-capture.md](../features/screen-capture.md) and [features/cast-session.md](../features/cast-session.md).
+Thermal profiles (Phase 11) and adaptive quality (Phase 12). Casting (Phases 5–10) is implemented — see [features/screen-capture.md](../features/screen-capture.md), [features/cast-session.md](../features/cast-session.md), and [features/cast-settings.md](../features/cast-settings.md).
 
 ## Conventions
 

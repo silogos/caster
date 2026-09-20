@@ -44,6 +44,7 @@ import com.zerofriction.localcast.ui.theme.LocalCastTheme
 @Composable
 fun HomeScreen(
     onStartCast: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     viewModel: HomeViewModel = viewModel(),
 ) {
     val castState by viewModel.castState.collectAsStateWithLifecycle()
@@ -55,6 +56,7 @@ fun HomeScreen(
         gameAudioState = gameAudioState,
         micState = micState,
         onStartCast = onStartCast,
+        onOpenSettings = onOpenSettings,
     )
 }
 
@@ -69,6 +71,7 @@ fun HomeContent(
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
     onStartCast: () -> Unit,
+    onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -98,6 +101,8 @@ fun HomeContent(
                     ) {
                         Text(stringResource(R.string.start_cast))
                     }
+                    // Phase10: the configuration owner's settings entry point.
+                    SettingsEntryButton(onOpenSettings)
                 }
 
                 is CastState.Starting -> {
@@ -140,9 +145,18 @@ fun HomeContent(
                     ) {
                         Text(stringResource(R.string.start_cast))
                     }
+                    SettingsEntryButton(onOpenSettings)
                 }
             }
         }
+    }
+}
+
+/** The Phase10 settings entry point — under the cast trigger, both idle and after a failure. */
+@Composable
+private fun SettingsEntryButton(onOpenSettings: () -> Unit) {
+    TextButton(onClick = onOpenSettings) {
+        Text(stringResource(R.string.open_settings), fontSize = 13.sp)
     }
 }
 

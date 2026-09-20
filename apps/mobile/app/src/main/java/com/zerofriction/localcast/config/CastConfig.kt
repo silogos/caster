@@ -5,13 +5,14 @@ package com.zerofriction.localcast.config
  * AGENTS.md invariants: every cast setting lives here and only here).
  *
  * Phase5 shipped the conservative fixed profile from webrtc.md: 720p, 30 fps,
- * 4–6 Mbps, degradation preference BALANCED. Phase7 adds the game-audio
+ *4–6 Mbps, degradation preference BALANCED. Phase7 adds the game-audio
  * toggle (on by default — it's the product's core promise). Phase8 adds the
  * mic flag (off by default — a microphone must never stream without an
  * explicit user action, audio.md; the live on/off toggle during the cast is
- * the affordance until then). The settings UI, persistence and
- * live-application UX arrive in Phase10 ("changes take effect on next
- * cast"); thermal-driven values arrive in Phase11.
+ * the affordance until then). Phase10 adds the settings UI, the named
+ * presets ([QualityProfile]) and persistence ([CastSettingsStore]); a cast
+ * reads its config at start (ScanScreen), so settings changes take effect on
+ * the next cast. Thermal-driven values arrive in Phase11.
  */
 data class CastConfig(
     /** Profile name — display-only in the desktop status line via `session-info`. */
