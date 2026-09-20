@@ -1,6 +1,6 @@
 # WebRTC & Signaling Architecture
 
-Status: Phase 0 spec (signaling implemented in Phase 4, media in Phase 5; reviewed again before implementation).
+Status: signaling **implemented in Phase 4** — verification record in [features/signaling.md](../features/signaling.md); media transport arrives in Phase 5. Envelope v1, message set and lifecycle rules below are as implemented.
 
 ## Separation of concerns
 
@@ -49,7 +49,7 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 | `error` | both | `{code, msg?}` | Terminal (`bad-version`, `unknown-session`, `expired`, `bad-auth`, `busy`) or recoverable (`bad-message`). Terminal errors close the socket after send. |
 | `sdp-offer` | m→d | `{pc, sdp}` | SDP offer. `pc` ∈ `"media"` \| `"mic"`. |
 | `sdp-answer` | d→m | `{pc, sdp}` | SDP answer. |
-| `ice` | both | `{pc, candidate}` | Trickled candidate; `candidate: null` marks end-of-gathering for that `pc`. |
+| `ice` | both | `{pc, candidate}` | Trickled candidate; `candidate: null` marks end-of-gathering for that `pc`. The candidate value is the platform candidate object serialized as JSON (RTCIceCandidateInit-shaped on the desktop, the libwebrtc equivalent on mobile); signaling treats it as **opaque** and relays it verbatim — the concrete shape is exercised from Phase 5 on. |
 | `session-info` | m→d | `{profile, width, height, fps, gameAudio, mic}` | Display-only summary for the desktop status line. **Not** configuration — the desktop never acts on it beyond showing text. |
 | `ping` / `pong` | both | `{t}` | App-level heartbeat every 5 s; a peer silent > 15 s is considered gone. |
 | `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. |
@@ -73,8 +73,8 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 ### ICE strategy
 
 - `iceServers: []` — **host candidates only, no STUN/TURN.** Peers are on the same subnet by requirement.
-- **mDNS caveat (risk R4):** Chromium and recent libwebrtc obfuscate host candidates as `*.local` mDNS names. Some routers/APs block mDNS, breaking connectivity even on the same LAN. Mitigations, in order of preference:
-  1. Resolve mDNS candidates normally where the network allows (validate in Phase 4).
+- **mDNS caveat (risk R4):** Chromium and recent libwebrtc obfuscate host candidates as `*.local` mDNS names. Some routers/APs block mDNS, breaking connectivity even on the same LAN. Phase 4 validated the *plumbing*: mDNS-shaped candidates traverse signaling byte-for-byte (loopback + live). On-LAN *resolution* is validated at the first real media connection (Phase 5). Mitigations, in order of preference:
+  1. Resolve mDNS candidates normally where the network allows (validate in Phase 5).
   2. Disable candidate obfuscation where the platform exposes a switch (Electron command line / libwebrtc field trial) for this trusted LAN app.
   3. Fallback: candidate filtering plus the QR's `hosts[]` as ground truth for connectivity checks.
 - ICE restart is preferred over full re-pairing for transient network changes.

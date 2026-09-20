@@ -33,6 +33,6 @@ Implements [architecture/pairing.md](../architecture/pairing.md) and the pairing
 ## Known limitations (by design in this phase)
 
 - The mobile session lives and dies with the scan screen (ViewModel-scoped); a persistent session arrives with the cast service (Phase 6).
-- No heartbeat, backoff reconnect or mDNS/host-candidate validation — Phase 4 (roadmap).
-- On a Wi-Fi drop after auth, the mobile shows "Connection lost" rather than auto-reconnecting — the desktop's reconnect window exists server-side; the mobile reconnect logic is Phase 4.
+- Heartbeat, backoff reconnect and mDNS/host-candidate plumbing landed in **Phase 4** — see [signaling.md](signaling.md).
+- On a Wi-Fi drop after auth, the mobile now auto-reconnects with backoff (Phase 4); the desktop's reconnect window had existed server-side since this phase.
 - Desktop status for "connection lost while authorized" is just "Waiting for mobile device…" (the reconnect window stays open until expiry, but the desktop does not yet visualize it distinctly).

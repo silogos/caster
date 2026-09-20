@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 2 complete — awaiting review.**
+Current status: **Phase 4 complete — awaiting review.**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -28,7 +28,7 @@ Current status: **Phase 2 complete — awaiting review.**
 
 ## Phase 4 — Local Signaling
 **Scope:** full envelope + message set (`sdp-*`, `ice`, `ping/pong`, `bye`, `error`) per [webrtc.md](../architecture/webrtc.md); connection lifecycle, heartbeat, disconnect/reconnect rules; version negotiation. Verified with **loopback protocol tests** — two endpoints exchanging recorded SDP blobs, no real media.
-**Accept:** protocol tests pass; reconnect-within-TTL and expiry paths exercised; mDNS/host-candidate behavior on LAN validated (risk R4). Commit `feat: add local signaling`.
+**Accept:** protocol tests pass; reconnect-within-TTL and expiry paths exercised; mDNS/host-candidate behavior on LAN validated (risk R4). Commit `feat: add local signaling`. *(Implemented 2026-09-20: desktop vitest 31/31 incl. 11 loopback protocol tests, mobile 29/29, live check against the production desktop app — heartbeat, backoff ladder, reconnect-within-TTL, expiry stop, bye both ways; R4 plumbing validated, on-LAN mDNS resolution deferred to Phase 5 with rationale — see [features/signaling.md](../features/signaling.md).)*
 
 ## Phase 5 — WebRTC Video Proof of Concept
 **Scope:** smallest media pipeline: MediaProjection → video source → `media` PC → desktop `<video>`. Conservative config: 720p/30fps/4–6 Mbps, H.264 HW with VP8 fallback. Includes basic `getStats` logging.
@@ -90,5 +90,5 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 ## Documentation produced along the way
 
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
-- Phase 3+: `features/pairing.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`
+- Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.

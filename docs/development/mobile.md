@@ -18,7 +18,8 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
-Verified on 2026-09-20 (Phase 3): `assembleDebug` + 15 unit tests green (details: [features/pairing.md](../features/pairing.md)); live QR scan on a real device — pending.
+Verified on 2026-09-20 (Phase 4): `assembleDebug` + 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
+Previously (Phase 3): real-device QR scan verified — details in [features/pairing.md](../features/pairing.md).
 
 ## Pinned toolchain (gradle/libs.versions.toml)
 
