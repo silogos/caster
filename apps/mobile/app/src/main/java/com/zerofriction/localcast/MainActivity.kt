@@ -10,7 +10,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.zerofriction.localcast.ui.home.HomeScreen
 import com.zerofriction.localcast.ui.pairing.ScanScreen
-import com.zerofriction.localcast.ui.settings.SettingsScreen
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 class MainActivity : ComponentActivity() {
@@ -20,17 +19,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             LocalCastTheme {
-                // Three screens so far — plain state-based navigation, no nav library
+                // Two screens — plain state-based navigation, no nav library
                 // (docs/development/mobile.md: add libraries when the need is real).
+                // Phase10: the home page itself carries the cast settings.
                 var showScan by rememberSaveable { mutableStateOf(false) }
-                var showSettings by rememberSaveable { mutableStateOf(false) }
-                when {
-                    showScan -> ScanScreen(onBackToHome = { showScan = false })
-                    showSettings -> SettingsScreen(onBack = { showSettings = false })
-                    else -> HomeScreen(
-                        onStartCast = { showScan = true },
-                        onOpenSettings = { showSettings = true },
-                    )
+                if (showScan) {
+                    ScanScreen(onBackToHome = { showScan = false })
+                } else {
+                    HomeScreen(onStartCast = { showScan = true })
                 }
             }
         }

@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phases 1–10 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md); the mic on its own `mic` PC since Phase 8, [features/microphone.md](../features/microphone.md); the configuration-owner settings screen + persistence since Phase 10, [features/cast-settings.md](../features/cast-settings.md)).
+Status: Phases 1–10 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md); the mic on its own `mic` PC since Phase 8, [features/microphone.md](../features/microphone.md); the configuration-owner settings UI (home page) + persistence since Phase 10, [features/cast-settings.md](../features/cast-settings.md)).
 
 ## Role
 
@@ -25,7 +25,7 @@ Small, explicit modules — no giant `CastManager` (see AGENTS.md):
 
 ```text
 com.zerofriction.localcast/
-├── ui/            # Compose screens: Home (status + cast), Scan (pairing), Settings (cast settings, Phase10)
+├── ui/            # Compose screens: Home (header: connection state + cast button; content: cast settings, Phase10), Scan (pairing)
 ├── pairing/       # QR scan, payload parsing, pairing state machine
 ├── signaling/     # WebSocket client, protocol envelope, message types
 ├── webrtc/        # PeerConnectionFactory setup, the two PeerConnections, track wiring

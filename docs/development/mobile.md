@@ -18,7 +18,7 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
-Verified 2026-09-20 (Phase 10): **83 unit tests** green (21 new: quality presets/labels, settings codec, settings ViewModel, frame-size stats extraction). `assembleDebug` green; the settings screen and its persistence exercised on an API 34 emulator (screen render, preset pick, manual-bitrate floor derivation, restore after force-stop, toggle persistence) — the on-device live-cast check remains ([features/cast-settings.md](../features/cast-settings.md)).
+Verified 2026-09-20 (Phase 10): **83 unit tests** green (21 new: quality presets/labels, settings codec, settings ViewModel, frame-size stats extraction). `assembleDebug` green; the settings UI (home page) and its persistence exercised on an API 34 emulator (screen render, preset pick, manual-bitrate floor derivation, restore after force-stop, toggle persistence) — the on-device live-cast check remains ([features/cast-settings.md](../features/cast-settings.md)).
 Verified 2026-09-20 (Phase 6): `assembleDebug` + **46 unit tests** green (3 new: pairing handover semantics). Live on device (Lenovo TB321FU / Android 16): camera-scan pairing → foreground service with the new notification; projection-revoked ends handled cleanly. The full lifecycle matrix is tabulated in [features/cast-session.md](../features/cast-session.md) and is the remaining hands-on item.
 Verified on 2026-09-20 (Phase 5): 43 unit tests green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end — details in [features/screen-capture.md](../features/screen-capture.md).
 Previously (Phase 4): 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
@@ -52,7 +52,7 @@ apps/mobile/
 ├── settings.gradle.kts / build.gradle.kts / gradle.properties
 ├── gradle/libs.versions.toml        # every pinned version lives here
 └── app/src/main/java/com/zerofriction/localcast/
-    ├── MainActivity.kt              # single activity; Home ⇄ Scan ⇄ Settings navigation (state-based, no nav lib yet)
+    ├── MainActivity.kt              # single activity; Home ⇄ Scan navigation (state-based, no nav lib). Phase10: the home page carries the cast settings.
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)
     ├── config/                      # CastConfig + CastSettings: presets, JSON codec, persistence (Phases 5/10)
@@ -60,7 +60,8 @@ apps/mobile/
     ├── webrtc/                      # MediaCastSession (media PC), SdpCodecOrderer, IceCandidateJson, SenderStats (Phase 5)
     ├── service/                     # CastService — mediaProjection FGS owning the whole session (Phase 6)
     └── ui/
-        ├── home/                    # HomeScreen + HomeViewModel (renders CastService.state)
+        ├── home/                    # HomeScreen (header: cast state + button; content: settings + live controls) + HomeViewModel
+        ├── settings/                # CastSettingsPanel (the home page's settings sections) + SettingsViewModel (Phase 10)
         ├── pairing/                 # ScanScreen + ScanViewModel + QrCamera (CameraX + ML Kit)
         └── theme/                   # dark-first Material 3 theme
 ```
