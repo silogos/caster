@@ -1,0 +1,30 @@
+{
+  "name": "desktop",
+  "productName": "Zero-Friction Local Cast",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Zero-Friction Local Cast desktop receiver (Electron). Phase 2 scaffold.",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.16.0",
+    "@types/pngjs": "6.0.5",
+    "@types/qrcode": "1.5.6",
+    "electron": "44.4.3",
+    "electron-vite": "5.0.0",
+    "jsqr": "1.4.0",
+    "pngjs": "7.0.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "5.0.1"
+  }
+}

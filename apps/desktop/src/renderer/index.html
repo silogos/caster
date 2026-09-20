@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Zero-Friction Local Cast</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self'"
+    />
+    <link rel="stylesheet" href="./src/renderer.css" />
+  </head>
+  <body>
+    <main class="stage">
+      <h1 class="title">Zero-Friction Local Cast</h1>
+      <p class="status" id="status">Waiting for mobile device…</p>
+      <div class="qr-card" id="qr-card" hidden>
+        <img id="qr" alt="Pairing QR code" />
+      </div>
+      <p class="error" id="error" hidden></p>
+      <p class="hint">Scan with your Android device — test QR (static data; real pairing arrives in Phase 3)</p>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
