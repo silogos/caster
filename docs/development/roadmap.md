@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 10 implemented — awaiting review (the on-device live-cast check — settings visibly changing the sent stream in stats — is the remaining acceptance item; see [features/cast-settings.md](../features/cast-settings.md)).**
+Current status: **Phase 11 implemented — awaiting review (the on-device items — profile switches visible in sender stats, and a live thermal-ladder read — remain; see [features/thermal.md](../features/thermal.md) and [features/cast-settings.md](../features/cast-settings.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -56,7 +56,7 @@ Current status: **Phase 10 implemented — awaiting review (the on-device live-c
 
 ## Phase 11 — Thermal Profiles
 **Scope:** profile definitions ([thermal.md](../architecture/thermal.md)); profile → sender parameters; thermal status monitoring + diagnostics logging; **read-only** thermal state (no auto-degradation yet).
-**Accept:** profiles switch measurably distinct encoder configs; thermal ladder visible in diagnostics; docs updated with any tuned values. Commit `feat: add thermal profiles`.
+**Accept:** profiles switch measurably distinct encoder configs; thermal ladder visible in diagnostics; docs updated with any tuned values. Commit `feat: add thermal profiles`. *(Implemented 2026-09-20: the Phase10 presets became the thermal vocabulary — `light`→`cool`, `smooth`→`performance`, values unchanged (thermal.md's hypotheses, tuned to the shipped windows); the profile→sender-parameters chain is the existing preset→CastConfig→capturer/sender path, now covered by a distinctness test. New `thermal` module: pure `ThermalMonitor` (ladder state machine, JVM-tested incl. a mirror guard against `PowerManager`'s own constants) + `ThermalSource` (platform listener API29, headroom API30+, battery temperature, 10 s samples). Read-only everywhere: the "This cast" section shows a plain-words thermal line, transitions + headroom + battery go to logcat (Phase15's trail); nothing changes cast parameters. Stored settings v1 documents migrate via the codec (v2, legacy label translation). Mobile JVM 94/94, `assembleDebug` green. Remaining: on-device profile-switch stats check + a live thermal-ladder read — [features/thermal.md](../features/thermal.md).)*
 
 ## Phase 12 — Auto Quality / Adaptive Streaming
 **Scope (only after the system is stable):** stats-driven adaptation with hysteresis and user notification; inputs: dropped frames, RTT, packet loss, encoder stress, thermal status.

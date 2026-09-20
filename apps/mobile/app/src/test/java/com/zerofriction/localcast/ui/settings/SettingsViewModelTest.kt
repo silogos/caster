@@ -58,13 +58,13 @@ class SettingsViewModelTest {
     fun `switching back to auto restores the chosen preset's window`() {
         val vm = viewModel()
         vm.setManualBitrateMax(9_000_000)
-        vm.selectProfile(QualityProfile.LIGHT)
+        vm.selectProfile(QualityProfile.COOL)
         vm.setManualBitrateMax(9_000_000)
         vm.setBitrateAuto(true)
         val settings = vm.settings.value
         assertEquals(true, settings.bitrateAuto)
-        assertEquals(QualityProfile.LIGHT.bitrateMinBps, settings.bitrateMinBps)
-        assertEquals(QualityProfile.LIGHT.bitrateMaxBps, settings.bitrateMaxBps)
+        assertEquals(QualityProfile.COOL.bitrateMinBps, settings.bitrateMinBps)
+        assertEquals(QualityProfile.COOL.bitrateMaxBps, settings.bitrateMaxBps)
     }
 
     @Test
@@ -76,8 +76,17 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `audio toggles change the next cast's defaults`() {
+    fun `picking the cool thermal profile applies the low-heat send targets`() {
         val vm = viewModel()
+        vm.selectProfile(QualityProfile.COOL)
+        val settings = vm.settings.value
+        assertEquals(QualityProfile.COOL.longEdgePx, settings.longEdgePx)
+        assertEquals(QualityProfile.COOL.fps, settings.fps)
+        assertEquals("cool", settings.toConfig().profile)
+    }
+
+    @Test
+    fun `audio toggles change the next cast's defaults`() {        val vm = viewModel()
         vm.setGameAudio(false)
         vm.setMic(true)
         assertEquals(false, vm.settings.value.gameAudio)
