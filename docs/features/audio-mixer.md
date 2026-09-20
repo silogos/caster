@@ -19,7 +19,7 @@ Each remote stream becomes a `MediaStreamAudioSourceNode` → its **own** `GainN
 ### How streams reach the graph (the changes Phase9 made to Phase7/8 plumbing)
 
 - **The `<video>` element is now muted** — deliberately, reversing Phase7's "NOT muted" note. Since Phase7 the element played the phone's game audio through its speakers; now that audio is routed through the mixer instead, and an unmuted element would play the game audio **twice** (once through the graph, once through the element). The element renders video only. The muted element also satisfies autoplay under any gesture policy.
-- **The Phase8 `<audio>` element is gone.** The mic stream's `MediaStreamAudioSourceNode` is its sink — Web Audio alone keeps a MediaStream flowing; no element is needed. This closes the Phase8 TODO of "separate elements so the streams stay independent": the graph is the independence now.
+- **A muted `<audio>` element still holds the mic stream** — as a *keep-alive*, not a playback path (found live during the Phase9 listen: with the window minimized, the mic went silent while game audio kept playing — Chromium stops pulling a `MediaStream` that no media element holds once the page is hidden; the game stream was safe because the `<video>` holds it). The element is muted so it adds no second playback; the audible path is the mixer's Web Audio graph. This closes the Phase8 TODO of "separate elements so the streams stay independent": the graph is the independence now.
 - The `ReceiverSession` sink interfaces are unchanged (`show`/`clear`) — the sinks' *implementations* changed from elements to mixer channels.
 
 ### Levels and persistence
@@ -49,6 +49,7 @@ The mixer panel (the StatusView's volume controls — desktop.md) sits below the
 - Initial state: mixer panel present and hidden while waiting for a phone, both sliders at 100 (unity defaults), mute buttons unmuted, `<video>` muted, the Phase8 `<audio>` element gone, nothing stored.
 - Driving the real controls (DOM events): game slider → 40 % stored `{"v":1,"game":{"volume":0.4,…}}`; mic mute click → button flips to "Unmute", stored `mic.muted: true` — the two channels' state changed independently.
 - **Persistence across launches:** app killed and relaunched — game slider restored to 40, mic button restored to "Unmute" from `localStorage` (stored levels cleared afterwards).
+- **Found live during the user's listen and fixed:** with the window minimized, the mic went silent while game audio kept playing — Chromium stops pulling a `MediaStream` with no attached media element on a hidden page. Fix: the muted keep-alive `<audio>` element (above). The mic's audibility across a minimize is part of the remaining listen.
 
 **Remaining acceptance items (live cast with the phone + the user's ears):**
 

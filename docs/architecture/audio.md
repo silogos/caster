@@ -56,7 +56,7 @@ Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.
 
 Since Phase9 the graph above is the receiver's only audio path (implementation + verification: [features/audio-mixer.md](../features/audio-mixer.md)):
 
-- The receiver `<video>` element is **muted** — it renders video only; its audio track plays through the mixer's graph (an unmuted element would play the game audio twice). The Phase8 mic `<audio>` element is gone — the mic stream's `MediaStreamAudioSourceNode` is its sink.
+- The receiver `<video>` element is **muted** — it renders video only; its audio track plays through the mixer's graph (an unmuted element would play the game audio twice). A muted `<audio>` element still holds the mic stream as a **keep-alive**: Chromium stops pulling a `MediaStream` held only by Web Audio once the page is hidden (found live — minimized window, mic silent, game audio fine), so every received stream stays attached to a media element while the graph remains the sole audible path.
 - Independent volume per `GainNode`; persisted levels restored on launch (renderer `localStorage`).
 - **No further processing** (no EQ, compression, echo cancellation on the receiver) unless a measured need appears. The desktop renders and plays; it does not re-mix into one track or re-encode.
 - Chromium resamples each remote stream into the output clock; per-stream pull means there is no drift-accumulation problem between the two streams in practice (predicted here; validated by ear + measurement in the Phase9/15 listen — [features/audio-mixer.md](../features/audio-mixer.md)).

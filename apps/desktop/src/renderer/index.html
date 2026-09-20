@@ -24,6 +24,13 @@
            element unmuted would play the game audio twice. The muted
            element also satisfies autoplay under any gesture policy. -->
       <video class="video" id="video" hidden autoplay playsinline muted></video>
+      <!-- The mic stream's keep-alive element (found live in Phase9): Chromium
+           stops pulling a MediaStream that no media element holds once the
+           window is hidden — minimized, the mic went silent while game audio
+           (held by the <video> above) kept playing. Muted on purpose: the
+           audible path is the mixer's Web Audio graph; this element only
+           holds the stream so it survives minimization/occlusion. -->
+      <audio id="mic-audio" hidden autoplay muted></audio>
       <!-- Phase9's mixer (audio.md): the receiver's one allowed audio control
            — independent volume/mute per stream (game audio, microphone).
            Shown only while receiving; levels persist across launches. -->

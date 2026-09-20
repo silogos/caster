@@ -9,6 +9,7 @@ const errorEl = document.getElementById('error') as HTMLParagraphElement
 const hintEl = document.getElementById('hint') as HTMLParagraphElement
 const videoEl = document.getElementById('video') as HTMLVideoElement
 const mixerEl = document.getElementById('mixer') as HTMLDivElement
+const micAudioEl = document.getElementById('mic-audio') as HTMLAudioElement
 const regenerateEl = document.getElementById('regenerate') as HTMLButtonElement
 
 const WAITING_MESSAGE = 'Waiting for mobile device…'
@@ -74,14 +75,20 @@ const receiver = new ReceiverSession({
       regenerateEl.hidden = false
     }
   },
-  // The mic pc's stream (Phase8) now lands in the mixer too (Phase9) — no
-  // <audio> element anymore: the Web Audio source node is the sink, and the
-  // mic gets its own gain node, so the two channels never touch.
+  // The mic pc's stream (Phase8) lands in the mixer (Phase9) — its audible
+  // path is the Web Audio graph. It is ALSO held on a muted <audio> element:
+  // not for playback, but as a keep-alive — Chromium stops pulling a
+  // MediaStream with no media element when the window is hidden (found live:
+  // minimized window → mic silent, game audio fine — the <video> holds it).
   micSink: {
     show: (stream) => {
+      micAudioEl.srcObject = stream as MediaStream
+      micAudioEl.muted = true
+      micAudioEl.play().catch((error) => log('warn', 'mic keep-alive play was blocked', { error: String(error) }))
       mixer.attachStream('mic', stream)
     },
     clear: () => {
+      micAudioEl.srcObject = null
       mixer.detachStream('mic')
     }
   },
