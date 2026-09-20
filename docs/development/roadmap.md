@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 1 complete — awaiting review.**
+Current status: **Phase 2 complete — awaiting review.**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -20,7 +20,7 @@ Current status: **Phase 1 complete — awaiting review.**
 ## Phase 2 — Initialize Desktop Application
 **Scope:** `/apps/desktop`: electron-vite + TypeScript scaffold; dark UI showing app title, "Waiting for mobile device…", a QR rendered from **static test data**; main/renderer split per [desktop.md](../architecture/desktop.md); `development/desktop.md`; root package scripts wired.
 **Not in scope:** real pairing data, WebSocket server, WebRTC.
-**Accept:** builds, launches, QR renders and is scannable with any QR reader; window behaves correctly; commit `chore: initialize desktop app`.
+**Accept:** builds, launches, QR renders and is scannable with any QR reader; window behaves correctly; commit `chore: initialize desktop app`. *(Verified 2026-09-20: typecheck + 3 unit tests green; production build launches, dark pairing screen renders; QR decoded both from the generated data URL and from the running window's screenshot — [desktop.md](desktop.md).)*
 
 ## Phase 3 — Pairing Protocol
 **Scope:** QR payload v1 generation + display on desktop ([pairing.md](../architecture/pairing.md)); camera scanning + payload parsing on mobile; WebSocket connect; `hello/challenge/auth/auth-ok` handshake (HMAC); session expiry/regeneration. Test handshake only — no media.
