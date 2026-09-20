@@ -11,12 +11,23 @@
   </head>
   <body>
     <main class="stage">
-      <h1 class="title">Zero-Friction Local Cast</h1>
-      <p class="status" id="status">Waiting for mobile device…</p>
+      <!-- Phase13 pairing hero: the QR is the visual lead; the heading and
+           subline swap per state (heroView in pairingHero.ts — pure and
+           unit-tested). The brand line stays small so the QR dominates. -->
+      <p class="title">Zero-Friction Local Cast</p>
+      <div class="hero-icon" id="icon-check" hidden aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M9 16.17 L4.83 12 l-1.42 1.41 L9 19 L21 7 l-1.41-1.41z" /></svg>
+      </div>
+      <div class="hero-icon" id="icon-warning" hidden aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" /></svg>
+      </div>
       <div class="qr-card" id="qr-card" hidden>
         <img id="qr" alt="Pairing QR code" />
       </div>
-      <p class="error" id="error" hidden></p>
+      <h2 class="hero-heading" id="hero-heading">Scan with your Android device</h2>
+      <p class="status" id="status">Waiting for mobile device…</p>
+      <p class="hint" id="hint">The code is valid for 10 minutes and refreshes automatically.</p>
+      <button class="button" id="regenerate" type="button">New QR code</button>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
            Muted — since Phase9 the element renders video only; its audio

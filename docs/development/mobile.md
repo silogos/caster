@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–11 (status: **Phase11 implemented — the on-device checks (profile switches in sender stats, live thermal ladder) remain; see [features/thermal.md](../features/thermal.md)**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–13 (status: **Phase13 implemented — the polished scan flow's real-device walk remains; see [features/pairing.md](../features/pairing.md)**).
 
 ## Prerequisites
 
@@ -18,6 +18,7 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
+Verified 2026-09-20 (Phase13): **126 unit tests** green (4 new: ScanViewModel behaviors — instant "Desktop found" `Connecting` after a scan, in-flight/connected scans ignored, failed pairing accepts a fresh scan, handover/disconnect semantics). `assembleDebug` green; the polished scan-flow walk on the real device is the remaining acceptance item ([features/pairing.md](../features/pairing.md)).
 Verified 2026-09-20 (Phase11): **94 unit tests** green (11 new: thermal ladder state machine + the `PowerManager` constant-mirror guard, preset relabels + v1→v2 settings migration, encoder-target distinctness). `assembleDebug` green; the thermal wiring (ladder listener, headroom, battery samples, home-screen read-out) is exercised on device in the remaining acceptance items ([features/thermal.md](../features/thermal.md)).
 Verified 2026-09-20 (Phase 10): **83 unit tests** green (21 new: quality presets/labels, settings codec, settings ViewModel, frame-size stats extraction). `assembleDebug` green; the settings UI (home page) and its persistence exercised on an API 34 emulator (screen render, preset pick, manual-bitrate floor derivation, restore after force-stop, toggle persistence) — the on-device live-cast check remains ([features/cast-settings.md](../features/cast-settings.md)).
 Verified 2026-09-20 (Phase 6): `assembleDebug` + **46 unit tests** green (3 new: pairing handover semantics). Live on device (Lenovo TB321FU / Android 16): camera-scan pairing → foreground service with the new notification; projection-revoked ends handled cleanly. The full lifecycle matrix is tabulated in [features/cast-session.md](../features/cast-session.md) and is the remaining hands-on item.
@@ -34,7 +35,8 @@ Previously (Phase 3): real-device QR scan verified — details in [features/pair
 | Kotlin | 2.1.20 | With the Compose compiler + serialization plugins (same version). |
 | compileSdk / targetSdk | 36 | Android 16. |
 | minSdk | 29 | Android 10 floor ([ADR-001](../decisions/ADR-001-tech-stack.md)). |
-| Compose BOM | 2024.12.01 | ui, material3, tooling via the BOM. |
+| Compose BOM | 2024.12.01 | ui, material3, icons-core, tooling via the BOM. |
+| material-icons-core | (BOM) | The small core icon set (CheckCircle, Warning, Info) — pairing-screen states (Phase13). |
 | activity-compose | 1.9.3 | Edge-to-edge + setContent + permission result launcher. |
 | core-ktx / lifecycle | 1.15.0 / 2.8.7 | runtime, runtime-compose, viewmodel-compose. |
 | CameraX | 1.4.2 | core, camera2, lifecycle, view — QR scan preview/analysis (Phase 3). |

@@ -22,6 +22,7 @@ From the repo root: `npm run desktop:dev` / `desktop:build` / `desktop:start` / 
 
 Launch with CDP for scripted UI checks: `npx electron out/main/index.js --remote-debugging-port=9222`, then `node scripts/read-qr-payload.mjs 9222` to extract the live QR payload.
 
+Verified on 2026-09-20 (Phase13): typecheck green, vitest 77/77 green (3 new `pairingHero` view-model tests); production build verified live via CDP — waiting hero (QR decoded from the screen), a scripted phone completed the real handshake → paired check card, `bye` → fresh QR hero ([features/pairing.md](../features/pairing.md)).
 Verified on 2026-09-20 (Phase 4): typecheck green, vitest 31/31 green — 11 new loopback protocol tests (full message set, heartbeat, bye both ways, reconnect-within-TTL, expiry); production build verified live via CDP (details: [features/signaling.md](../features/signaling.md)).
 Previously (Phase 3): real-device pairing scan verified — details in [features/pairing.md](../features/pairing.md).
 
@@ -72,7 +73,7 @@ apps/desktop/
 - electron-vite + TypeScript scaffold with the main/preload/renderer split per [desktop.md](../architecture/desktop.md); resource trims from the Phase 2 RAM discussion (spellcheck off, renderer sandbox on, strict CSP, devtools only in dev, single window, no renderer framework).
 - Real pairing (Phase 3): session generation + expiry/regeneration sweep, WebSocket handshake server with HMAC challenge–response, rate limiting, busy/bye semantics, multi-interface LAN IP advertisement. Details: [features/pairing.md](../features/pairing.md).
 - Typed IPC: `pairing:get-session` (invoke), `pairing:regenerate` (invoke), `pairing:session-updated` + `pairing:mobile-state` (pushes). Channel names live in `src/shared/ipc.ts`.
-- Renderer: QR + "Waiting for mobile device…", "Connected to \<phone\>" on auth-ok, Regenerate button, cast `<video>` view, and (Phase9) the mixer — independent volume/mute per audio stream, levels persisted in `localStorage`. Since the review-time restructure: while casting the video fills the window, a hover overlay carries the status + a Settings trigger, and the mixer lives in the modal it opens; the window reshapes to the stream's aspect (cast start + rotation; pure geometry in `src/main/windowGeometry.ts`). Details: [features/audio-mixer.md](../features/audio-mixer.md).
+- Renderer: Phase13 QR hero ("Scan with your Android device" + validity hint; paired → check card + "Start casting from your phone."; session error → warning card; the state swaps are the pure, tested `pairingHero.ts` view model), cast `<video>` view, and (Phase9) the mixer — independent volume/mute per audio stream, levels persisted in `localStorage`. Since the review-time restructure: while casting the video fills the window, a hover overlay carries the status + a Settings trigger, and the mixer lives in the modal it opens; the window reshapes to the stream's aspect (cast start + rotation; pure geometry in `src/main/windowGeometry.ts`). Details: [features/audio-mixer.md](../features/audio-mixer.md).
 
 ## Not implemented yet (by design)
 
