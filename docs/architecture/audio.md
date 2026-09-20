@@ -1,6 +1,6 @@
 # Audio Architecture
 
-Status: game audio **implemented in Phase7** and mic **in Phase 8** (findings: [features/game-audio.md](../features/game-audio.md), [features/microphone.md](../features/microphone.md)); desktop mixer lands in Phase 9.
+Status: game audio **implemented in Phase7**, mic **in Phase 8**, desktop mixer **in Phase 9** (findings: [features/game-audio.md](../features/game-audio.md), [features/microphone.md](../features/microphone.md), [features/audio-mixer.md](../features/audio-mixer.md)).
 
 ## Product rule
 
@@ -54,11 +54,12 @@ Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.
 "mic"   PC ─▶ mic MediaStream     ─▶ MediaStreamAudioSourceNode ─▶ GainNode ─┘
 ```
 
-Until Phase9 wires this graph, the game-audio track plays directly through the receiver `<video>` element (Phase7 verified its markup must **not** be muted — a Phase5 autoplay leftover silently ate all cast audio until found live), and the mic track plays through its own separate `<audio>` element (Phase8) — separate elements on purpose, so the two streams stay independent at the receiver too.
+Since Phase9 the graph above is the receiver's only audio path (implementation + verification: [features/audio-mixer.md](../features/audio-mixer.md)):
 
-- Independent volume per `GainNode`; persisted levels restored on launch.
+- The receiver `<video>` element is **muted** — it renders video only; its audio track plays through the mixer's graph (an unmuted element would play the game audio twice). The Phase8 mic `<audio>` element is gone — the mic stream's `MediaStreamAudioSourceNode` is its sink.
+- Independent volume per `GainNode`; persisted levels restored on launch (renderer `localStorage`).
 - **No further processing** (no EQ, compression, echo cancellation on the receiver) unless a measured need appears. The desktop renders and plays; it does not re-mix into one track or re-encode.
-- Chromium resamples each remote stream into the output clock; per-stream pull means there is no drift-accumulation problem between the two streams in practice (validated by ear + measurement in Phase 9).
+- Chromium resamples each remote stream into the output clock; per-stream pull means there is no drift-accumulation problem between the two streams in practice (predicted here; validated by ear + measurement in the Phase9/15 listen — [features/audio-mixer.md](../features/audio-mixer.md)).
 
 ## Known limitations
 
