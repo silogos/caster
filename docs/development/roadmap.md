@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 4 complete — awaiting review.**
+Current status: **Phase 5 complete — awaiting review.**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -30,9 +30,9 @@ Current status: **Phase 4 complete — awaiting review.**
 **Scope:** full envelope + message set (`sdp-*`, `ice`, `ping/pong`, `bye`, `error`) per [webrtc.md](../architecture/webrtc.md); connection lifecycle, heartbeat, disconnect/reconnect rules; version negotiation. Verified with **loopback protocol tests** — two endpoints exchanging recorded SDP blobs, no real media.
 **Accept:** protocol tests pass; reconnect-within-TTL and expiry paths exercised; mDNS/host-candidate behavior on LAN validated (risk R4). Commit `feat: add local signaling`. *(Implemented 2026-09-20: desktop vitest 31/31 incl. 11 loopback protocol tests, mobile 29/29, live check against the production desktop app — heartbeat, backoff ladder, reconnect-within-TTL, expiry stop, bye both ways; R4 plumbing validated, on-LAN mDNS resolution deferred to Phase 5 with rationale — see [features/signaling.md](../features/signaling.md).)*
 
-## Phase 5 — WebRTC Video Proof of Concept
+## Phase 5 — WebRTC Video Proof of Concept ✅
 **Scope:** smallest media pipeline: MediaProjection → video source → `media` PC → desktop `<video>`. Conservative config: 720p/30fps/4–6 Mbps, H.264 HW with VP8 fallback. Includes basic `getStats` logging.
-**Accept (measured, on device):** connection succeeds; latency eyeballed/measured acceptable; quality acceptable; survives rotation; documents behavior when backgrounded. Findings written into `features/screen-capture.md`. Commit `feat: add webrtc video`.
+**Accept (measured, on device):** connection succeeds; latency eyeballed/measured acceptable; quality acceptable; survives rotation; documents behavior when backgrounded. Findings written into `features/screen-capture.md`. Commit `feat: add webrtc video`. *(Implemented 2026-09-20: desktop vitest 48/48, mobile 43/43, and verified live on device (Lenovo TB321FU / Android 16 → macOS) — camera-scanned QR → real cast of YouTube/PUBG at ~4–6 Mbps, RTT 5–10 ms, ≈0.3% decoder drops; backgrounding via FGS verified. Honest gaps: glass-to-glass latency not formally measured; rotation validated only partially (settings-forced rotation doesn't move the sensor libwebrtc keys off) — both flagged for Phase 6/15. A minimal CastService FGS shipped *early* because Android 14+ requires it before projection — rationale in [features/screen-capture.md](../features/screen-capture.md).)*
 
 ## Phase 6 — Foreground Service + Stable Screen Capture
 **Scope:** move capture into `CastService` (FGS type `mediaProjection`); Android 14+ ordering; notification; full lifecycle matrix — screen locked, app backgrounded, rotation, service stopped, permission revoked (`onStop` callback), network loss, desktop closed; resource release.

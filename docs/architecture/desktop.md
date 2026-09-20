@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phase 0 (planned; the app is initialized in Phase 2).
+Status: Phases 2–5 implemented (pairing, signaling, and the renderer's `ReceiverSession` + video since Phase 5 — [features/screen-capture.md](../features/screen-capture.md)).
 
 ## Role
 
