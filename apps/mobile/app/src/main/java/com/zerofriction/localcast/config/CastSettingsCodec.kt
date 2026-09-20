@@ -11,17 +11,22 @@ import kotlinx.serialization.json.Json
  * plain-JVM unit-testable; [CastSettingsStore] is a thin wrapper. Follows the
  * repo's storage convention (same as the desktop mixer's `localStorage`): any
  * document this build can't fully validate degrades to defaults, logged by
- * the caller — a cast must never run on guessed values. v1 documents are
- * still accepted: the only v1→v2 change is the Phase11 preset relabels
- * ([LEGACY_PROFILE_LABELS]); every other v1 shape stays fully valid.
+ * the caller — a cast must never run on guessed values. Older documents are
+ * still accepted through the migration ladder: v1 → v2 was the Phase11 preset
+ * relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added `autoQuality` (Phase12)
+ * with the on default — every other shape stays fully valid.
  */
 object CastSettingsCodec {
 
     /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 2
+    const val VERSION = 3
 
-    /** The Phase10 format — accepted only through [LEGACY_PROFILE_LABELS]. */
+    /** The Phase10/11 formats — accepted through [LEGACY_PROFILE_LABELS]/[LEGACY_DEFAULT_AUTO_QUALITY]. */
     const val LEGACY_VERSION = 1
+    const val LEGACY_VERSION_2 = 2
+
+    /** Older documents predate the auto-quality switch — the shipped default applies. */
+    private const val LEGACY_DEFAULT_AUTO_QUALITY = CastConfig.DEFAULT_AUTO_QUALITY
 
     /**
      * Phase11 preset relabels (`light`→`cool`, `smooth`→`performance`) —
@@ -50,6 +55,8 @@ object CastSettingsCodec {
         val bitrateMaxBps: Int,
         val gameAudio: Boolean,
         val mic: Boolean,
+        /** Absent in v1/v2 documents — the default applies (kotlinx fills defaults). */
+        val autoQuality: Boolean = LEGACY_DEFAULT_AUTO_QUALITY,
     )
 
     fun encode(settings: CastSettings): String = json.encodeToString(
@@ -63,6 +70,7 @@ object CastSettingsCodec {
             bitrateMaxBps = settings.bitrateMaxBps,
             gameAudio = settings.gameAudio,
             mic = settings.mic,
+            autoQuality = settings.autoQuality,
         ),
     )
 
@@ -75,7 +83,7 @@ object CastSettingsCodec {
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (stored.v != VERSION && stored.v != LEGACY_VERSION) return null
+        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2) return null
         // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
         val label = if (stored.v == LEGACY_VERSION) {
             LEGACY_PROFILE_LABELS[stored.profile] ?: stored.profile
@@ -96,6 +104,7 @@ object CastSettingsCodec {
             bitrateMaxBps = stored.bitrateMaxBps,
             gameAudio = stored.gameAudio,
             mic = stored.mic,
+            autoQuality = stored.autoQuality,
         )
     }
 }

@@ -17,16 +17,22 @@ import androidx.core.content.ContextCompat
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.MainActivity
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.adaptive.AdaptiveQualityController
+import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.config.CastConfig
+import com.zerofriction.localcast.config.PROFILE_CUSTOM
+import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.thermal.ThermalMonitor
 import com.zerofriction.localcast.thermal.ThermalSource
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.webrtc.MediaCastSession
 import com.zerofriction.localcast.webrtc.MicCastSession
+import com.zerofriction.localcast.webrtc.SenderSample
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +51,19 @@ sealed interface CastState {
     data class Casting(val desktopName: String) : CastState
     data class Failed(val message: String) : CastState
 }
+
+/**
+ * The auto-quality half of the cast's state (Phase12, thermal.md): what the
+ * running cast's quality is right now, what it may go back up to (the user's
+ * settings at cast start — the ceiling), and the last transition (the
+ * "what happened" line the home/scan screens render). Blank state = no cast,
+ * or the user's switch turned auto quality off.
+ */
+data class AdaptiveUiState(
+    val current: QualityLevel? = null,
+    val ceiling: QualityLevel? = null,
+    val lastChange: AdaptiveQualityController.QualityChange? = null,
+)
 
 /**
  * Phase6 foreground service (type `mediaProjection`) owning the **whole cast
@@ -79,6 +98,7 @@ class CastService : Service() {
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
         private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
         private const val ACTION_TOGGLE_MIC = "com.zerofriction.localcast.service.TOGGLE_MIC"
+        private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
@@ -103,11 +123,20 @@ class CastService : Service() {
 
         /**
          * The thermal half (Phase11, thermal.md) — read-only diagnostics for
-         * the "This cast" section; resets to NONE between casts. Nothing in
-         * the app acts on it (no auto-degradation until Phase12).
+         * the "This cast" section; resets to NONE between casts. Phase12's
+         * auto quality reads it, but it changes no cast parameters itself.
          */
         private val _thermalState = MutableStateFlow(ThermalState())
         val thermalState: StateFlow<ThermalState> = _thermalState.asStateFlow()
+
+        /**
+         * The auto-quality half (Phase12, thermal.md): what the running cast's
+         * quality is right now, what it may go back up to (the user's settings
+         * at cast start), and the last transition (the "what happened" line).
+         * Blank state = no cast or the user's switch turned auto quality off.
+         */
+        private val _adaptiveState = MutableStateFlow(AdaptiveUiState())
+        val adaptiveState: StateFlow<AdaptiveUiState> = _adaptiveState.asStateFlow()
 
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
@@ -145,6 +174,11 @@ class CastService : Service() {
         fun requestToggleMic(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_MIC))
         }
+
+        /** The user puts the cast back at their own settings (auto quality is reversible). */
+        fun requestRestoreQuality(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_RESTORE_QUALITY))
+        }
     }
 
     /**
@@ -172,6 +206,12 @@ class CastService : Service() {
     /** Thermal monitoring (Phase11) — runs for exactly the cast's lifetime. */
     private var thermalSource: ThermalSource? = null
 
+    /** Auto quality (Phase12, thermal.md) — null when off (the user's switch) or without a cast. */
+    private var adaptive: AdaptiveQualityController? = null
+
+    /** The ceiling auto quality may climb back to — the user's settings at cast start. */
+    private var adaptiveCeiling: QualityLevel? = null
+
     /** Kept from [StartArgs] for the `session-info` resends on mic toggles. */
     private var config: CastConfig? = null
     private var physicalWidth: Int = 0
@@ -198,6 +238,10 @@ class CastService : Service() {
             }
             ACTION_TOGGLE_MIC -> {
                 toggleMic()
+                return START_NOT_STICKY
+            }
+            ACTION_RESTORE_QUALITY -> {
+                adaptive?.restore(System.currentTimeMillis())
                 return START_NOT_STICKY
             }
         }
@@ -241,10 +285,15 @@ class CastService : Service() {
             onGameAudioState = { gameAudioState ->
                 _gameAudioState.value = gameAudioState
             },
+            onVideoStats = { sample, _ -> feedAutoQuality(sample) },
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
         startThermalMonitoring()
+        // Auto quality rides the cast only when the user left it on (config
+        // module: the switch is a cast setting like any other — next-cast
+        // semantics, same as resolution/fps/bitrate).
+        if (args.config.autoQuality) startAutoQuality(args.config)
         // The mic rides along only when the config says so AND the runtime
         // permission is there (audio.md: off by default; denial is never
         // cast-fatal, the UI states the fact).
@@ -324,10 +373,9 @@ class CastService : Service() {
 
     /**
      * Thermal monitoring for the running cast (Phase11, thermal.md):
-     * read-only — the ladder is displayed on the home screen and logged
-     * (headroom + battery temperature at [ThermalSource.SAMPLE_INTERVAL_MS]),
-     * but nothing changes cast parameters because of it. That is Phase12's
-     * job, if ever.
+     * the ladder is displayed on the home screen and logged (headroom +
+     * battery temperature at [ThermalSource.SAMPLE_INTERVAL_MS]); Phase12's
+     * auto quality reads the ladder through [_thermalState] each stats tick.
      */
     private fun startThermalMonitoring() {
         val monitor = ThermalMonitor(
@@ -349,6 +397,109 @@ class CastService : Service() {
         thermalSource?.stop()
         thermalSource = null
         _thermalState.value = ThermalState()
+    }
+
+    /**
+     * Auto quality (Phase12, thermal.md): the pure policy machine gets every
+     * ~1 Hz sender sample (session thread) plus the latest thermal reading,
+     * and announces changes — each one applied live on the media session,
+     * mirrored into the desktop's display-only `session-info`, announced on
+     * the cast notification, and published for the "This cast" line.
+     */
+    private fun startAutoQuality(config: CastConfig) {
+        // The user's settings at cast start are the ceiling: auto quality
+        // never goes above what they chose (thermal.md principle 2).
+        val ceiling = QualityLevel(config.longEdgePx, config.fps, config.bitrateMinBps, config.bitrateMaxBps)
+        adaptiveCeiling = ceiling
+        adaptive = AdaptiveQualityController(ceiling = ceiling, onLevelChanged = { onQualityAdapted(it) })
+        _adaptiveState.value = AdaptiveUiState(current = ceiling, ceiling = ceiling)
+    }
+
+    /** The policy's stats input — called from the media session thread. */
+    private fun feedAutoQuality(sample: SenderSample) {
+        val controller = adaptive ?: return
+        controller.onTick(
+            System.currentTimeMillis(),
+            AdaptiveQualityController.StreamSample(
+                framesEncoded = sample.framesEncoded,
+                framesDropped = sample.framesDropped,
+                fractionLost = sample.fractionLost,
+                rttMs = sample.rttMs,
+            ),
+            _thermalState.value.status,
+        )
+    }
+
+    private fun onQualityAdapted(change: AdaptiveQualityController.QualityChange) {
+        Log.i(
+            TAG,
+            "adaptive quality: ${change.direction} (${change.reason}) — " +
+                "${describe(change.from)} → ${describe(change.to)}",
+        )
+        session?.changeQuality(change.to.longEdgePx, change.to.fps, change.to.bitrateMinBps, change.to.bitrateMaxBps)
+        // The summary follows the *live* targets: keep the per-cast config in
+        // step so sendSessionInfo describes what is actually being sent. The
+        // user's persisted settings are untouched — changes there are next-cast.
+        config = config?.copy(
+            profile = matchingProfile(change.to.longEdgePx, change.to.fps, change.to.bitrateMinBps, change.to.bitrateMaxBps)
+                ?.label ?: PROFILE_CUSTOM,
+            longEdgePx = change.to.longEdgePx,
+            fps = change.to.fps,
+            bitrateMinBps = change.to.bitrateMinBps,
+            bitrateMaxBps = change.to.bitrateMaxBps,
+        )
+        sendSessionInfo(mic = micSession !== null)
+        _adaptiveState.value = AdaptiveUiState(
+            current = change.to,
+            ceiling = adaptiveCeiling,
+            lastChange = change,
+        )
+        announceQualityChange(change)
+    }
+
+    /** One INFO line per change is the policy's announcement duty (thermal.md). */
+    private fun describe(level: QualityLevel): String =
+        matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)?.label
+            ?: "custom ${level.longEdgePx}px/${level.fps}fps"
+
+    /**
+     * The user-visible notification of a transition (acceptance: transitions
+     * are logged *and* user-visible): the ongoing cast notification updates
+     * its text — IMPORTANCE_LOW, so it never buzzes, it just tells.
+     */
+    private fun announceQualityChange(change: AdaptiveQualityController.QualityChange) {
+        val name = levelName(change.to)
+        val text = when {
+            change.direction == AdaptiveQualityController.Direction.DOWN &&
+                change.reason == AdaptiveQualityController.Reason.THERMAL ->
+                getString(R.string.adaptive_notification_lowered_thermal, name)
+
+            change.direction == AdaptiveQualityController.Direction.DOWN ->
+                getString(R.string.adaptive_notification_lowered_stream, name)
+
+            change.reason == AdaptiveQualityController.Reason.USER ->
+                getString(R.string.adaptive_notification_restored)
+
+            else -> getString(R.string.adaptive_notification_raised, name)
+        }
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(desktopName, text))
+    }
+
+    /** Localized profile name for a level — "your settings" for a tweaked top rung. */
+    private fun levelName(level: QualityLevel): String = when (
+        matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
+    ) {
+        QualityProfile.COOL -> getString(R.string.profile_cool)
+        QualityProfile.BALANCED -> getString(R.string.profile_balanced)
+        QualityProfile.PERFORMANCE -> getString(R.string.profile_performance)
+        QualityProfile.SHARP -> getString(R.string.profile_sharp)
+        null -> getString(R.string.adaptive_your_settings)
+    }
+
+    private fun stopAutoQuality() {
+        adaptive = null
+        adaptiveCeiling = null
+        _adaptiveState.value = AdaptiveUiState()
     }
 
     /**
@@ -400,6 +551,7 @@ class CastService : Service() {
         micSession?.stop()
         micSession = null
         stopThermalMonitoring()
+        stopAutoQuality()
         // The service owns the pairing connection now (Phase6): ending the
         // cast ends the pairing session too — `bye` invalidates it on the
         // desktop (fresh QR there), and the mobile must scan again to cast.
@@ -424,6 +576,7 @@ class CastService : Service() {
         micSession?.stop()
         micSession = null
         stopThermalMonitoring()
+        stopAutoQuality()
         signaling?.disconnect()
         signaling = null
         super.onDestroy()
@@ -437,7 +590,7 @@ class CastService : Service() {
         )
     }
 
-    private fun buildNotification(desktopName: String): Notification {
+    private fun buildNotification(desktopName: String, textOverride: String? = null): Notification {
         val openApp = PendingIntent.getActivity(
             this,
             0,
@@ -453,7 +606,7 @@ class CastService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_cast)
             .setContentTitle(getString(R.string.casting_to, desktopName))
-            .setContentText(getString(R.string.cast_notification_text))
+            .setContentText(textOverride ?: getString(R.string.cast_notification_text))
             .setOngoing(true)
             .setContentIntent(openApp)
             .addAction(0, getString(R.string.cast_notification_stop), stopCast)

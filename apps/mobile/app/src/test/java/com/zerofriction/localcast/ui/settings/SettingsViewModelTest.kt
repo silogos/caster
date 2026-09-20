@@ -86,11 +86,24 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `audio toggles change the next cast's defaults`() {        val vm = viewModel()
+    fun `audio toggles change the next cast's defaults`() {
+        val vm = viewModel()
         vm.setGameAudio(false)
         vm.setMic(true)
         assertEquals(false, vm.settings.value.gameAudio)
         assertEquals(true, vm.settings.value.mic)
+    }
+
+    @Test
+    fun `the auto-quality switch toggles and persists like any setting`() {
+        val vm = viewModel()
+        assertEquals(true, vm.settings.value.autoQuality)
+        vm.setAutoQuality(false)
+        assertEquals(false, vm.settings.value.autoQuality)
+        assertEquals(false, persisted.last().autoQuality)
+        // And a preset pick must not resurrect it (whole-value semantics apply to profile values).
+        vm.selectProfile(QualityProfile.PERFORMANCE)
+        assertEquals(false, vm.settings.value.autoQuality)
     }
 
     @Test

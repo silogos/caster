@@ -35,10 +35,11 @@ import kotlin.math.roundToInt
  * the callbacks (SettingsViewModel) and take effect on the next cast: the
  * cast-start path reads the store fresh.
  *
- * Sections: *Share screen* (profile, resolution, frame rate, bitrate) and
- * *Audio* (game sound + mic defaults for the next cast). The profile row is
- * the Phase11 thermal vocabulary (thermal.md): cool · balanced ·
- * performance (+ sharp, fidelity over thermals).
+ * Sections: *Share screen* (profile, resolution, frame rate, bitrate, and
+ * the Phase12 auto-quality switch) and *Audio* (game sound + mic defaults
+ * for the next cast). The profile row is the Phase11 thermal vocabulary
+ * (thermal.md): cool · balanced · performance (+ sharp, fidelity over
+ * thermals).
  */
 @Composable
 fun CastSettingsPanel(
@@ -50,6 +51,7 @@ fun CastSettingsPanel(
     onSetManualBitrateMax: (Int) -> Unit,
     onSetGameAudio: (Boolean) -> Unit,
     onSetMic: (Boolean) -> Unit,
+    onSetAutoQuality: (Boolean) -> Unit,
 ) {
     Column {
         SectionLabel(R.string.settings_sharescreen)
@@ -118,6 +120,20 @@ fun CastSettingsPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+
+        // Phase12 (thermal.md): auto quality — conservative step-downs with
+        // hysteresis, announced and reversible; off leaves the cast exactly
+        // at these settings. The hint states when it acts, not how it works.
+        ToggleRow(
+            label = stringResource(R.string.settings_auto_quality),
+            checked = settings.autoQuality,
+            onCheckedChange = onSetAutoQuality,
+        )
+        Text(
+            text = stringResource(R.string.settings_auto_quality_hint),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         SectionLabel(R.string.settings_audio)
         ToggleRow(

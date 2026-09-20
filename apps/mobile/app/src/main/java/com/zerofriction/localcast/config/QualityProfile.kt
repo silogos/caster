@@ -86,13 +86,19 @@ object CastSettingChoices {
  * the preset's name when the send targets match it exactly, "custom" the
  * moment the user tweaked anything beyond a preset.
  */
-fun profileLabelFor(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int): String {
-    val match = QualityProfile.entries.firstOrNull {
-        it.longEdgePx == longEdgePx && it.fps == fps &&
-            it.bitrateMinBps == bitrateMinBps && it.bitrateMaxBps == bitrateMaxBps
-    }
-    return match?.label ?: PROFILE_CUSTOM
-}
+fun profileLabelFor(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int): String =
+    matchingProfile(longEdgePx, fps, bitrateMinBps, bitrateMaxBps)?.label ?: PROFILE_CUSTOM
 
 /** The label for configs that match no preset ([profileLabelFor]). */
 const val PROFILE_CUSTOM = "custom"
+
+/**
+ * The preset whose send targets match exactly, or null for a tweaked config.
+ * The inverse of the preset→targets mapping — used for the display label and
+ * for naming an auto-quality level in user-facing text (Phase12).
+ */
+fun matchingProfile(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int): QualityProfile? =
+    QualityProfile.entries.firstOrNull {
+        it.longEdgePx == longEdgePx && it.fps == fps &&
+            it.bitrateMinBps == bitrateMinBps && it.bitrateMaxBps == bitrateMaxBps
+    }

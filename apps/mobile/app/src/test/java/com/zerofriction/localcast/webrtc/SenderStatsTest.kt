@@ -40,9 +40,32 @@ class SenderStatsTest {
                 frameHeight = 1280,
                 rttMs = 1L,
                 encoderImplementation = "OMX.qcom.video.encoder.avc",
+                fractionLost = null,
             ),
             sample,
         )
+    }
+
+    // ---- Phase12: the desktop receiver's own loss report ----
+
+    @Test
+    fun `extracts the video fractionLost from the remote receiver's report`() {
+        val sample = SenderStats.sampleVideoSend(
+            listOf(
+                mapOf("type" to "outbound-rtp", "kind" to "video", "bytesSent" to 750_000L),
+                mapOf("type" to "remote-inbound-rtp", "kind" to "video", "fractionLost" to 0.08),
+                mapOf("type" to "remote-inbound-rtp", "kind" to "audio", "fractionLost" to 0.99),
+            ),
+        )!!
+        assertEquals(0.08, sample.fractionLost!!, 1e-9)
+    }
+
+    @Test
+    fun `fractionLost is null while the desktop has not reported yet`() {
+        val sample = SenderStats.sampleVideoSend(
+            listOf(mapOf("type" to "outbound-rtp", "kind" to "video", "bytesSent" to 10L)),
+        )!!
+        assertNull(sample.fractionLost)
     }
 
     @Test

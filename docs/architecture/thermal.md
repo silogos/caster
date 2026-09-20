@@ -1,6 +1,6 @@
 # Thermal Strategy
 
-Status: Phase11 (profiles shipped as the settings presets; monitoring implemented, read-only; measurements in Phase 15).
+Status: Phase12 (profiles are the settings presets; monitoring is read-only diagnostics; auto quality — the conservative adaptation — is implemented; measurements in Phase 15).
 
 ## Principles
 
@@ -45,8 +45,15 @@ The `thermal` module's cadence: ladder changes are logged immediately (one INFO 
 
 ## How thermal data is used
 
-- **Phase11 (implemented):** read-only — the app displays thermal state in diagnostics (home screen "This cast" section + logcat) and logs it; profiles remain user-selected, and nothing in the app changes cast parameters because of thermal data.
-- **Phase 12 (only if the system is otherwise stable):** conservative adaptation with hysteresis — e.g., only step *down* one profile level after sustained `MODERATE`+ status (minutes, not seconds), notify the user, and never oscillate. Step back up only manually.
+- **Phase11:** read-only — the app displays thermal state in diagnostics (home screen "This cast" section + logcat) and logs it.
+- **Phase12 (implemented):** the `adaptive` module — a pure, JVM-tested policy machine (`AdaptiveQualityController`) driven by ~1 Hz sender stats *and* the thermal ladder, wired by `CastService`:
+
+  - **Step down** one rung of the preset ladder only after a *sustained* bad stretch: thermal `MODERATE`+ held ≥ 120 s ("minutes, not seconds"), or a struggling stream (dropped frames ≥ 5 %/tick, receiver loss ≥ 5 %, or RTT ≥ 100 ms) held ≥ 30 s. Any step also waits ≥ 90 s since the previous one — bad conditions cause a slow staircase, never a collapse. The ladder floor is `cool`.
+  - **Step up** only after ≥ 180 s of sustained clean stats — deliberately much longer than the way down (the asymmetry that makes oscillation impossible) — and never above the user's settings at cast start (the ceiling is their explicit choice, principle 2). Thermal step-downs do **not** recover automatically: the device got hot under these exact settings, so only the user puts it back ("Restore quality" in the "This cast" section). Stream-health step-downs recover automatically, one rung per hold.
+  - **Every transition is announced**: one INFO log line, an updated cast notification, a fresh display-only `session-info` (the desktop status line follows what is actually being sent), and a plain-words line in the "This cast" section.
+  - **The user can disable it**: the "Automatic quality" switch in the settings (persisted with the rest; off = the cast runs exactly at the user's settings).
+  - **Not an input:** measured fps below the target. Screen-content frame rate follows the game's own pacing (heat table above) — a 30 fps game under a 60 fps profile is a quiet encoder, not a struggling one; acting on it would punish the wrong thing. Dropped frames is the encoder-stress signal instead.
+  - Mechanics: a step applies live without renegotiation (`changeQuality` — capture format reconfig + sender bitrate window). Values are starting hypotheses, re-tuned from Phase 15 measurements (see [features/adaptive-quality.md](../features/adaptive-quality.md)).
 - Phase 15 defines the measurement protocol: fixed-duration casts per profile on real hardware, logging temperature ladder, battery drain, FPS stability, and dropped frames.
 
 ## Constraints & limitations

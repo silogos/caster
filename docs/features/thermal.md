@@ -42,5 +42,5 @@ The settings document is now v2; v1 documents (Phase10 shape) decode through an 
 - Thermal behavior is device-specific (SoC, thermal mass, case, ambient); the profiles are tuned hypotheses, re-tuned only with Phase15 measurements on real hardware (thermal.md).
 - The OS may throttle the game itself regardless of the cast; the read-out reports the device, not attribution.
 - Headroom is API30+ only — on the API29 floor the log line carries `n/a` for it.
-- The UI advice lines are suggestions; the app never acts on thermal data itself (auto-degradation is Phase12, deliberately not now).
+- The UI advice lines are suggestions for the *manual* path; the app acts on thermal data only through Phase12's auto quality ([features/adaptive-quality.md](adaptive-quality.md)) — conservative, announced, and switchable off.
 - Screen-content frame rate still follows game frame pacing — `performance` cannot conjure frames the game doesn't render.

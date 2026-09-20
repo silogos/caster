@@ -90,6 +90,11 @@ class SettingsViewModel(
         update { it.copy(mic = on) }
     }
 
+    /** Phase12 (thermal.md): the auto-quality switch — off means the cast runs exactly at the user's settings. */
+    fun setAutoQuality(on: Boolean) {
+        update { it.copy(autoQuality = on) }
+    }
+
     private fun manualMinFor(maxBps: Int): Int = (maxBps * MANUAL_BITRATE_MIN_FRACTION).toInt()
 
     private fun update(transform: (CastSettings) -> CastSettings) {
