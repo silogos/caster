@@ -20,6 +20,17 @@
     <string name="manual_payload_label">Debug: paste the QR payload JSON</string>
     <string name="manual_payload_connect">Connect from payload</string>
 
+    <!-- Cast controls (Phase 5), shown once paired. -->
+    <string name="start_casting">Start casting</string>
+    <string name="starting_cast">Starting the cast…</string>
+    <string name="casting_to">Casting to %1$s</string>
+    <string name="stop_casting">Stop casting</string>
+    <string name="cast_failed_generic">Couldn\'t start the cast. Please try again.</string>
+    <string name="cast_stopped_projection_revoked">The screen cast was stopped.</string>
+    <string name="cast_notification_channel">Screen cast</string>
+    <string name="cast_notification_title">Casting your screen</string>
+    <string name="cast_notification_text">Your screen is being shared with the desktop.</string>
+
     <!--
       User-facing failure messages per docs/architecture/pairing.md §Failure modes.
       Technical detail (error codes) stays in logs — never shown here.

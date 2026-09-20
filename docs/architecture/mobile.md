@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phase 0 (planned; the app is initialized in Phase 1).
+Status: Phases 1–5 (implemented; the media pipeline `webrtc`/`capture`/`config`/`service` exists since Phase 5 — [features/screen-capture.md](../features/screen-capture.md)).
 
 ## Role
 

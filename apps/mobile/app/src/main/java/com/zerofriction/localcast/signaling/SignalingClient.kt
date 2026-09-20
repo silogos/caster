@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The mobile side of the signaling channel (docs/architecture/webrtc.md):
@@ -73,7 +74,13 @@ class SignalingClient(
     private val _state = MutableStateFlow(State.CONNECTING)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private var onEvent: ((Event) -> Unit)? = null
+    /**
+     * All event consumers (pairing state machine, and from Phase5 the cast
+     * session for media plumbing). CopyOnWriteArrayList: listeners can be
+     * added/removed from any thread while events fire on transport threads.
+     */
+    private val listeners = CopyOnWriteArrayList<(Event) -> Unit>()
+
     private var hostIndex = 0
     private var sendSeq = 0
 
@@ -90,7 +97,7 @@ class SignalingClient(
         override fun onTransportOpen() {
             _state.value = State.AUTHENTICATING
             Log.i(TAG, "connected, sending hello")
-            onEvent?.invoke(Event.Authenticating)
+            emit(Event.Authenticating)
             sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX))
         }
 
@@ -118,8 +125,26 @@ class SignalingClient(
     }
 
     fun connect(onEvent: (Event) -> Unit) {
-        this.onEvent = onEvent
+        listeners.add(onEvent)
         connectHost(0)
+    }
+
+    /**
+     * Extra event consumers beyond the one passed to [connect] — the cast
+     * session (Phase5) subscribes to media plumbing (sdp-answer, ice) this way.
+     */
+    fun addListener(listener: (Event) -> Unit) {
+        listeners.add(listener)
+    }
+
+    fun removeListener(listener: (Event) -> Unit) {
+        listeners.remove(listener)
+    }
+
+    private fun emit(event: Event) {
+        for (listener in listeners) {
+            listener(event)
+        }
     }
 
     /**
@@ -198,7 +223,7 @@ class SignalingClient(
         val delayMs = RECONNECT_BACKOFF_MS[attempt]
         _state.value = State.RECONNECTING
         Log.i(TAG, "reconnecting in ${delayMs} ms (attempt ${reconnectAttempt})")
-        onEvent?.invoke(Event.Reconnecting(delayMs))
+        emit(Event.Reconnecting(delayMs))
         reconnectHandle = scheduler.postDelayed(delayMs) {
             if (_state.value == State.RECONNECTING) {
                 connectHost(0)
@@ -231,7 +256,7 @@ class SignalingClient(
                 reconnectAttempt = 0
                 _state.value = State.AUTHORIZED
                 startHeartbeat()
-                onEvent?.invoke(Event.Authorized(name, proto))
+                emit(Event.Authorized(name, proto))
             }
             Envelope.TYPE_ERROR -> {
                 val code = Payloads.errorCode(envelope)
@@ -260,7 +285,7 @@ class SignalingClient(
                 if (pc == null || sdp == null) {
                     Log.w(TAG, "malformed sdp-answer — ignoring")
                 } else {
-                    onEvent?.invoke(Event.SdpAnswer(pc, sdp))
+                    emit(Event.SdpAnswer(pc, sdp))
                 }
             }
             Envelope.TYPE_ICE -> {
@@ -269,7 +294,7 @@ class SignalingClient(
                 if (pc == null || candidate == null) {
                     Log.w(TAG, "malformed ice — ignoring")
                 } else {
-                    onEvent?.invoke(Event.IceCandidate(pc, candidate))
+                    emit(Event.IceCandidate(pc, candidate))
                 }
             }
             Envelope.TYPE_SESSION_INFO ->
@@ -281,7 +306,7 @@ class SignalingClient(
                 cancelTimers()
                 _state.value = State.CLOSED
                 transport.close(1000, "bye")
-                onEvent?.invoke(Event.SessionEnded(reason))
+                emit(Event.SessionEnded(reason))
             }
             else -> Log.d(TAG, "ignoring ${envelope.type}")
         }
@@ -325,7 +350,7 @@ class SignalingClient(
     private fun fail(error: SignalingError) {
         cancelTimers()
         _state.value = State.FAILED
-        onEvent?.invoke(Event.Failed(error))
+        emit(Event.Failed(error))
     }
 
     private fun cancelTimers() {

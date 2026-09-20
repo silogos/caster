@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1 and 3 (status: **Phase 3 complete — verified on device**).
+App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–5 (status: **Phase 5 complete — verified on device**).
 
 ## Prerequisites
 
@@ -18,7 +18,8 @@ adb shell am start -n com.zerofriction.localcast/.MainActivity
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
 
-Verified on 2026-09-20 (Phase 4): `assembleDebug` + 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
+Verified on 2026-09-20 (Phase 5): `assembleDebug` + **43 unit tests** green (14 new: SDP codec ordering, capture sizing, sender-stats extraction). Live on-device cast verified end to end on a Lenovo TB321FU / Android 16 — details in [features/screen-capture.md](../features/screen-capture.md).
+Previously (Phase 4): 29 unit tests green — signaling lifecycle (heartbeat, backoff ladder, expiry stop, desktop bye) with a virtual-clock scheduler; details in [features/signaling.md](../features/signaling.md).
 Previously (Phase 3): real-device QR scan verified — details in [features/pairing.md](../features/pairing.md).
 
 ## Pinned toolchain (gradle/libs.versions.toml)
@@ -36,6 +37,7 @@ Previously (Phase 3): real-device QR scan verified — details in [features/pair
 | CameraX | 1.4.2 | core, camera2, lifecycle, view — QR scan preview/analysis (Phase 3). |
 | ML Kit barcode-scanning | 17.3.0 | Bundled model: fully on-device, no network dependency; +~4 MB. |
 | okhttp | 4.12.0 | WebSocket signaling client (Phase 3). |
+| stream-webrtc-android | 1.3.8 | Prebuilt Google libwebrtc (`org.webrtc` API, no native build step) — the media PC, capture, ICE. [ADR-001](../decisions/ADR-001-tech-stack.md). ~+58 MB APK native libs. |
 | kotlinx-serialization-json | 1.8.0 | QR payload + envelope codec. |
 | JUnit / coroutines-test | 4.13.2 / 1.10.1 | Plain-JVM unit tests. |
 
@@ -51,6 +53,10 @@ apps/mobile/
     ├── MainActivity.kt              # single activity; Home ⇄ Scan navigation (state-based, no nav lib yet)
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)
+    ├── config/                      # CastConfig — every cast setting lives here (Phase 5)
+    ├── capture/                     # CaptureSize/DisplaySize math; projection via ScreenCapturerAndroid (Phase 5)
+    ├── webrtc/                      # MediaCastSession (media PC), SdpCodecOrderer, IceCandidateJson, SenderStats (Phase 5)
+    ├── service/                    # CastService — minimal mediaProjection FGS (Phase 5; full lifecycle in Phase 6)
     └── ui/
         ├── home/                    # HomeScreen + HomeViewModel + HomeUiState
         ├── pairing/                 # ScanScreen + ScanViewModel + QrCamera (CameraX + ML Kit)

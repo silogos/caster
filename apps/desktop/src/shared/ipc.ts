@@ -1,4 +1,9 @@
-import type { MobileStateEvent, PairingSessionView } from './types'
+import type {
+  MobileStateEvent,
+  PairingSessionView,
+  SignalingIceMessage,
+  SignalingSdpMessage
+} from './types'
 
 /**
  * Typed IPC contract. The main process owns sockets and sessions; the renderer
@@ -15,6 +20,16 @@ export const IPC = {
     sessionUpdated: 'pairing:session-updated',
     /** Push: the paired mobile's connection state changed. */
     mobileState: 'pairing:mobile-state'
+  },
+  signaling: {
+    /** Push: the mobile's SDP offer arrived — the renderer answers it (desktop.md). */
+    sdpOffer: 'signaling:sdp-offer',
+    /** Push: an ICE candidate arrived from the mobile (null = end-of-gathering). */
+    iceCandidate: 'signaling:ice-candidate',
+    /** Renderer → main: send the answer for one pc back over the socket. */
+    sendSdpAnswer: 'signaling:send-sdp-answer',
+    /** Renderer → main: trickle a desktop candidate back over the socket. */
+    sendIceCandidate: 'signaling:send-ice-candidate'
   }
 } as const
 
@@ -25,4 +40,12 @@ export interface DesktopApi {
   onPairingSessionUpdated(listener: (session: PairingSessionView | null) => void): () => void
   /** Subscribes to mobile connection state changes; returns an unsubscribe function. */
   onMobileStateChanged(listener: (state: MobileStateEvent) => void): () => void
+  /** Subscribes to inbound SDP offers (mobile is always the offerer — webrtc.md). */
+  onSignalingSdpOffer(listener: (message: SignalingSdpMessage) => void): () => void
+  /** Subscribes to inbound ICE candidates from the mobile. */
+  onSignalingIceCandidate(listener: (message: SignalingIceMessage) => void): () => void
+  /** Sends the desktop's SDP answer for one pc over the signaling socket. */
+  sendSdpAnswer(pc: SignalingSdpMessage['pc'], sdp: string): void
+  /** Trickles one desktop candidate (null = end-of-gathering) for one pc. */
+  sendIceCandidate(pc: SignalingIceMessage['pc'], candidate: unknown): void
 }

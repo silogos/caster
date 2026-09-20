@@ -22,6 +22,28 @@ export interface QrPayloadV1 {
 }
 
 /**
+ * PeerConnection discriminator (ADR-003) — the two PCs share one signaling
+ * channel. Mirrors the `pc` field of the signaling envelope (webrtc.md).
+ */
+export type PcId = 'media' | 'mic'
+
+/** Inbound SDP offer/answer content, forwarded verbatim from the socket. */
+export interface SignalingSdpMessage {
+  pc: PcId
+  /** Opaque SDP blob — nobody between the socket and the RTCPeerConnection parses it. */
+  sdp: string
+}
+
+/**
+ * Inbound ICE candidate (platform object, opaque to everything in between);
+ * `candidate: null` marks end-of-gathering for that pc (webrtc.md).
+ */
+export interface SignalingIceMessage {
+  pc: PcId
+  candidate: unknown
+}
+
+/**
  * What the main process hands the renderer for the pairing screen.
  * `qrDataUrl` is a data: URL so no custom protocol or file access is needed.
  */

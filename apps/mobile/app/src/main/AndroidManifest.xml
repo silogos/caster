@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- QR code scanning only (Phase 3); requested at runtime on the scan screen. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Screen cast foreground service (Phase 5) — Android14+ requires the
+         mediaProjection-type FGS before the virtual display is created. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Cast-in-progress notification (FGS visibility on 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -23,6 +29,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Minimal Phase5 skeleton (service/CastService.kt): owns the
+             MediaProjection + media pipeline; full lifecycle is Phase6. -->
+        <service
+            android:name=".service.CastService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 
 </manifest>
