@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phases 1–7 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase 6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md)).
+Status: Phases 1–8 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase 6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md); the mic on its own `mic` PC since Phase 8, [features/microphone.md](../features/microphone.md)).
 
 ## Role
 
@@ -54,7 +54,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 | `INTERNET` | WebSocket + WebRTC | Install time |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` | Cast keeps running while a game is foreground | Install time (manifest) |
 | `POST_NOTIFICATIONS` | Cast-in-progress notification (required for FGS visibility) | Runtime, before first cast |
-| `RECORD_AUDIO` | Playback-capture AudioRecord + the WebRTC ADM's initial mic record (Phase 7) — no microphone sample is ever captured; mic capture itself arrives in Phase 8 | Runtime, before first cast (non-fatal: denial = video-only cast) |
+| `RECORD_AUDIO` | Playback-capture AudioRecord + the WebRTC ADM's initial mic record (Phase7), and microphone capture itself on the `mic` PC (Phase 8 — off by default, toggled live during the cast) | Runtime, before first cast (non-fatal: denial = video-only cast + mic needs-permission state) |
 | `CAMERA` | QR code scanning only | Runtime, at scan screen |
 
 `MediaProjection` consent is a system dialog per session, not a manifest permission.

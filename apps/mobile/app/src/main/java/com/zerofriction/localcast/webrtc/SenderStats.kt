@@ -19,6 +19,17 @@ data class SenderSample(
     val encoderImplementation: String?,
 )
 
+/**
+ * One sender-side audio sample from a libwebrtc RTCStatsReport (the mic pc,
+ * Phase8) — same extraction idea as [SenderSample]: raw `members` maps in,
+ * plain values out, so it is unit-testable on the JVM.
+ */
+data class AudioSenderSample(
+    val bytesSent: Long,
+    /** Round-trip of the nominated candidate pair, ms — null until known. */
+    val rttMs: Long?,
+)
+
 object SenderStats {
 
     /** Returns null while the report has no video outbound-rtp entry yet. */
@@ -43,6 +54,27 @@ object SenderStats {
             framesPerSecond = (video["framesPerSecond"] as? Number)?.toDouble() ?: 0.0,
             rttMs = rttSeconds?.let { (it * 1000).toLong() },
             encoderImplementation = video["encoderImplementation"] as? String,
+        )
+    }
+
+    /** Returns null while the report has no audio outbound-rtp entry yet. */
+    fun sampleAudioSend(entries: Iterable<Map<String, Any>>): AudioSenderSample? {
+        var outbound: Map<String, Any>? = null
+        var rttSeconds: Double? = null
+        for (entry in entries) {
+            when (entry["type"]) {
+                "outbound-rtp" ->
+                    if (entry["kind"] == "audio") outbound = entry
+                "candidate-pair" ->
+                    if (entry["nominated"] == true && entry["state"] == "succeeded") {
+                        rttSeconds = (entry["currentRoundTripTime"] as? Number)?.toDouble()
+                    }
+            }
+        }
+        val audio = outbound ?: return null
+        return AudioSenderSample(
+            bytesSent = (audio["bytesSent"] as? Number)?.toLong() ?: 0L,
+            rttMs = rttSeconds?.let { (it * 1000).toLong() },
         )
     }
 }

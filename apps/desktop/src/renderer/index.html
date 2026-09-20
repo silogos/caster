@@ -24,6 +24,11 @@
            volume via Web Audio). Electron's autoplay policy allows unmuted
            play(); a block would be logged by the sink's play().catch. -->
       <video class="video" id="video" hidden autoplay playsinline></video>
+      <!-- The mic pc's stream lands here (Phase8): a separate element from the
+           <video> on purpose — the two audio tracks stay independent streams
+           end to end (ADR-003), and Phase9's AudioMixer will split them into
+           per-stream Web Audio graphs. NOT muted; autoplay policy as above. -->
+      <audio id="mic-audio" hidden autoplay></audio>
       <p class="hint" id="hint">Scan with your Android device — the code is valid for 10 minutes and refreshes automatically</p>
       <button class="button" id="regenerate" type="button">New QR code</button>
     </main>

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ReceiverSession, type Logger, type PeerConnectionLike, type SignalingOut, type VideoSink } from './receiverSession'
+import { ReceiverSession, type AudioSink, type Logger, type PeerConnectionLike, type SignalingOut, type VideoSink } from './receiverSession'
 
 /**
  * Behavior tests for the desktop's answerer with a scripted fake pc — the
- * offer→answer flow, ICE relay/queueing, rendering, stats, and teardown. No
- * real RTCPeerConnection exists in plain Node; production wires Chromium's.
+ * offer→answer flow, ICE relay/queueing, rendering, stats, and teardown, for
+ * both pcs (media + mic, Phase8). No real RTCPeerConnection exists in plain
+ * Node; production wires Chromium's.
  */
 
 const OFFER_SDP = 'v=0\r\n…offer…'
@@ -74,7 +75,7 @@ class FakePc implements PeerConnectionLike {
   }
 }
 
-interface TestSink extends VideoSink {
+interface TestSink extends VideoSink, AudioSink {
   shown: unknown[]
   cleared: number
 }
@@ -85,18 +86,12 @@ interface Harness {
   answers: Array<{ pc: string; sdp: string }>
   candidates: Array<{ pc: string; candidate: unknown }>
   sink: TestSink
+  micSink: TestSink
   /** The session logger (a vi.fn() at runtime — cast back in assertions). */
   log: Logger
 }
 
-function makeHarness(remoteGate: Gate | null = null, configurePc?: (pc: FakePc, index: number) => void): Harness {
-  const pcs: FakePc[] = []
-  const answers: Harness['answers'] = []
-  const candidates: Harness['candidates'] =[]
-  const signaling: SignalingOut = {
-    sendSdpAnswer: (pc, sdp) => answers.push({ pc, sdp }),
-    sendIceCandidate: (pc, candidate) => candidates.push({ pc, candidate })
-  }
+function makeSink(): TestSink {
   const sink: TestSink = {
     shown: [],
     cleared: 0,
@@ -105,6 +100,19 @@ function makeHarness(remoteGate: Gate | null = null, configurePc?: (pc: FakePc, 
       sink.cleared += 1
     }
   }
+  return sink
+}
+
+function makeHarness(remoteGate: Gate | null = null, configurePc?: (pc: FakePc, index: number) => void): Harness {
+  const pcs: FakePc[] = []
+  const answers: Harness['answers'] = []
+  const candidates: Harness['candidates'] = []
+  const signaling: SignalingOut = {
+    sendSdpAnswer: (pc, sdp) => answers.push({ pc, sdp }),
+    sendIceCandidate: (pc, candidate) => candidates.push({ pc, candidate })
+  }
+  const sink = makeSink()
+  const micSink = makeSink()
   const log = vi.fn() as unknown as Logger
   const session = new ReceiverSession({
     createPeerConnection: () => {
@@ -115,9 +123,10 @@ function makeHarness(remoteGate: Gate | null = null, configurePc?: (pc: FakePc, 
     },
     signaling,
     sink,
+    micSink,
     log
   })
-  return { session, pcs, answers, candidates, sink, log }
+  return { session, pcs, answers, candidates, sink, micSink, log }
 }
 
 describe('ReceiverSession — answering', () => {
@@ -128,11 +137,11 @@ describe('ReceiverSession — answering', () => {
     expect(h.answers).toEqual([{ pc: 'media', sdp: ANSWER_SDP }])
   })
 
-  it('ignores mic offers — no audio pipeline exists yet', async () => {
+  it('answers a mic offer on its own pc (Phase8)', async () => {
     const h = makeHarness()
     await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
-    expect(h.pcs).toHaveLength(0)
-    expect(h.answers).toHaveLength(0)
+    expect(h.pcs).toHaveLength(1)
+    expect(h.answers).toEqual([{ pc: 'mic', sdp: ANSWER_SDP }])
   })
 
   it('closes the previous pc when a new offer arrives (mobile rebuilt its pc)', async () => {
@@ -144,6 +153,17 @@ describe('ReceiverSession — answering', () => {
     expect(h.answers).toHaveLength(2)
   })
 
+  it('a fresh mic offer replaces only the mic pc — the media pc keeps streaming', async () => {
+    const h = makeHarness()
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    expect(h.pcs).toHaveLength(3)
+    expect(h.pcs[0].closedCount).toBe(0) // media pc untouched by mic churn
+    expect(h.pcs[1].closedCount).toBe(1)
+    expect(h.answers).toHaveLength(3)
+  })
+
   it('tears down the pc and clears the view when answering fails', async () => {
     const h = makeHarness(null, (pc, index) => {
       if (index === 1) pc.failAt = 'createAnswer'
@@ -153,6 +173,19 @@ describe('ReceiverSession — answering', () => {
     expect(h.pcs[1].closedCount).toBe(1)
     expect(h.sink.cleared).toBe(1)
     expect(h.answers).toHaveLength(1) // only the first, good answer
+  })
+
+  it('a failed mic answer clears only the mic sink — the media cast is unaffected', async () => {
+    const h = makeHarness(null, (pc, index) => {
+      if (index === 1) pc.failAt = 'createAnswer'
+    })
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    expect(h.micSink.cleared).toBe(1)
+    expect(h.sink.cleared).toBe(0)
+    expect(h.pcs[0].closedCount).toBe(0) // media pc untouched by the mic failure
+    expect(h.pcs[1].closedCount).toBe(1)
+    expect(h.answers).toEqual([{ pc: 'media', sdp: ANSWER_SDP }])
   })
 })
 
@@ -167,6 +200,14 @@ describe('ReceiverSession — ICE', () => {
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
     await h.session.handleIceCandidate({ pc: 'media', candidate: ICE_INIT })
     expect(h.pcs[0].addedRemoteCandidates).toEqual([ICE_INIT])
+  })
+
+  it('routes mic candidates to the mic pc, not the media pc', async () => {
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    await h.session.handleIceCandidate({ pc: 'mic', candidate: ICE_INIT })
+    expect(h.pcs[0].addedRemoteCandidates).toHaveLength(0)
+    expect(h.pcs[1].addedRemoteCandidates).toEqual([ICE_INIT])
   })
 
   it('queues candidates that arrive before the offer is processed', async () => {
@@ -186,29 +227,55 @@ describe('ReceiverSession — ICE', () => {
     expect(h.pcs[0].addedRemoteCandidates).toHaveLength(0)
   })
 
-  it('relays local candidates to the mobile verbatim (incl. mDNS shapes)', async () => {
+  it('relays local candidates to the mobile verbatim, per pc (incl. mDNS shapes)', async () => {
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
-    const mDnsCandidate = { candidate: 'candidate:2 1 UDP 1 abcdef.local9 typ host', sdpMid: '0', sdpMLineIndex: 0 }
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    const mDnsCandidate = { candidate: 'candidate:21 UDP1 abcdef.local9 typ host', sdpMid: '0', sdpMLineIndex: 0 }
     h.pcs[0].onicecandidate?.({ candidate: mDnsCandidate })
-    expect(h.candidates).toEqual([{ pc: 'media', candidate: mDnsCandidate }])
+    h.pcs[1].onicecandidate?.({ candidate: mDnsCandidate })
+    expect(h.candidates).toEqual([
+      { pc: 'media', candidate: mDnsCandidate },
+      { pc: 'mic', candidate: mDnsCandidate }
+    ])
   })
 })
 
 describe('ReceiverSession — rendering and teardown', () => {
-  it('renders the stream when the remote track arrives', async () => {
+  it('renders the media stream on the video sink and the mic stream on the audio sink', async () => {
     const h = makeHarness()
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
-    const stream = { id: 's1' }
-    h.pcs[0].ontrack?.({ track: {}, streams: [stream] })
-    expect(h.sink.shown).toEqual([stream])
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    const mediaStream = { id: 's1' }
+    const micStream = { id: 's2' }
+    h.pcs[0].ontrack?.({ track: { kind: 'video' }, streams: [mediaStream] })
+    h.pcs[1].ontrack?.({ track: { kind: 'audio' }, streams: [micStream] })
+    expect(h.sink.shown).toEqual([mediaStream])
+    expect(h.micSink.shown).toEqual([micStream])
   })
 
-  it('clears the view and closes the pc when the mobile is gone', async () => {
+  it('clears the view and closes both pcs when the mobile is gone', async () => {
     const h = makeHarness()
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
     h.session.handleMobileGone()
     expect(h.pcs[0].closedCount).toBe(1)
+    expect(h.pcs[1].closedCount).toBe(1)
     expect(h.sink.cleared).toBe(1)
+    expect(h.micSink.cleared).toBe(1)
+  })
+
+  it('a dead mic pc clears only the mic sink — mic toggled off mid-cast', async () => {
+    const h = makeHarness()
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    const mediaPc = h.pcs[0]
+    const micPc = h.pcs[1]
+    micPc.connectionState = 'closed' // the mobile closed its mic pc (toggle off)
+    micPc.onconnectionstatechange?.()
+    expect(h.micSink.cleared).toBe(1)
+    expect(h.sink.cleared).toBe(0)
+    expect(mediaPc.closedCount).toBe(0)
+    expect(micPc.closedCount).toBe(1)
   })
 
   it('polls getStats once per interval while connected and stops on failure', async () => {
@@ -230,7 +297,24 @@ describe('ReceiverSession — rendering and teardown', () => {
       pc.connectionState = 'failed'
       pc.onconnectionstatechange?.()
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(logMock).toHaveBeenCalledWith('info', 'connection failed')
+      expect(logMock).toHaveBeenCalledWith('info', 'connection failed (pc=media)')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not start video stats polling for the mic pc', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = makeHarness()
+      const logMock = h.log as unknown as ReturnType<typeof vi.fn>
+      await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+      const pc = h.pcs[0]
+      pc.connectionState = 'connected'
+      pc.onconnectionstatechange?.()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(logMock).not.toHaveBeenCalledWith('info', 'stats', expect.anything())
+      expect(logMock).toHaveBeenCalledWith('info', 'connection connected (pc=mic)')
     } finally {
       vi.useRealTimers()
     }

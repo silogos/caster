@@ -7,6 +7,7 @@ const qrEl = document.getElementById('qr') as HTMLImageElement
 const errorEl = document.getElementById('error') as HTMLParagraphElement
 const hintEl = document.getElementById('hint') as HTMLParagraphElement
 const videoEl = document.getElementById('video') as HTMLVideoElement
+const micAudioEl = document.getElementById('mic-audio') as HTMLAudioElement
 const regenerateEl = document.getElementById('regenerate') as HTMLButtonElement
 
 const WAITING_MESSAGE = 'Waiting for mobile device…'
@@ -55,6 +56,20 @@ const receiver = new ReceiverSession({
       videoEl.hidden = true
       hintEl.hidden = false
       regenerateEl.hidden = false
+    }
+  },
+  // The mic pc's stream (Phase8): plays through its own element so the two
+  // audio sources stay independently audible; Phase9's mixer adds per-stream
+  // volume. NOT muted — muting here would silently eat the mic like the
+  // Phase7<video> bug did.
+  micSink: {
+    show: (stream) => {
+      micAudioEl.srcObject = stream as MediaStream
+      micAudioEl.muted = false
+      micAudioEl.play().catch((error) => log('warn', 'mic autoplay was blocked', { error: String(error) }))
+    },
+    clear: () => {
+      micAudioEl.srcObject = null
     }
   },
   log

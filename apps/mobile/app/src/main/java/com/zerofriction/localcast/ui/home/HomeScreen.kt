@@ -1,5 +1,8 @@
 package com.zerofriction.localcast.ui.home
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +35,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
@@ -44,10 +48,12 @@ fun HomeScreen(
 ) {
     val castState by viewModel.castState.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
+    val micState by CastService.micState.collectAsStateWithLifecycle()
 
     HomeContent(
         castState = castState,
         gameAudioState = gameAudioState,
+        micState = micState,
         onStartCast = onStartCast,
     )
 }
@@ -61,6 +67,7 @@ fun HomeScreen(
 fun HomeContent(
     castState: CastState,
     gameAudioState: GameAudioState = GameAudioState.Off,
+    micState: MicState = MicState.Off,
     onStartCast: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -107,6 +114,7 @@ fun HomeContent(
                     )
                     Spacer(Modifier.height(12.dp))
                     GameAudioControls(gameAudioState)
+                    MicControls(micState = micState, gameAudioState = gameAudioState)
                     if (BuildConfig.DEBUG) {
                         DebugToneButton()
                     }
@@ -183,6 +191,76 @@ fun GameAudioControls(gameAudioState: GameAudioState) {
             )
         }
         else -> Unit
+    }
+}
+
+/**
+ * The mic row of a running cast (Phase8, audio.md): a live on/off toggle —
+ * on builds the `mic` pc on demand, off tears it down; the cast itself is
+ * never renegotiated or stopped. Needs-permission surfaces as a plain fact
+ * whose button asks for the grant, never as a technical error (AGENTS.md).
+ * The headphones tip appears only when both audio sources are in this cast:
+ * the phone speaker + live mic is the documented echo trap (audio.md).
+ */
+@Composable
+fun MicControls(micState: MicState, gameAudioState: GameAudioState) {
+    val context = LocalContext.current
+    when (micState) {
+        MicState.Off -> Text(
+            text = stringResource(R.string.mic_off),
+            fontSize = 13.sp,
+        )
+
+        MicState.NeedsPermission -> Text(
+            text = stringResource(R.string.mic_needs_permission),
+            fontSize = 13.sp,
+        )
+
+        MicState.Failed -> Text(
+            text = stringResource(R.string.mic_unavailable),
+            fontSize = 13.sp,
+        )
+
+        MicState.Active -> Unit
+    }
+    when (micState) {
+        MicState.Off, MicState.Active -> OutlinedButton(
+            onClick = { CastService.requestToggleMic(context) },
+        ) {
+            Text(
+                stringResource(
+                    if (micState == MicState.Active) {
+                        R.string.turn_off_mic
+                    } else {
+                        R.string.turn_on_mic
+                    },
+                ),
+            )
+        }
+
+        // Only the app (not the service) can show the permission dialog;
+        // granting turns the mic on right away — denial keeps the honest fact.
+        MicState.NeedsPermission -> {
+            val permissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                if (granted) CastService.requestToggleMic(context)
+            }
+            OutlinedButton(
+                onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+            ) {
+                Text(stringResource(R.string.turn_on_mic))
+            }
+        }
+
+        MicState.Failed -> Unit
+    }
+    if (micState == MicState.Active && gameAudioState != GameAudioState.Off) {
+        Text(
+            text = stringResource(R.string.mic_headphones_hint),
+            fontSize = 13.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
 

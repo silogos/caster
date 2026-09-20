@@ -1,5 +1,6 @@
 package com.zerofriction.localcast.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.util.Log
@@ -17,9 +19,12 @@ import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.MainActivity
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.audio.MicState
+import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.webrtc.MediaCastSession
+import com.zerofriction.localcast.webrtc.MicCastSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,6 +76,7 @@ class CastService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
         private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
+        private const val ACTION_TOGGLE_MIC = "com.zerofriction.localcast.service.TOGGLE_MIC"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
@@ -85,6 +91,13 @@ class CastService : Service() {
          */
         private val _gameAudioState = MutableStateFlow<GameAudioState>(GameAudioState.Off)
         val gameAudioState: StateFlow<GameAudioState> = _gameAudioState.asStateFlow()
+
+        /**
+         * The mic half (Phase8, audio.md) — same shape as [gameAudioState].
+         * Off = not in this cast; the session republishes on every change.
+         */
+        private val _micState = MutableStateFlow<MicState>(MicState.Off)
+        val micState: StateFlow<MicState> = _micState.asStateFlow()
 
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
@@ -117,6 +130,11 @@ class CastService : Service() {
         fun requestToggleGameAudio(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_GAME_AUDIO))
         }
+
+        /** Turn the mic of the running cast on/off (no-op without one). */
+        fun requestToggleMic(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_MIC))
+        }
     }
 
     /**
@@ -138,6 +156,14 @@ class CastService : Service() {
     private var session: MediaCastSession? = null
     private var signaling: SignalingClient? = null
 
+    /** The mic half (Phase8) — non-null while the mic is on for this cast. */
+    private var micSession: MicCastSession? = null
+
+    /** Kept from [StartArgs] for the `session-info` resends on mic toggles. */
+    private var config: CastConfig? = null
+    private var physicalWidth: Int = 0
+    private var physicalHeight: Int = 0
+
     override fun onBind(intent: Intent?) = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -154,6 +180,10 @@ class CastService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_TOGGLE_MIC -> {
+                toggleMic()
+                return START_NOT_STICKY
+            }
         }
         val args = pendingStart ?: run {
             // Stopped by the system with nothing pending — nothing to resume.
@@ -162,6 +192,9 @@ class CastService : Service() {
         }
         pendingStart = null
         signaling = args.signaling
+        config = args.config
+        physicalWidth = args.physicalWidth
+        physicalHeight = args.physicalHeight
 
         // Android 14+ ordering (mobile.md): foreground *before* the projection
         // starts; the consent was collected *before* the service started.
@@ -187,6 +220,11 @@ class CastService : Service() {
             onState = { sessionState ->
                 if (sessionState == MediaCastSession.State.STREAMING) {
                     _state.value = CastState.Casting(args.desktopName)
+                    // The media session's own summary rides its build; this
+                    // one is the authoritative last word — by streaming time
+                    // the mic decision (config + permission) is settled, so
+                    // the flag can't be stale.
+                    sendSessionInfo(mic = micSession !== null)
                 }
             },
             onGameAudioState = { gameAudioState ->
@@ -195,9 +233,78 @@ class CastService : Service() {
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
+        // The mic rides along only when the config says so AND the runtime
+        // permission is there (audio.md: off by default; denial is never
+        // cast-fatal, the UI states the fact).
+        if (args.config.mic) {
+            if (hasRecordAudioPermission()) startMicSession()
+            else _micState.value = MicState.NeedsPermission
+        }
         Log.i(TAG, "cast service started")
         return START_NOT_STICKY
     }
+
+    /**
+     * The mic's live on/off toggle (Phase8): on = build the `mic` pc on demand
+     * (factory B, independent of the `media` pc — no renegotiation of the
+     * cast); off = tear it down. The desktop status line follows via a fresh
+     * `session-info`, which is display-only (webrtc.md).
+     */
+    private fun toggleMic() {
+        if (session === null) return // no cast — nothing to toggle
+        val currentMic = micSession
+        if (currentMic !== null) {
+            currentMic.stop()
+            micSession = null
+            // The session's onState(Off) republishes; the summary needs the
+            // flag flipped after it.
+            sendSessionInfo(mic = false)
+            return
+        }
+        if (!hasRecordAudioPermission()) {
+            _micState.value = MicState.NeedsPermission
+            Log.w(TAG, "mic toggle without RECORD_AUDIO — mic stays off")
+            return
+        }
+        startMicSession()
+    }
+
+    private fun startMicSession() {
+        val currentSignaling = signaling
+        if (currentSignaling === null) return
+        val newMic = MicCastSession(
+            context = applicationContext,
+            signaling = currentSignaling,
+            onState = { micState -> _micState.value = micState },
+        )
+        micSession = newMic
+        newMic.start()
+        sendSessionInfo(mic = true)
+        Log.i(TAG, "mic session started")
+    }
+
+    /**
+     * Re-send the display-only summary (webrtc.md) — the media session sends
+     * it at build; this is the follow-up whenever the mic toggles mid-cast.
+     * `gameAudio` mirrors the media session's semantics: "part of this cast".
+     */
+    private fun sendSessionInfo(mic: Boolean) {
+        val currentSignaling = signaling ?: return
+        val currentConfig = config ?: return
+        val (width, height) = CaptureSize.scaleTo(currentConfig.longEdgePx, physicalWidth, physicalHeight)
+        currentSignaling.sendSessionInfo(
+            profile = currentConfig.profile,
+            width = width,
+            height = height,
+            fps = currentConfig.fps,
+            gameAudio = _gameAudioState.value != GameAudioState.Off,
+            mic = mic,
+        )
+    }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
 
     /** First-class stop paths (mobile.md): simple user-facing message, details stay in logs. */
     private fun onFatal(failure: MediaCastSession.Failure) {
@@ -227,14 +334,18 @@ class CastService : Service() {
     private fun endCast() {
         session?.stop()
         session = null
+        micSession?.stop()
+        micSession = null
         // The service owns the pairing connection now (Phase6): ending the
         // cast ends the pairing session too — `bye` invalidates it on the
         // desktop (fresh QR there), and the mobile must scan again to cast.
         signaling?.disconnect()
         signaling = null
+        config = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         _gameAudioState.value = GameAudioState.Off
+        _micState.value = MicState.Off
         if (_state.value !is CastState.Failed) {
             _state.value = CastState.Idle
         }
@@ -243,9 +354,11 @@ class CastService : Service() {
 
     override fun onDestroy() {
         // The system can kill the service without another onStartCommand —
-        // never leak the projection, the pc, or the socket.
+        // never leak the projection, the pcs, or the socket.
         session?.stop()
         session = null
+        micSession?.stop()
+        micSession = null
         signaling?.disconnect()
         signaling = null
         super.onDestroy()

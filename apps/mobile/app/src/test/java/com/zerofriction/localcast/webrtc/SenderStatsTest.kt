@@ -63,4 +63,41 @@ class SenderStatsTest {
         assertNull(sample.rttMs)
         assertNull(sample.encoderImplementation)
     }
+
+    // ---- mic pc (Phase8): bytesSent proves the mic is actually flowing ----
+
+    @Test
+    fun `extracts the audio outbound-rtp entry and the nominated pair rtt`() {
+        val sample = SenderStats.sampleAudioSend(
+            listOf(
+                mapOf("type" to "outbound-rtp", "kind" to "video", "bytesSent" to 750_000L),
+                mapOf("type" to "outbound-rtp", "kind" to "audio", "bytesSent" to 42_000L),
+                mapOf("type" to "candidate-pair", "nominated" to true, "state" to "succeeded", "currentRoundTripTime" to 0.0042),
+                mapOf("type" to "candidate-pair", "nominated" to false, "state" to "succeeded", "currentRoundTripTime" to 9.9),
+            ),
+        )!!
+        assertEquals(42_000L, sample.bytesSent)
+        assertEquals(4L, sample.rttMs)
+    }
+
+    @Test
+    fun `audio sample is null while there is no audio outbound-rtp entry yet`() {
+        assertNull(
+            SenderStats.sampleAudioSend(
+                listOf(
+                    mapOf("type" to "outbound-rtp", "kind" to "video", "bytesSent" to 750_000L),
+                    mapOf("type" to "inbound-rtp", "kind" to "audio"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `audio sample degrades to zero bytes and null rtt when members are missing`() {
+        val sample = SenderStats.sampleAudioSend(
+            listOf(mapOf("type" to "outbound-rtp", "kind" to "audio")),
+        )!!
+        assertEquals(0L, sample.bytesSent)
+        assertNull(sample.rttMs)
+    }
 }

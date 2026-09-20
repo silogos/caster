@@ -256,14 +256,16 @@ class MediaCastSession(
             onGameAudioState(if (newAudio !== null) GameAudioState.Active else GameAudioState.Off)
 
             // Display-only summary for the desktop status line (webrtc.md) —
-            // not configuration; the desktop never acts on it.
+            // not configuration; the desktop never acts on it. The mic flag is
+            // the config's *intent*; the service sends the authoritative
+            // summary (mic actually on) once it knows — see CastService.
             signaling.sendSessionInfo(
                 profile = config.profile,
                 width = width,
                 height = height,
                 fps = config.fps,
                 gameAudio = newAudio !== null,
-                mic = false,
+                mic = config.mic,
             )
 
             negotiate()
