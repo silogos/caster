@@ -1,4 +1,5 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
+import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
@@ -7,7 +8,7 @@ const qrEl = document.getElementById('qr') as HTMLImageElement
 const errorEl = document.getElementById('error') as HTMLParagraphElement
 const hintEl = document.getElementById('hint') as HTMLParagraphElement
 const videoEl = document.getElementById('video') as HTMLVideoElement
-const micAudioEl = document.getElementById('mic-audio') as HTMLAudioElement
+const mixerEl = document.getElementById('mixer') as HTMLDivElement
 const regenerateEl = document.getElementById('regenerate') as HTMLButtonElement
 
 const WAITING_MESSAGE = 'Waiting for mobile device…'
@@ -32,6 +33,16 @@ const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, detail
 const createPeerConnection = (): PeerConnectionLike =>
   new RTCPeerConnection({ iceServers: [] }) as unknown as PeerConnectionLike
 
+// Phase9's mixer (audio.md): each remote stream → its own GainNode → the one
+// AudioContext.destination. The receiver's only allowed audio control — no
+// further processing. Levels persist via localStorage; the context is created
+// lazily on the first stream (mixer.ts).
+const mixer = new AudioMixer({
+  createAudioContext: () => new AudioContext(),
+  storage: window.localStorage,
+  log
+})
+
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
   createPeerConnection,
@@ -43,10 +54,13 @@ const receiver = new ReceiverSession({
     show: (stream) => {
       videoEl.srcObject = stream as MediaStream
       videoEl.hidden = false
-      // Belt and braces next to the unmuted markup: the stream carries the
-      // phone's game audio too (Phase7), and it plays through this element.
-      videoEl.muted = false
+      // The element stays muted (also in the markup): the stream's game
+      // audio plays through the mixer now — an unmuted element would play
+      // it twice. The muted element also plays under any autoplay policy.
+      videoEl.muted = true
       videoEl.play().catch((error) => log('warn', 'autoplay was blocked', { error: String(error) }))
+      mixer.attachStream('game', stream)
+      mixerEl.hidden = false
       qrCardEl.hidden = true
       hintEl.hidden = true
       regenerateEl.hidden = true
@@ -54,22 +68,21 @@ const receiver = new ReceiverSession({
     clear: () => {
       videoEl.srcObject = null
       videoEl.hidden = true
+      mixer.detachStream('game')
+      mixerEl.hidden = true
       hintEl.hidden = false
       regenerateEl.hidden = false
     }
   },
-  // The mic pc's stream (Phase8): plays through its own element so the two
-  // audio sources stay independently audible; Phase9's mixer adds per-stream
-  // volume. NOT muted — muting here would silently eat the mic like the
-  // Phase7<video> bug did.
+  // The mic pc's stream (Phase8) now lands in the mixer too (Phase9) — no
+  // <audio> element anymore: the Web Audio source node is the sink, and the
+  // mic gets its own gain node, so the two channels never touch.
   micSink: {
     show: (stream) => {
-      micAudioEl.srcObject = stream as MediaStream
-      micAudioEl.muted = false
-      micAudioEl.play().catch((error) => log('warn', 'mic autoplay was blocked', { error: String(error) }))
+      mixer.attachStream('mic', stream)
     },
     clear: () => {
-      micAudioEl.srcObject = null
+      mixer.detachStream('mic')
     }
   },
   log
@@ -127,6 +140,36 @@ function renderStatus(): void {
   const parts = [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile, sources].filter(Boolean)
   statusEl.textContent = `Connected to ${connectedName} — ${parts.join(' · ')}`
 }
+
+// The mixer panel (StatusView's volume controls — desktop.md): one row per
+// channel. Values initialized from persisted levels; every change goes
+// through the mixer (which persists it), so the panel and the audio graph
+// cannot drift apart.
+const VOLUME_SLIDER_MAX = 100
+
+const renderMuteButton = (button: HTMLButtonElement, muted: boolean): void => {
+  button.textContent = muted ? 'Unmute' : 'Mute'
+  button.setAttribute('aria-pressed', String(muted))
+}
+
+const wireMixerChannel = (channel: MixerChannel, sliderId: string, muteButtonId: string): void => {
+  const slider = document.getElementById(sliderId) as HTMLInputElement
+  const muteButton = document.getElementById(muteButtonId) as HTMLButtonElement
+  const level: MixerLevel = mixer.getLevels()[channel]
+  slider.value = String(Math.round(level.volume * VOLUME_SLIDER_MAX))
+  renderMuteButton(muteButton, level.muted)
+  slider.addEventListener('input', () => {
+    mixer.setVolume(channel, Number(slider.value) / VOLUME_SLIDER_MAX)
+  })
+  muteButton.addEventListener('click', () => {
+    const muted = !mixer.getLevels()[channel].muted
+    mixer.setMuted(channel, muted)
+    renderMuteButton(muteButton, muted)
+  })
+}
+
+wireMixerChannel('game', 'game-volume', 'game-mute')
+wireMixerChannel('mic', 'mic-volume', 'mic-mute')
 
 function enableRegenerate(enabled: boolean): void {
   regenerateEl.disabled = !enabled
