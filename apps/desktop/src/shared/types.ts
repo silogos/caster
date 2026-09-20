@@ -27,6 +27,15 @@ export interface QrPayloadV1 {
  */
 export interface PairingSessionView {
   qrDataUrl: string
-  /** Unix seconds — informational only in Phase 2 (static test data). */
+  /** Unix seconds — session lifetime; the desktop regenerates a fresh QR after it. */
   expiresAt: number
 }
+
+/**
+ * Push event for the renderer: which mobile (if any) is paired right now.
+ * `name` comes from the hello user-agent (docs/architecture/webrtc.md) so the
+ * desktop can show "Connected to Pixel 8" — the desktop only *displays* it.
+ */
+export type MobileStateEvent =
+  | { state: 'waiting' }
+  | { state: 'connected'; name: string }

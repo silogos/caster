@@ -4,27 +4,15 @@ import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 
 /**
- * Holds the home screen state. Phase 1: static status + a notice when the user
- * taps Start Cast. Real session wiring (pairing, WebRTC) starts in Phase 3.
+ * Holds the home screen state. Phase3: the home screen launches the pairing
+ * scan; a session-aware status (connected desktop name) arrives when the cast
+ * service owns the session (Phase6) — the pairing session currently lives in
+ * the scan screen's ViewModel.
  */
 class HomeViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
-
-    fun onStartCastClicked() {
-        _uiState.update { it.copy(notice = CAST_NOT_IMPLEMENTED_NOTICE) }
-    }
-
-    fun onNoticeShown() {
-        _uiState.update { it.copy(notice = null) }
-    }
-
-    private companion object {
-        const val CAST_NOT_IMPLEMENTED_NOTICE =
-            "Casting isn't wired up yet — it arrives in Phase 5."
-    }
 }

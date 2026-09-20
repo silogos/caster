@@ -1,6 +1,6 @@
 # Desktop App Development Guide
 
-App: `/apps/desktop` · Electron · Implemented in: Phase 2 (status: **complete**).
+App: `/apps/desktop` · Electron · Implemented in: Phases 2–3 (status: **Phase3 implemented — device verification in progress**).
 
 ## Prerequisites
 
@@ -20,7 +20,9 @@ npm run typecheck    # tsc for node + web configs
 
 From the repo root: `npm run desktop:dev` / `desktop:build` / `desktop:start` / `desktop:test` / `desktop:typecheck`.
 
-Verified on 2026-09-20: typecheck green, 3 unit tests green, production build launches, QR scannable (details below).
+Launch with CDP for scripted UI checks: `npx electron out/main/index.js --remote-debugging-port=9222`, then `node scripts/read-qr-payload.mjs 9222` to extract the live QR payload.
+
+Verified on 2026-09-20 (Phase 3): typecheck green, 20 unit tests green, production build launches and serves a real pairing session over the LAN (details: [features/pairing.md](../features/pairing.md)).
 
 ## Pinned toolchain (apps/desktop/package.json)
 
@@ -30,24 +32,31 @@ Verified on 2026-09-20: typecheck green, 3 unit tests green, production build la
 | electron-vite | 5.0.0 | Main/preload/renderer bundling; supports vite 5–7 (not 8 yet). |
 | vite | 7.3.6 | Newest line electron-vite 5 accepts. |
 | TypeScript | 5.9.3 | Stayed on the proven 5.9 line; TS 7.0 (native port) is too fresh for a scaffold — upgrade deliberately later. |
-| qrcode (+@types) |1.5.4 / 1.5.6 | Main-process QR → PNG data URL, error correction M per [pairing.md](../architecture/pairing.md). |
-| vitest | 5.0.1 | Unit tests, node environment. |
-| jsqr / pngjs | 1.4.0 / 7.0.0 | Dev-only: decode the generated QR PNG back to the payload (scannability test). |
+| qrcode (+@types) | 1.5.4 / 1.5.6 | Main-process QR → PNG data URL, error correction M per [pairing.md](../architecture/pairing.md). |
+| ws (+@types) | 8.21.3 / 8.18.x | Signaling WebSocket server (Phase 3); also drives the loopback tests. |
+| vitest |5.0.1 | Unit tests, node environment. |
+| jsqr / pngjs | 1.4.0 / 7.0.0 | Dev-only: decode the generated QR PNG back to the payload (scannability tests + live checks). |
 
 ## Project layout
 
 ```text
 apps/desktop/
 ├── package.json / electron.vite.config.ts
+├── scripts/read-qr-payload.mjs   # manual-verification helper (CDP → live QR payload)
 ├── tsconfig.node.json (main+preload) / tsconfig.web.json (renderer) / vitest.config.ts
 └── src/
     ├── main/                      # Node: sockets & sessions belong here (architecture/desktop.md)
-    │   ├── index.ts               # app lifecycle + IPC handlers
+    │   ├── index.ts               # app lifecycle, module wiring, IPC relay (no business logic)
     │   ├── window.ts              # window lifecycle (becomes WindowManager with powerSaveBlocker)
-    │   └── pairing/
-    │       ├── staticSession.ts   # static, spec-shaped QR payload v1 — Phase 3 replaces with PairingServer
-    │       ├── qr.ts              # payload → QR data URL
-    │       └── staticSession.test.ts
+    │   ├── log.ts                 # level-tagged structured logging (AGENTS.md)
+    │   ├── pairing/
+    │   │   ├── pairingServer.ts   # session generation + lifecycle (pairing.md) — Electron-free
+    │   │   ├── networkInfo.ts     # LAN IPv4 enumeration for the QR payload
+    │   │   └── qr.ts              # payload → QR data URL
+    │   └── signaling/
+    │       ├── envelope.ts        # webrtc.md message envelope parse/serialize
+    │       ├── handshake.ts       # nonce, HMAC, constant-time compare, proto negotiation
+    │       └── signalingServer.ts # ws server at /zfc/v1 — handshake state, rate limit — Electron-free
     ├── preload/index.ts + index.d.ts  # contextBridge → window.desktopApi (sandboxed)
     ├── shared/                    # typed IPC channels + shared types (no runtime code)
     └── renderer/                  # Chromium: dark pairing screen, framework-free TS + CSS
@@ -55,27 +64,26 @@ apps/desktop/
         └── src/main.ts / renderer.css
 ```
 
-## What is implemented (Phase 2)
+## What is implemented (Phases 2–3)
 
-- electron-vite + TypeScript scaffold with the main/preload/renderer split per [desktop.md](../architecture/desktop.md).
-- Dark UI (#0a0c10): app title, "Waiting for mobile device…", QR rendered from **static test data**.
-- The static payload is a *spec-shaped* `pairing.md` v1 object (fixed test hosts/port/secrets — nothing listens on them), so the QR rendering path is production-grade; Phase 3 only swaps the payload source for real session generation.
-- Single typed IPC channel (`pairing:get-session`); channel names live in `src/shared/ipc.ts`.
-- Resource trims from the Phase 2 RAM discussion: spellcheck off, renderer sandbox on, strict CSP, devtools only in dev, single window, no framework in the renderer.
+- electron-vite + TypeScript scaffold with the main/preload/renderer split per [desktop.md](../architecture/desktop.md); resource trims from the Phase 2 RAM discussion (spellcheck off, renderer sandbox on, strict CSP, devtools only in dev, single window, no renderer framework).
+- Real pairing (Phase 3): session generation + expiry/regeneration sweep, WebSocket handshake server with HMAC challenge–response, rate limiting, busy/bye semantics, multi-interface LAN IP advertisement. Details: [features/pairing.md](../features/pairing.md).
+- Typed IPC: `pairing:get-session` (invoke), `pairing:regenerate` (invoke), `pairing:session-updated` + `pairing:mobile-state` (pushes). Channel names live in `src/shared/ipc.ts`.
+- Renderer: QR + "Waiting for mobile device…", "Connected to \<phone\>" on auth-ok, Regenerate button (the one desktop control the spec allows).
 
 ## Not implemented yet (by design)
 
-PairingServer/SignalingServer/NetworkInfo (Phases 3–4), WebRTC and media (Phases 5+), audio mixer (Phase 9), packaging/installer (deferred until there is something worth shipping). The desktop will **never** gain cast settings ([overview.md](../architecture/overview.md) ownership rules).
+WebRTC and media (Phases 5+), audio mixer (Phase 9), packaging/installer (deferred until there is something worth shipping). The desktop will **never** gain cast settings ([overview.md](../architecture/overview.md) ownership rules).
 
-## Verification record (2026-09-20, macOS arm64)
+## Verification record
 
-- `typecheck` green; `vitest` 3/3 green — including a round-trip test: payload → QR data URL → decode with jsQR → exact payload.
-- End-to-end visual check: launched the production build with CDP, dumped the renderer state (title/status/QR `data:image/png` src/dark bg all correct) and decoded the QR *from the window screenshot pixels* → exact v1 payload.
-- Idle RAM (informal baseline, per the RAM-efficiency agreement): **~364–376 MB summed RSS** across the 6 Electron processes (RSS double-counts pages shared between processes; the main process's true `phys_footprint` was 41 MB). Baseline to compare against in later phases; real load (video decode) gets measured in Phases 5/15.
+- 2026-09-20 (Phase 2): typecheck green; 3 unit tests green (QR scannability round-trip); production build verified live via CDP; idle RAM baseline ~364–376 MB summed RSS across the 6 Electron processes (RSS double-counts shared pages; main-process `phys_footprint` 41 MB) — compare real load in Phases 5/15.
+- 2026-09-20 (Phase 3): typecheck green; vitest **20/20** green — session lifecycle tests, HMAC vector, and loopback protocol tests over a real `ws` server (a scripted phone scans the QR PNG, then success/`unknown-session`/`bad-auth`+rate-limit/`busy`+reconnect/`bad-version`/recoverable `bad-message`/`expired`/`bye` paths). Production build launches, serves a real session on the LAN (verified via CDP payload extraction); real-device pairing scan verified — a Lenovo TB321FU (Android 16) scanned the QR and completed the handshake, desktop showed "Connected to TB321FU".
 
 ## Conventions
 
 - Main process owns sockets and sessions; renderer owns WebRTC and media; IPC carries only typed events defined in `src/shared/ipc.ts`.
-- The pairing module (`src/main/pairing/`) is deliberately Electron-import-free so unit tests can exercise it in plain Node — keep it that way when PairingServer lands.
+- The `pairing/` and `signaling/` modules are deliberately Electron-import-free so unit tests can exercise them in plain Node — keep it that way.
 - Renderer stays framework-free while it is this small; revisit only if a later phase (13, UX) justifies it with a measured reason.
-- Tests assert behavior (spec shape, scannability), not implementation details.
+- Tests assert behavior (spec shape, scannability, protocol outcomes), not implementation details.
+- Never log the pairing secret or HMAC ([AGENTS.md](../../AGENTS.md)); `src/main/log.ts` is the level-tagged logger.

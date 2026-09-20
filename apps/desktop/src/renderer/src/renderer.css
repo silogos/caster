@@ -71,3 +71,25 @@ body {
   font-size: 15px;
   max-width: 420px;
 }
+
+/* Receiver/environment control only (overview.md) — the desktop exposes no
+   cast settings; regenerating the pairing QR is the one allowed action. */
+.button {
+  margin-top: 12px;
+  padding: 10px 20px;
+  border: 1px solid var(--fg-muted);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:enabled {
+  border-color: var(--fg);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
