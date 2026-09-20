@@ -2,7 +2,7 @@
 
 Development is incremental: each phase = **plan → implement → test → document → user review**. A phase starts only after the previous one is approved. Every phase lists its acceptance criteria; a feature is not "done" because it compiles (see AGENTS.md and the Definition of Done below).
 
-Current status: **Phase 6 implemented — awaiting review (on-device lifecycle matrix pending a hands-on session; see [features/cast-session.md](../features/cast-session.md)).**
+Current status: **Phase 7 implemented — awaiting review (the audible test-tone confirmation on the fixed desktop build is the one remaining acceptance listen; see [features/game-audio.md](../features/game-audio.md)).**
 
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
@@ -40,7 +40,7 @@ Current status: **Phase 6 implemented — awaiting review (on-device lifecycle m
 
 ## Phase 7 — Internal/Game Audio
 **Scope:** **validation spike first** (ADR-003): custom playback-capture ADM over the `media` PC. Then the feature: `AudioPlaybackCaptureConfiguration`, usage filter, silent-input detection + UI state, mute/unmute.
-**Accept:** game audio audible on desktop; opted-out apps detected and surfaced honestly; mute works; behavior on disconnect clean; `features/game-audio.md` with findings. Commit `feat: add playback audio capture`.
+**Accept:** game audio audible on desktop; opted-out apps detected and surfaced honestly; mute works; behavior on disconnect clean; `features/game-audio.md` with findings. Commit `feat: add playback audio capture`. *(Implemented 2026-09-20: the spike disproved the "custom ADM" wording — no public PCM-injection API in the pinned prebuilt (ADR-003 addendum) — so the stock ADM's mic record is substituted at recording start. Live on device: audio track in the offer, honest "This app's audio can't be captured" verified against the platform's **opt-out default** (YouTube, most games — the big product finding), mute wiring, three live-found bugs fixed (reflection class-init crash, the desktop's muted `<video>`, the scan-screen navigation dead end). Remaining: one audible test-tone listen on the fixed desktop build + the Phase15 audio matrix. JVM tests 55/55, desktop 48/48.)*
 
 ## Phase 8 — Microphone Audio
 **Scope:** `mic` PC (factory B) with `JavaAudioDeviceModule`; permission flow; mic toggle; simultaneous operation with game audio.

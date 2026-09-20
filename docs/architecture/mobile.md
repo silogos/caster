@@ -1,6 +1,6 @@
 # Mobile Application Architecture (Android)
 
-Status: Phases 1–6 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase 6, [features/cast-session.md](../features/cast-session.md)).
+Status: Phases 1–7 (implemented; the cast session — `webrtc`/`capture`/`config`/`service` — is service-owned since Phase 6, [features/cast-session.md](../features/cast-session.md); game audio on the `media` PC since Phase 7, [features/game-audio.md](../features/game-audio.md)).
 
 ## Role
 
@@ -54,7 +54,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 | `INTERNET` | WebSocket + WebRTC | Install time |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` | Cast keeps running while a game is foreground | Install time (manifest) |
 | `POST_NOTIFICATIONS` | Cast-in-progress notification (required for FGS visibility) | Runtime, before first cast |
-| `RECORD_AUDIO` | Microphone track (and required to build playback-capture AudioRecord) | Runtime, before first cast with mic on |
+| `RECORD_AUDIO` | Playback-capture AudioRecord + the WebRTC ADM's initial mic record (Phase 7) — no microphone sample is ever captured; mic capture itself arrives in Phase 8 | Runtime, before first cast (non-fatal: denial = video-only cast) |
 | `CAMERA` | QR code scanning only | Runtime, at scan screen |
 
 `MediaProjection` consent is a system dialog per session, not a manifest permission.
@@ -64,7 +64,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 - **Consent dialog per session.** Every `MediaProjection` requires the system dialog; Android 14+ additionally can revoke projection when the app is backgrounded in specific ways, and each consent grants a single session (no "remember"). The UX must present this as normal ("Allow casting to start"), never as an error.
 - **Projection callbacks.** The app must handle `MediaProjection.Callback#onStop` (user revoked from status bar / system timeout) as a first-class stop path.
 - **Rotation.** Screen rotation changes the captured surface dimensions mid-stream; the capture pipeline must reconfigure the video source without dropping the session (validated in Phase 5/6).
-- **AudioPlaybackCapture policy** is per-app on the device: apps can set `ALLOW_CAPTURE_BY_NOONE` (many DRM/music/game apps do). Capture of opted-out apps yields silence, not an error. See [audio.md](audio.md).
+- **AudioPlaybackCapture policy** is per-app on the device — and **opt-out is the platform default for apps targeting API 29+**: only apps that set `allowAudioPlaybackCapture="true"` (or target ≤28) can be captured; opted-out apps produce silence, not errors. See [audio.md](audio.md) and the Phase7 verification record — the honest "This app's audio can't be captured" UI state covers this.
 - **Hardware encoders** vary by SoC; H.264 is preferred with VP8 fallback negotiated in the offer (see [webrtc.md](webrtc.md)).
 
 ## Known limitations

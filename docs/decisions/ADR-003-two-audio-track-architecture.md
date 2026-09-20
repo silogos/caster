@@ -1,6 +1,6 @@
 # ADR-003: Two-audio-track architecture (game audio + microphone as separate streams)
 
-- **Status:** accepted (Phase 0, 2026-09-19) — **with a mandatory validation spike at the start of Phase 7**
+- **Status:** accepted (Phase0, 2026-09-19) — **amended by the Phase7 spike result (2026-09-20), see the addendum below**
 
 ## Context
 
@@ -38,3 +38,13 @@ If either fails, fall back per the table below and record a superseding ADR.
 - **Positive:** keeps Android-side separation clean; uses only public `org.webrtc` Java APIs; each factory's ADM maps 1:1 to its capture source.
 - **Costs / accepted:** a second ICE+DTLS session (negligible on LAN); slight offer/answer bookkeeping (`pc` discriminator — already in the signaling spec); two `AudioSession`s on Android that must not both claim audio focus (the custom ADM does not request focus; validated in the spike).
 - **Explicitly revisit this ADR if:** the spike fails, or Phase 5 measurements show the second PC meaningfully impacting connection time or battery.
+
+## Addendum (Phase7, 2026-09-20): the spike result — "custom ADM" means *substitution*, not a hand-written ADM
+
+The spike disproved the decision's literal wording but not its architecture. Bytecode inspection of the pinned prebuilt (`io.getstream:stream-webrtc-android` **1.3.8**) showed there is **no public PCM-injection API**: `WebRtcAudioRecord` is package-private and builds its mic record in a private method, the fork's `AudioRecordDataCallback` builder option is dead code, and the only native ADM entry point (`JavaAudioDeviceModule.nativeCreateAudioDeviceModule`) still routes through `WebRtcAudioRecord`. A hand-written ADM would mean building/patching libwebrtc — exactly the "deferred" native option this ADR rejected.
+
+**What shipped instead (same two-PC architecture, unchanged):** factory A uses the **stock `JavaAudioDeviceModule`**, and at recording start — deterministic, on the ADM's own recording thread before its first read — its mic `AudioRecord` is swapped via reflection for one built with `AudioPlaybackCaptureConfiguration`. The mic record is stopped and released immediately; no microphone sample is ever read or encoded. The reflection is lazy and defensive: if a future library version changes internals, the cast degrades to video-only with an honest UI state instead of crashing (found live: `getField()` vs a private field in1.3.8 threw `ExceptionInInitializerError` and killed the cast; the lookup is now `getDeclaredField()` and lazy).
+
+**Accepted cost:** the approach is pinned to the library's internal field names (`audioInput`, `audioRecord`, `byteBuffer`) — checked at first swap, not compile time. A dependency bump that renames them is caught by the video-only fallback, not a crash. Implementation details and the full verification record: [features/game-audio.md](../features/game-audio.md).
+
+**Product finding that outranks this ADR's optimism:** the platform's capture default is **opt-out** (apps targeting API 29+ are not capturable unless they set `android:allowAudioPlaybackCapture="true"`), so most modern apps — including most games — are silent by design. The capture pipeline is only half the feature; the source app's consent is the other half, and no amount of engineering changes that ([audio.md](../architecture/audio.md)).

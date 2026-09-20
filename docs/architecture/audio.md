@@ -1,6 +1,6 @@
 # Audio Architecture
 
-Status: Phase 0 (planned; game audio lands in Phase 7, mic in Phase 8, desktop mixer in Phase 9).
+Status: game audio **implemented in Phase 7** (findings: [features/game-audio.md](../features/game-audio.md)); mic lands in Phase8, desktop mixer in Phase 9.
 
 ## Product rule
 
@@ -14,17 +14,19 @@ The desktop must be able to control their volumes independently (Phase 9's two `
 
 ```text
 Game / other apps
-   ↓ (audio played with capturable usage)
+   ↓ (audio played with capturable usage by an app that allows capture)
 AudioRecord built with AudioPlaybackCaptureConfiguration(mediaProjection)
    ↓ 48 kHz stereo PCM16
-custom AudioDeviceModule  ──▶ "media" PC audio track ──▶ desktop
+media factory ADM (stock JavaAudioDeviceModule, mic record substituted at start) ──▶ "media" PC audio track ──▶ desktop
 ```
 
-Facts that shape the implementation:
+Facts that shape the implementation (all verified live in Phase 7 — [features/game-audio.md](../features/game-audio.md)):
 
-- Requires a live `MediaProjection` token — game audio capture is only possible while screen capture is granted (the consent dialog covers both; this is one reason screen + game audio share the `media` PeerConnection).
-- **Capture policy is per-app and set by the *source* app.** Apps may declare `ALLOW_CAPTURE_BY_NOBODY` (or DRM protection) — many music/DRM/streaming apps and some games do. Capturing an opted-out app produces **silence, not an error**.
+- Requires a live `MediaProjection` token — audio reuses the screen capturer's projection instance (one consent = one projection; this is one reason screen + game audio share the `media` PeerConnection).
+- **Capture policy is per-app and opt-out is the default.** Apps targeting Android 10+ (API 29+) are **not capturable unless they explicitly set `android:allowAudioPlaybackCapture="true"`** (only apps targeting API ≤28 are capturable by default). YouTube, Netflix, Spotify and — critically — most modern *games* are opted out. Capturing an opted-out app produces **silence, not an error**. The product can honestly capture only apps that allow it; this deserves a UX affordance in Phase 13.
 - The capture config filters by audio usage: we accept `USAGE_MEDIA`, `USAGE_GAME`, `USAGE_UNKNOWN`. Silent-input detection (sustained zero samples while the desktop is connected) drives the UI state "This app's audio can't be captured", never a fabricated error.
+- The app must hold **RECORD_AUDIO** even though no microphone sample is ever captured — the platform requires it to build the playback-capture record, and the WebRTC ADM cannot start without a mic record (see the substitution below). Requested non-fatally before a cast; denial → video-only cast.
+- **ADM substitution (Phase 7 implementation reality):** libwebrtc's public Java API has no PCM-injection point (`WebRtcAudioRecord` is package-private with a private record factory; the fork's `AudioRecordDataCallback` is dead code). The media factory therefore uses the stock `JavaAudioDeviceModule`, whose microphone `AudioRecord` is **substituted at recording start** with the playback-capture record — deterministic, because the ADM's start callback runs on its recording thread before the first read. The replaced mic record is stopped and released immediately. Reflection is lazy and defensive: a library that changes internals degrades the cast to video-only, never crashes it. Full rationale: [ADR-003 addendum](../decisions/ADR-003-two-audio-track-architecture.md).
 
 ### Microphone — standard capture
 
@@ -36,11 +38,11 @@ libwebrtc allows **one AudioDeviceModule per PeerConnectionFactory**, and every 
 
 Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.md)):
 
-- `"media"` PC on factory A with a **custom `AudioDeviceModule`** implementation that wraps an `AudioRecord` configured with `AudioPlaybackCaptureConfiguration` (game audio; video rides here too).
-- `"mic"` PC on factory B with the standard `JavaAudioDeviceModule`.
+- `"media"` PC on factory A: screen video + game audio — factory A's ADM is the stock `JavaAudioDeviceModule` with its mic record substituted for playback capture at recording start (Phase 7 implementation, addendum in the ADR).
+- `"mic"` PC on factory B with the standard `JavaAudioDeviceModule` (Phase 8).
 - Both signaled over one WebSocket (`pc` discriminator, [webrtc.md](webrtc.md)).
 
-**Validation spike (start of Phase 7, before committing):** prove on a real device that (a) the custom ADM produces audible game audio through a `media`-PC track, and (b) a second factory/PC streams mic simultaneously without ADM or audio-focus conflicts. Fallback options are listed in the ADR.
+**Validation spike (Phase 7 result):** the spike proved audible-capture *possible* on a real device with a capturable source, and simultaneously disproved the original "custom ADM" wording — there is no public PCM-injection API in the pinned prebuilt (see the substitution above). Fallback options were not needed beyond the substitution; the ADR records the addendum.
 
 ## Desktop side
 
@@ -49,6 +51,8 @@ Design (detailed in [ADR-003](../decisions/ADR-003-two-audio-track-architecture.
                                                                                 ├─▶ AudioContext.destination
 "mic"   PC ─▶ mic MediaStream     ─▶ MediaStreamAudioSourceNode ─▶ GainNode ─┘
 ```
+
+Until Phase 9 wires this graph, the game-audio track plays directly through the receiver `<video>` element (Phase7 verified its markup must **not** be muted — a Phase5 autoplay leftover silently ate all cast audio until found live).
 
 - Independent volume per `GainNode`; persisted levels restored on launch.
 - **No further processing** (no EQ, compression, echo cancellation on the receiver) unless a measured need appears. The desktop renders and plays; it does not re-mix into one track or re-encode.
