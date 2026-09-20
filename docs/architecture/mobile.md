@@ -15,7 +15,7 @@ The Android app is the **sender and the configuration owner**. It captures scree
 | Async | Coroutines + Flow | Natural fit for session state and service ↔ UI event streams. |
 | minSdk | **29 (Android 10)** | `AudioPlaybackCapture` requires API 29; making it the floor keeps one clean audio architecture. |
 | WebRTC | `io.getstream:stream-webrtc-android` | Actively published prebuilt of Google's libwebrtc; same `org.webrtc` API; no native build step. [ADR-001](../decisions/ADR-001-tech-stack.md) |
-| QR scanning | CameraX + ML Kit barcode / ZXing | Decided in Phase 3 (evaluation criterion: on-device, no network dependency). |
+| QR scanning | CameraX + ML Kit barcode (bundled) | Decided in Phase 3: fully on-device (bundled model, no network dependency), best scanning reliability; +~4 MB APK. |
 
 Exact dependency versions are pinned when the project is created in Phase 1.
 

@@ -24,7 +24,7 @@ Current status: **Phase 2 complete — awaiting review.**
 
 ## Phase 3 — Pairing Protocol
 **Scope:** QR payload v1 generation + display on desktop ([pairing.md](../architecture/pairing.md)); camera scanning + payload parsing on mobile; WebSocket connect; `hello/challenge/auth/auth-ok` handshake (HMAC); session expiry/regeneration. Test handshake only — no media.
-**Accept:** desktop generates QR → mobile scans → mobile extracts payload → connects → desktop recognizes the phone (shows its name/state). Unit tests for payload parse/validate + HMAC handshake (loopback). Commit `feat: add qr pairing`.
+**Accept:** desktop generates QR → mobile scans → mobile extracts payload → connects → desktop recognizes the phone (shows its name/state). Unit tests for payload parse/validate + HMAC handshake (loopback). Commit `feat: add qr pairing`. *(Implemented 2026-09-20: desktop vitest 20/20 (incl. loopback ws handshake), mobile unit tests 15/15, cross-platform HMAC vector; live QR verified via CDP — see [features/pairing.md](../features/pairing.md). Real-device camera scan pending user verification.)*
 
 ## Phase 4 — Local Signaling
 **Scope:** full envelope + message set (`sdp-*`, `ice`, `ping/pong`, `bye`, `error`) per [webrtc.md](../architecture/webrtc.md); connection lifecycle, heartbeat, disconnect/reconnect rules; version negotiation. Verified with **loopback protocol tests** — two endpoints exchanging recorded SDP blobs, no real media.
