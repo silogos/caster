@@ -3,6 +3,7 @@ package com.zerofriction.localcast.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.zerofriction.localcast.MainActivity
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.signaling.SignalingClient
@@ -21,31 +23,43 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The cast pipeline's user-facing state, owned by [CastService] — the scan
- * screen renders it 1:1. Errors carry the simple user-facing message only
- * (AGENTS.md); technical detail lives in the service/session logs.
+ * The cast pipeline's user-facing state, owned by [CastService] — the home and
+ * scan screens render it 1:1. Errors carry the simple user-facing message only
+ * (AGENTS.md); technical detail lives in the service/session logs. The
+ * desktop's name rides along so any screen (and the notification) can say who
+ * is being cast to without asking the pairing machine, which handed its
+ * connection over when the cast started.
  */
 sealed interface CastState {
     data object Idle : CastState
-    data object Starting : CastState
-    data object Casting : CastState
+    data class Starting(val desktopName: String) : CastState
+    data class Casting(val desktopName: String) : CastState
     data class Failed(val message: String) : CastState
 }
 
 /**
- * Minimal Phase5 foreground service (type `mediaProjection`). Why it exists
- * already — the roadmap puts the full CastService lifecycle in Phase6, but
- * Android 14+ requires a foreground service of type mediaProjection to be
- * running *before* the projection's virtual display is created; without it
- * `createVirtualDisplay` throws and no cast can run on the target device
- * (docs/architecture/mobile.md ordering constraint). So Phase5 ships the
- * smallest legal skeleton: startForeground → session, stop → clean teardown.
- * The full lifecycle matrix (rotation, background, permission revocation,
- * network loss, resource release) is Phase6 work.
+ * Phase6 foreground service (type `mediaProjection`) owning the **whole cast
+ * session** — the MediaProjection, the `media` peer connection and the pairing
+ * signaling connection handed over at start (docs/architecture/mobile.md).
+ * The Activity is only UI: a cast started from the scan screen survives
+ * leaving the screen, the app being backgrounded for a game, and the task
+ * being removed; it ends through the stop button (app or notification), the
+ * user revoking the projection, the desktop disappearing, or death of the
+ * owning process.
  *
- * The session plumbing (signaling connection) still lives with the scan
- * screen (Phase3 decision); this service only owns projection + media. On
- * process death the cast does not auto-restart (START_NOT_STICKY) — Phase6.
+ * Lifecycle (every edge converges on [endCast]):
+ *  - consent result + signaling handover → [start] → foreground (Android14+
+ *    ordering: foreground *before* the projection starts, consent *before* the
+ *    service starts) → `MediaCastSession`
+ *  - `onStop` from the projection (status-bar chip / system revoke) → session
+ *    fatal → Failed("The screen cast was stopped.")
+ *  - `bye`/terminal signaling failure/ICE failure → session fatal → Failed
+ *  - user stop (app button or notification action) → clean stop, `bye` to the
+ *    desktop (fresh QR there)
+ *  - system kill of the service or process → `onDestroy` tears the session
+ *    down; the cast does not auto-restart (`START_NOT_STICKY`) — projection
+ *    consent cannot be reused after process death, so the user starts a fresh
+ *    cast (new scan + new consent).
  */
 class CastService : Service() {
 
@@ -55,7 +69,7 @@ class CastService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
 
-        /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. Reworked in Phase6. */
+        /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
 
         private val _state = MutableStateFlow<CastState>(CastState.Idle)
@@ -63,8 +77,24 @@ class CastService : Service() {
 
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
+            // The handover must carry a *live* pairing (found live, 2026-09-20:
+            // a cast started with an already-closed client hangs in Starting
+            // forever — no Authorized/Failed event ever arrives on a dead
+            // socket, so nothing would end it). AUTHORIZED is the normal case;
+            // RECONNECTING is allowed — the session negotiates when re-auth
+            // succeeds, and expiry surfaces as a Failed event (→ ConnectionLost).
+            when (args.signaling.state.value) {
+                SignalingClient.State.AUTHORIZED,
+                SignalingClient.State.RECONNECTING,
+                -> Unit
+                else -> {
+                    Log.w(TAG, "refusing to start: signaling is ${args.signaling.state.value}")
+                    _state.value = CastState.Failed(context.getString(R.string.cast_failed_generic))
+                    return
+                }
+            }
             pendingStart = args
-            _state.value = CastState.Starting
+            _state.value = CastState.Starting(args.desktopName)
             ContextCompat.startForegroundService(context, Intent(context, CastService::class.java))
         }
 
@@ -73,7 +103,12 @@ class CastService : Service() {
         }
     }
 
-    /** Everything the service needs from the screen that started the cast. */
+    /**
+     * Everything the service needs from the screen that started the cast. The
+     * signaling client was released by the pairing machine to this service —
+     * from here on its lifecycle is the cast's lifecycle ([endCast] sends
+     * `bye` and closes it).
+     */
     data class StartArgs(
         val signaling: SignalingClient,
         val config: CastConfig,
@@ -81,9 +116,11 @@ class CastService : Service() {
         val projectionIntent: Intent,
         val physicalWidth: Int,
         val physicalHeight: Int,
+        val desktopName: String,
     )
 
     private var session: MediaCastSession? = null
+    private var signaling: SignalingClient? = null
 
     override fun onBind(intent: Intent?) = null
 
@@ -100,6 +137,7 @@ class CastService : Service() {
             return START_NOT_STICKY
         }
         pendingStart = null
+        signaling = args.signaling
 
         // Android 14+ ordering (mobile.md): foreground *before* the projection
         // starts; the consent was collected *before* the service started.
@@ -107,7 +145,7 @@ class CastService : Service() {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification(),
+            buildNotification(args.desktopName),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             } else {
@@ -124,7 +162,7 @@ class CastService : Service() {
             physicalHeight = args.physicalHeight,
             onState = { sessionState ->
                 if (sessionState == MediaCastSession.State.STREAMING) {
-                    _state.value = CastState.Casting
+                    _state.value = CastState.Casting(args.desktopName)
                 }
             },
         )
@@ -134,20 +172,32 @@ class CastService : Service() {
         return START_NOT_STICKY
     }
 
-    /** A first-class stop path (mobile.md): simple user-facing message, details stay in logs. */
+    /** First-class stop paths (mobile.md): simple user-facing message, details stay in logs. */
     private fun onFatal(failure: MediaCastSession.Failure) {
         val message = when (failure) {
             MediaCastSession.Failure.ProjectionRevoked -> getString(R.string.cast_stopped_projection_revoked)
+            MediaCastSession.Failure.DesktopEnded -> getString(R.string.session_ended)
+            MediaCastSession.Failure.ConnectionLost -> getString(R.string.cast_failed_connection_lost)
             is MediaCastSession.Failure.Error -> getString(R.string.cast_failed_generic)
         }
-        Log.w(TAG, "cast ended: ${if (failure is MediaCastSession.Failure.Error) failure.detail else "projection revoked"}")
+        Log.w(TAG, "cast ended: ${failure.logDetail()}")
         _state.value = CastState.Failed(message)
         endCast()
     }
 
+    /**
+     * The single exit door. Idempotent: every lifecycle edge funnels here, and
+     * any of them may fire twice (e.g. `bye` racing a user stop). Nothing is
+     * left behind — session, signaling socket, foreground notification.
+     */
     private fun endCast() {
         session?.stop()
         session = null
+        // The service owns the pairing connection now (Phase6): ending the
+        // cast ends the pairing session too — `bye` invalidates it on the
+        // desktop (fresh QR there), and the mobile must scan again to cast.
+        signaling?.disconnect()
+        signaling = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         if (_state.value !is CastState.Failed) {
@@ -158,9 +208,11 @@ class CastService : Service() {
 
     override fun onDestroy() {
         // The system can kill the service without another onStartCommand —
-        // never leak the projection (Phase6 makes this matrix exhaustive).
+        // never leak the projection, the pc, or the socket.
         session?.stop()
         session = null
+        signaling?.disconnect()
+        signaling = null
         super.onDestroy()
     }
 
@@ -172,13 +224,34 @@ class CastService : Service() {
         )
     }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            // Phase6 designs a proper launcher icon; this placeholder is the
-            // minimum the system accepts.
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(getString(R.string.cast_notification_title))
+    private fun buildNotification(desktopName: String): Notification {
+        val openApp = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stopCast = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, CastService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_cast)
+            .setContentTitle(getString(R.string.casting_to, desktopName))
             .setContentText(getString(R.string.cast_notification_text))
             .setOngoing(true)
+            .setContentIntent(openApp)
+            .addAction(0, getString(R.string.cast_notification_stop), stopCast)
             .build()
+    }
+}
+
+/** Technical detail for logs only — never the user-facing message (AGENTS.md). */
+private fun MediaCastSession.Failure.logDetail(): String = when (this) {
+    MediaCastSession.Failure.ProjectionRevoked -> "projection revoked"
+    MediaCastSession.Failure.DesktopEnded -> "desktop ended the session (bye)"
+    MediaCastSession.Failure.ConnectionLost -> "connection to the desktop lost (ice/signaling)"
+    is MediaCastSession.Failure.Error -> detail
 }

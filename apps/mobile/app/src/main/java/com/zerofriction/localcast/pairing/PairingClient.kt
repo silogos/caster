@@ -49,15 +49,38 @@ class PairingClient(
     val state: StateFlow<State> = _state.asStateFlow()
 
     private var signaling: SignalingClient? = null
+
+    /** This machine's event handler — kept so [releaseSignaling] can unregister it. */
+    private var eventHandler: ((SignalingClient.Event) -> Unit)? = null
+
     /** Name from the last successful auth — shown during reconnect ("Reconnecting to …"). */
     private var lastDesktopName: String? = null
 
     /**
-     * The live signaling connection, once a QR scan started one — the cast
-     * service (Phase5) subscribes to media events and sends SDP/ICE through it.
-     * Null before the first scan or after [reset].
+     * The live signaling connection, once a QR scan started one — only while
+     * this machine still owns it. Once a cast starts the connection is handed
+     * to [releaseSignaling] and the cast service owns its lifecycle (Phase6).
      */
     fun signalingClient(): SignalingClient? = signaling
+
+    /**
+     * Hand the live signaling connection over to the cast service (Phase6
+     * session ownership): the socket stays open, but this machine stops
+     * tracking it — its events are the cast's business now and the UI renders
+     * `CastService.state` instead. After the handover [reset] and
+     * [disconnect] are no-ops: they cannot touch what they no longer own, so
+     * leaving the scan screen never ends a running cast.
+     *
+     * Returns the detached client, or null if nothing live is owned.
+     */
+    fun releaseSignaling(): SignalingClient? {
+        val client = signaling ?: return null
+        eventHandler?.let { client.removeListener(it) }
+        eventHandler = null
+        signaling = null
+        _state.value = State.Idle
+        return client
+    }
 
     /** Entry point for both the camera scan and the debug manual payload input. */
     fun startFromQrText(qrText: String) {
@@ -80,7 +103,7 @@ class PairingClient(
             scheduler = schedulerFactory(),
         )
         signaling = client
-        client.connect { event ->
+        val handler: (SignalingClient.Event) -> Unit = { event ->
             when (event) {
                 SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
                 is SignalingClient.Event.Authorized -> {
@@ -91,7 +114,7 @@ class PairingClient(
                     _state.value = State.Reconnecting(lastDesktopName)
                 is SignalingClient.Event.SdpAnswer,
                 is SignalingClient.Event.IceCandidate,
-                -> Unit // media plumbing — consumed by the webrtc module (Phase5)
+                -> Unit // media plumbing — consumed by the webrtc module
                 is SignalingClient.Event.SessionEnded -> {
                     lastDesktopName = null
                     _state.value = State.Ended
@@ -99,16 +122,22 @@ class PairingClient(
                 is SignalingClient.Event.Failed -> _state.value = State.Failed(PairingError.fromSignaling(event.error))
             }
         }
+        eventHandler = handler
+        client.connect(handler)
     }
 
     /** User-initiated end: sends `bye`; the desktop returns to a fresh QR. */
     fun disconnect() {
         signaling?.disconnect()
+        eventHandler = null
+        signaling = null
         _state.value = State.Idle
     }
 
     fun reset() {
         signaling?.disconnect()
+        eventHandler = null
+        signaling = null
         _state.value = State.Idle
     }
 

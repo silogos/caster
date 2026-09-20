@@ -1,0 +1,13 @@
+<!-- Cast symbol for the foreground-service notification (Phase6) —
+     the standard Material "cast" glyph. Notification small icons are
+     alpha-masked and tinted by the system; no theme refs here on purpose
+     (they resolve in SystemUI's process, not ours). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M21,3H3c-1.1,0-2,0.9-2,2v3h2V5h18v14h-9v2h9c1.1,0,2-0.9,2-2V5c0-1.1-0.9-2-2-2z M1,18v3h3C4,19.34,2.66,18,1,18z M1,14v2c2.76,0,5,2.24,5,5h2C8,17.13,4.87,14,1,14z M1,10v2c4.97,0,9,4.03,9,9h2C12,14.92,7.07,10,1,10z" />
+</vector>

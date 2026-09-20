@@ -67,6 +67,16 @@ class MediaCastSession(
         /** The user (or system) revoked the projection — a first-class stop path (mobile.md). */
         data object ProjectionRevoked : Failure
 
+        /** The desktop ended the session (`bye`, e.g. its window was closed). */
+        data object DesktopEnded : Failure
+
+        /**
+         * The link to the desktop is gone for good — ICE failed, or signaling
+         * hit a terminal error (session expired/unknown after the reconnect
+         * ladder ran out). The user-facing result is the same: rescan.
+         */
+        data object ConnectionLost : Failure
+
         /** Anything unexpected — the service shows the simple message, details stay here. */
         data class Error(val detail: String) : Failure
     }
@@ -116,7 +126,12 @@ class MediaCastSession(
             is SignalingClient.Event.IceCandidate ->
                 if (event.pc == PC_ID) post { if (active) applyRemoteCandidate(event.candidate) }
 
-            is SignalingClient.Event.SessionEnded -> post { if (active) teardown() }
+            is SignalingClient.Event.SessionEnded -> post { if (active) fatal(Failure.DesktopEnded) }
+
+            // Terminal signaling failure (ladder exhausted / expired QR after a
+            // desktop restart): no re-auth will ever come — end the cast.
+            is SignalingClient.Event.Failed ->
+                post { if (active) fatal(Failure.ConnectionLost) }
 
             // Pairing/lifecycle events belong to the PairingClient; a mid-cast
             // reconnect is normal (backoff ladder) and does not stop the cast.
@@ -344,7 +359,7 @@ class MediaCastSession(
                     // Recovery is the offerer's job (ICE restart / rebuild) —
                     // webrtc.md; the desktop never renegotiates on its own.
                     Log.w(TAG, "ice failed — stopping the cast")
-                    fatal(Failure.Error("connection failed"))
+                    fatal(Failure.ConnectionLost)
                 }
                 else -> Unit
             }

@@ -2,6 +2,7 @@
     <!-- Launcher label stays short; the full product name is shown on the home screen. -->
     <string name="app_name">Local Cast</string>
     <string name="home_title">Zero-Friction Local Cast</string>
+    <string name="home_not_connected">Not connected</string>
     <string name="start_cast">Start Cast</string>
 
     <!-- Scan / pairing screen (Phase 3). -->
@@ -27,9 +28,14 @@
     <string name="stop_casting">Stop casting</string>
     <string name="cast_failed_generic">Couldn\'t start the cast. Please try again.</string>
     <string name="cast_stopped_projection_revoked">The screen cast was stopped.</string>
+    <!-- Phase6: mid-cast loss of the desktop (ice failure, or the signaling
+         ladder ran out after the desktop closed / the QR session expired). -->
+    <string name="cast_failed_connection_lost">The connection to the desktop was lost. Scan the QR code to reconnect.</string>
     <string name="cast_notification_channel">Screen cast</string>
     <string name="cast_notification_title">Casting your screen</string>
     <string name="cast_notification_text">Your screen is being shared with the desktop.</string>
+    <string name="cast_notification_stop">Stop</string>
+    <string name="casting_background_hint">You can leave the app and use your phone normally — the cast keeps running until you stop it.</string>
 
     <!--
       User-facing failure messages per docs/architecture/pairing.md §Failure modes.

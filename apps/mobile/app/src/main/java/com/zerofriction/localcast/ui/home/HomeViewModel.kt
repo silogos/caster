@@ -1,18 +1,19 @@
 package com.zerofriction.localcast.ui.home
 
 import androidx.lifecycle.ViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
+import com.zerofriction.localcast.service.CastState
+import com.zerofriction.localcast.service.CastService
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Holds the home screen state. Phase3: the home screen launches the pairing
- * scan; a session-aware status (connected desktop name) arrives when the cast
- * service owns the session (Phase6) — the pairing session currently lives in
- * the scan screen's ViewModel.
+ * Holds the home screen state. Phase6: the cast service owns the session, so
+ * the home screen renders [CastService.state] 1:1 — the home screen shows a
+ * live cast ("Casting to …" + stop) even though pairing happened on the scan
+ * screen, because the session no longer dies with any ViewModel.
  */
-class HomeViewModel : ViewModel() {
+class HomeViewModel(
+    castStateFlow: StateFlow<CastState> = CastService.state,
+) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(HomeUiState())
-    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+    val castState: StateFlow<CastState> = castStateFlow
 }
