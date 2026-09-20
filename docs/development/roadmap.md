@@ -67,7 +67,7 @@ Current status: **Phase 10 implemented — awaiting review (the on-device live-c
 **Accept:** first-time user flow completes in ≤ 3 actions; all failure modes from `pairing.md` show their mapped messages. Commit UX phase.
 
 ## Phase 14 — OBS / Streaming Workflow
-**Scope:** receiver window hardening: stable size/aspect, letterboxing that follows rotation, controls out of the video rect, dark background, smooth rendering; optional `session-info` overlay off-cast.
+**Scope:** receiver window hardening: stable size/aspect, letterboxing that follows rotation, controls out of the video rect, dark background, smooth rendering; optional `session-info` overlay off-cast. *(Partially landed early, review-time after Phase9: full-window video, hover-revealed overlay + settings modal, and the window following the stream's aspect on cast start/rotation — see [architecture/desktop.md](../architecture/desktop.md) §Window design. Remaining: the 30+ min OBS session hardening, manual-resize letterbox polish, the off-cast overlay.)*
 **Accept:** OBS Window Capture produces a clean, correctly-proportioned, smooth feed over a 30+ min session. Commit receiver-window phase.
 
 ## Phase 15 — Reliability Testing

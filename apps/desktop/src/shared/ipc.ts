@@ -28,8 +28,14 @@ export const IPC = {
     iceCandidate: 'signaling:ice-candidate',
     /** Renderer → main: send the answer for one pc back over the socket. */
     sendSdpAnswer: 'signaling:send-sdp-answer',
-    /** Renderer → main: trickle a desktop candidate back over the socket. */
+    /** Renderer → main: trickle a desktop candidate (null = end-of-gathering) for one pc. */
     sendIceCandidate: 'signaling:send-ice-candidate'
+  },
+  window: {
+    /** Renderer → main: a cast is live/over — cast-window vs waiting-window minimums. */
+    castActive: 'window:cast-active',
+    /** Renderer → main: reshape the window to the stream's aspect (follows rotation). */
+    resizeToStream: 'window:resize-to-stream'
   }
 } as const
 
@@ -48,4 +54,8 @@ export interface DesktopApi {
   sendSdpAnswer(pc: SignalingSdpMessage['pc'], sdp: string): void
   /** Trickles one desktop candidate (null = end-of-gathering) for one pc. */
   sendIceCandidate(pc: SignalingIceMessage['pc'], candidate: unknown): void
+  /** Tells the main process a cast is live (relaxed window minimums) or over. */
+  setCastActive(active: boolean): void
+  /** Reshapes the window to a stream's aspect so the video fills it edge-to-edge. */
+  resizeWindowToStream(width: number, height: number): void
 }

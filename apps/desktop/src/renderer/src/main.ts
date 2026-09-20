@@ -8,9 +8,16 @@ const qrEl = document.getElementById('qr') as HTMLImageElement
 const errorEl = document.getElementById('error') as HTMLParagraphElement
 const hintEl = document.getElementById('hint') as HTMLParagraphElement
 const videoEl = document.getElementById('video') as HTMLVideoElement
-const mixerEl = document.getElementById('mixer') as HTMLDivElement
 const micAudioEl = document.getElementById('mic-audio') as HTMLAudioElement
 const regenerateEl = document.getElementById('regenerate') as HTMLButtonElement
+// The cast state's UI (review-time restructure): a hover-revealed overlay
+// (status + the settings trigger) over a full-window video, and the settings
+// modal holding the mixer.
+const castOverlayEl = document.getElementById('cast-overlay') as HTMLDivElement
+const castStatusEl = document.getElementById('cast-status') as HTMLParagraphElement
+const openSettingsEl = document.getElementById('open-settings') as HTMLButtonElement
+const settingsBackdropEl = document.getElementById('settings-backdrop') as HTMLDivElement
+const closeSettingsEl = document.getElementById('close-settings') as HTMLButtonElement
 
 const WAITING_MESSAGE = 'Waiting for mobile device…'
 // Friendly, non-technical (AGENTS.md): codes stay in the main-process logs.
@@ -61,7 +68,14 @@ const receiver = new ReceiverSession({
       videoEl.muted = true
       videoEl.play().catch((error) => log('warn', 'autoplay was blocked', { error: String(error) }))
       mixer.attachStream('game', stream)
-      mixerEl.hidden = false
+      // `body.receiving` (renderer.css): the video fills the window; the
+      // stage's waiting layout disappears; the hover overlay appears. The
+      // window relaxes its minimums (portrait streams need a portrait
+      // window) and then follows the stream's aspect (the resize listener
+      // below fires when the stream's metadata arrives).
+      document.body.classList.add('receiving')
+      castOverlayEl.hidden = false
+      window.desktopApi.setCastActive(true)
       qrCardEl.hidden = true
       hintEl.hidden = true
       regenerateEl.hidden = true
@@ -70,7 +84,13 @@ const receiver = new ReceiverSession({
       videoEl.srcObject = null
       videoEl.hidden = true
       mixer.detachStream('game')
-      mixerEl.hidden = true
+      document.body.classList.remove('receiving')
+      castOverlayEl.hidden = true
+      hideSettings()
+      window.desktopApi.setCastActive(false)
+      // The next cast reshapes the window fresh — the resize listener
+      // re-fires when the new stream's metadata arrives.
+      lastAppliedAspect =0
       hintEl.hidden = false
       regenerateEl.hidden = false
     }
@@ -93,6 +113,25 @@ const receiver = new ReceiverSession({
     }
   },
   log
+})
+
+// The window follows the stream's aspect (receiver window behavior —
+// overview.md; never a cast setting): the video element's 'resize' event
+// fires whenever the intrinsic size changes — first metadata, then every
+// rotation — and the main process reshapes the window so the letterboxed
+// video fills it edge-to-edge. Epsilon-guarded: encoder pixel jitter must
+// not fight the user's own window resizing.
+const ASPECT_EPSILON = 0.01
+let lastAppliedAspect = 0
+videoEl.addEventListener('resize', () => {
+  const width = videoEl.videoWidth
+  const height = videoEl.videoHeight
+  if (width === 0 || height === 0) return
+  const aspect = width / height
+  if (Math.abs(aspect - lastAppliedAspect) < ASPECT_EPSILON) return
+  lastAppliedAspect = aspect
+  window.desktopApi.resizeWindowToStream(width, height)
+  log('info', 'window following the stream aspect', { width, height })
 })
 
 let connectedName: string | null = null
@@ -133,19 +172,24 @@ function showMobileState(state: MobileStateEvent): void {
 }
 
 // "Connected to Pixel 8 — 1280×720 · 30 fps · balanced · game audio · mic"
+// — shown in the waiting layout's status line and, while receiving, in the
+// hover overlay over the video.
 function renderStatus(): void {
+  let text: string
   if (connectedName === null) {
-    statusEl.textContent = WAITING_MESSAGE
-    return
+    text = WAITING_MESSAGE
+  } else {
+    const info = sessionInfo
+    if (info === null) {
+      text = `Connected to ${connectedName}`
+    } else {
+      const sources = [info.gameAudio ? 'game audio' : null, info.mic ? 'mic' : null].filter(Boolean).join(' · ')
+      const parts = [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile, sources].filter(Boolean)
+      text = `Connected to ${connectedName} — ${parts.join(' · ')}`
+    }
   }
-  const info = sessionInfo
-  if (info === null) {
-    statusEl.textContent = `Connected to ${connectedName}`
-    return
-  }
-  const sources = [info.gameAudio ? 'game audio' : null, info.mic ? 'mic' : null].filter(Boolean).join(' · ')
-  const parts = [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile, sources].filter(Boolean)
-  statusEl.textContent = `Connected to ${connectedName} — ${parts.join(' · ')}`
+  statusEl.textContent = text
+  castStatusEl.textContent = text
 }
 
 // The mixer panel (StatusView's volume controls — desktop.md): one row per
@@ -177,6 +221,26 @@ const wireMixerChannel = (channel: MixerChannel, sliderId: string, muteButtonId:
 
 wireMixerChannel('game', 'game-volume', 'game-mute')
 wireMixerChannel('mic', 'mic-volume', 'mic-mute')
+
+// The settings modal (receiver/environment controls only — overview.md):
+// opened from the hover overlay's trigger; closed via the button, Escape,
+// or a click on the backdrop outside the dialog.
+function hideSettings(): void {
+  settingsBackdropEl.hidden = true
+  if (!castOverlayEl.hidden) openSettingsEl.focus()
+}
+
+openSettingsEl.addEventListener('click', () => {
+  settingsBackdropEl.hidden = false
+  closeSettingsEl.focus()
+})
+closeSettingsEl.addEventListener('click', hideSettings)
+settingsBackdropEl.addEventListener('click', (event) => {
+  if (event.target === settingsBackdropEl) hideSettings()
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !settingsBackdropEl.hidden) hideSettings()
+})
 
 function enableRegenerate(enabled: boolean): void {
   regenerateEl.disabled = !enabled

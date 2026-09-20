@@ -26,6 +26,12 @@ const desktopApi: DesktopApi = {
   },
   sendIceCandidate: (pc, candidate) => {
     ipcRenderer.invoke(IPC.signaling.sendIceCandidate, { pc, candidate } satisfies SignalingIceMessage)
+  },
+  setCastActive: (active) => {
+    ipcRenderer.invoke(IPC.window.castActive, active)
+  },
+  resizeWindowToStream: (width, height) => {
+    ipcRenderer.invoke(IPC.window.resizeToStream, { width, height })
   }
 }
 

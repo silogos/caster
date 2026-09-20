@@ -20,9 +20,11 @@
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
            Muted — since Phase9 the element renders video only; its audio
-           track plays through the Web Audio mixer below, so leaving the
-           element unmuted would play the game audio twice. The muted
-           element also satisfies autoplay under any gesture policy. -->
+           track plays through the Web Audio mixer, so leaving the element
+           unmuted would play the game audio twice. The muted element also
+           satisfies autoplay under any gesture policy. While receiving
+           (`body.receiving`) the video fills the whole window — a clean
+           rect for the cast (and later OBS capture). -->
       <video class="video" id="video" hidden autoplay playsinline muted></video>
       <!-- The mic stream's keep-alive element (found live in Phase9): Chromium
            stops pulling a MediaStream that no media element holds once the
@@ -31,24 +33,39 @@
            audible path is the mixer's Web Audio graph; this element only
            holds the stream so it survives minimization/occlusion. -->
       <audio id="mic-audio" hidden autoplay muted></audio>
-      <!-- Phase9's mixer (audio.md): the receiver's one allowed audio control
-           — independent volume/mute per stream (game audio, microphone).
-           Shown only while receiving; levels persist across launches. -->
-      <div class="mixer" id="mixer" hidden>
-        <div class="mixer-channel">
-          <label class="mixer-label" for="game-volume">Game audio</label>
-          <input type="range" id="game-volume" min="0" max="100" step="1" />
-          <button class="mixer-button" id="game-mute" type="button">Mute</button>
-        </div>
-        <div class="mixer-channel">
-          <label class="mixer-label" for="mic-volume">Microphone</label>
-          <input type="range" id="mic-volume" min="0" max="100" step="1" />
-          <button class="mixer-button" id="mic-mute" type="button">Mute</button>
-        </div>
-      </div>
       <p class="hint" id="hint">Scan with your Android device — the code is valid for 10 minutes and refreshes automatically</p>
       <button class="button" id="regenerate" type="button">New QR code</button>
     </main>
+    <!-- While receiving: a hover-revealed overlay (status line + the settings
+         trigger). Invisible otherwise — the video rect stays clean. -->
+    <div class="cast-overlay" id="cast-overlay" hidden>
+      <p class="cast-status" id="cast-status"></p>
+      <button class="overlay-button" id="open-settings" type="button">Settings</button>
+    </div>
+    <!-- The settings modal (receiver/environment controls only — overview.md:
+    the desktop exposes no cast settings). Holds Phase9's mixer: independent
+    volume/mute per stream; levels persist across launches. -->
+    <div class="modal-backdrop" id="settings-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-header">
+          <h2 class="modal-title" id="settings-title">Settings</h2>
+          <button class="mixer-button" id="close-settings" type="button">Close</button>
+        </div>
+        <div class="mixer" id="mixer">
+          <div class="mixer-channel">
+            <label class="mixer-label" for="game-volume">Game audio</label>
+            <input type="range" id="game-volume" min="0" max="100" step="1" />
+            <button class="mixer-button" id="game-mute" type="button">Mute</button>
+          </div>
+          <div class="mixer-channel">
+            <label class="mixer-label" for="mic-volume">Microphone</label>
+            <input type="range" id="mic-volume" min="0" max="100" step="1" />
+            <button class="mixer-button" id="mic-mute" type="button">Mute</button>
+          </div>
+        </div>
+        <p class="modal-note">Volume is this computer's playback control — cast quality is set on the phone.</p>
+      </div>
+    </div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
