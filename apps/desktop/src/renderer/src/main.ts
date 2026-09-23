@@ -1,6 +1,7 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { heroView } from './pairingHero'
+import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
@@ -21,6 +22,11 @@ const castStatusEl = document.getElementById('cast-status') as HTMLParagraphElem
 const openSettingsEl = document.getElementById('open-settings') as HTMLButtonElement
 const settingsBackdropEl = document.getElementById('settings-backdrop') as HTMLDivElement
 const closeSettingsEl = document.getElementById('close-settings') as HTMLButtonElement
+// Phase14 receiver-window controls (window behavior — the receiver's own
+// domain, never a cast setting): the off-cast session-info window's toggle,
+// and the one-click re-fit after a manual resize.
+const sessionInfoOverlayEl = document.getElementById('session-info-overlay') as HTMLInputElement
+const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
@@ -66,26 +72,26 @@ const receiver = new ReceiverSession({
       videoEl.muted = true
       videoEl.play().catch((error) => log('warn', 'autoplay was blocked', { error: String(error) }))
       mixer.attachStream('game', stream)
-      // `body.receiving` (renderer.css): the video fills the window; the
-      // stage's waiting layout disappears; the hover overlay appears. The
-      // window relaxes its minimums (portrait streams need a portrait
-      // window) and then follows the stream's aspect (the resize listener
-      // below fires when the stream's metadata arrives).
+      // `body.receiving` (renderer.css): the video takes over the window and
+      // letterboxes into it (`contain` — the user's chosen window shape is
+      // final); the stage's waiting layout disappears; the hover overlay
+      // appears. The window relaxes its minimums so portrait streams fit a
+      // small window too. The imperative fill below re-asserts the element's
+      // full-window size at this exact moment.
       document.body.classList.add('receiving')
+      fillVideoWindow()
       castOverlayEl.hidden = false
       window.desktopApi.setCastActive(true)
     },
     clear: () => {
       videoEl.srcObject = null
       videoEl.hidden = true
+      releaseVideoWindow()
       mixer.detachStream('game')
       document.body.classList.remove('receiving')
       castOverlayEl.hidden = true
       hideSettings()
       window.desktopApi.setCastActive(false)
-      // The next cast reshapes the window fresh — the resize listener
-      // re-fires when the new stream's metadata arrives.
-      lastAppliedAspect =0
       // The pairing hero reappears (the mobile-state 'waiting' event clears
       // the paired name; body.receiving has been hiding the whole stage).
       renderHero()
@@ -111,24 +117,35 @@ const receiver = new ReceiverSession({
   log
 })
 
-// The window follows the stream's aspect (receiver window behavior —
-// overview.md; never a cast setting): the video element's 'resize' event
-// fires whenever the intrinsic size changes — first metadata, then every
-// rotation — and the main process reshapes the window so the letterboxed
-// video fills it edge-to-edge. Epsilon-guarded: encoder pixel jitter must
-// not fight the user's own window resizing.
-const ASPECT_EPSILON = 0.01
-let lastAppliedAspect = 0
+// The stream's size (first metadata, every rotation, quality steps) feeds the
+// main process's cache — the on-demand "Match window to video" reshape uses
+// it. The window itself is the user's canvas: the video letterboxes via CSS
+// (`contain` — full width or full height, black bars for the rest) and never
+// reshapes the window (found live in the Phase14 session: the auto-reshape
+// fought the user's own window sizing, especially for a portrait stream).
 videoEl.addEventListener('resize', () => {
-  const width = videoEl.videoWidth
-  const height = videoEl.videoHeight
-  if (width === 0 || height === 0) return
-  const aspect = width / height
-  if (Math.abs(aspect - lastAppliedAspect) < ASPECT_EPSILON) return
-  lastAppliedAspect = aspect
-  window.desktopApi.resizeWindowToStream(width, height)
-  log('info', 'window following the stream aspect', { width, height })
+  if (videoEl.videoWidth === 0 || videoEl.videoHeight === 0) return
+  window.desktopApi.reportStreamSize(videoEl.videoWidth, videoEl.videoHeight)
 })
+
+// The fill itself is imperative (Phase14, live-session follow-up): every
+// window-size change and every cast start re-asserts the video element's
+// full-window fill with inline styles, so it never depends on viewport-unit
+// (100vw/100vh) resolution — and survives any stylesheet state. The
+// `contain` letterbox then draws full width or full height, black bars for
+// the rest (renderer.css carries the same rules as the declarative base).
+function fillVideoWindow(): void {
+  videoEl.style.position = 'fixed'
+  videoEl.style.inset = '0'
+  videoEl.style.width = `${window.innerWidth}px`
+  videoEl.style.height = `${window.innerHeight}px`
+}
+
+function releaseVideoWindow(): void {
+  videoEl.removeAttribute('style')
+}
+
+window.addEventListener('resize', fillVideoWindow)
 
 let connectedName: string | null = null
 let sessionInfo: CastSessionInfo | null = null
@@ -184,24 +201,12 @@ function showMobileState(state: MobileStateEvent): void {
 }
 
 // "Connected to Pixel8 — 1280×720 · 30 fps · balanced · game audio · mic"
-// — the hover overlay's line over the video while receiving. The pairing
-// stage's own status is owned by renderHero (Phase13); the stage is hidden
-// during a cast anyway.
+// — the hover overlay's line over the video while receiving, and the same
+// line the off-cast session-info window shows (sessionInfoLine.ts). The
+// pairing stage's own status is owned by renderHero (Phase13); the stage is
+// hidden during a cast anyway.
 function renderStatus(): void {
-  let text: string
-  if (connectedName === null) {
-    text = ''
-  } else {
-    const info = sessionInfo
-    if (info === null) {
-      text = `Connected to ${connectedName}`
-    } else {
-      const sources = [info.gameAudio ? 'game audio' : null, info.mic ? 'mic' : null].filter(Boolean).join(' · ')
-      const parts = [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile, sources].filter(Boolean)
-      text = `Connected to ${connectedName} — ${parts.join(' · ')}`
-    }
-  }
-  castStatusEl.textContent = text
+  castStatusEl.textContent = sessionInfoLine(connectedName, sessionInfo)
 }
 
 // The mixer panel (StatusView's volume controls — desktop.md): one row per
@@ -254,6 +259,33 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !settingsBackdropEl.hidden) hideSettings()
 })
 
+// The off-cast session-info window's preference (Phase14): persisted like the
+// mixer levels (renderer localStorage — per-receiver-machine trivia, desktop.md
+// process model) and owned by the main process at runtime, because the window
+// is created at cast start. The pushed state keeps this checkbox honest when
+// the overlay itself is closed via its ✕. Missing/corrupt storage degrades to
+// off — a second window must never surprise anyone.
+const SESSION_INFO_OVERLAY_KEY = 'zfc.session-info-overlay.v1'
+const storedOverlayEnabled = window.localStorage.getItem(SESSION_INFO_OVERLAY_KEY) === 'true'
+sessionInfoOverlayEl.checked = storedOverlayEnabled
+window.desktopApi.setSessionInfoOverlay(storedOverlayEnabled)
+
+sessionInfoOverlayEl.addEventListener('change', () => {
+  window.localStorage.setItem(SESSION_INFO_OVERLAY_KEY, String(sessionInfoOverlayEl.checked))
+  window.desktopApi.setSessionInfoOverlay(sessionInfoOverlayEl.checked)
+})
+
+const unsubscribeOverlay = window.desktopApi.onSessionInfoOverlayChanged((enabled) => {
+  sessionInfoOverlayEl.checked = enabled
+  window.localStorage.setItem(SESSION_INFO_OVERLAY_KEY, String(enabled))
+})
+
+// One click back to edge-to-edge after a manual window resize (Phase14): the
+// same reshape the cast start/rotation path applies, re-run on demand.
+fitWindowEl.addEventListener('click', () => {
+  window.desktopApi.fitWindowToStream()
+})
+
 function enableRegenerate(enabled: boolean): void {
   regenerateEl.disabled = !enabled
 }
@@ -289,4 +321,5 @@ window.addEventListener('beforeunload', () => {
   unsubscribeMobile()
   unsubscribeOffers()
   unsubscribeIce()
+  unsubscribeOverlay()
 })

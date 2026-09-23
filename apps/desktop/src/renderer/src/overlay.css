@@ -1,0 +1,67 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0c10;
+  --fg: #e6e9ef;
+  --fg-muted: #8b93a3;
+  --border: #232833;
+}
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* The whole strip drags the frameless window; the close button opts out. */
+.overlay {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  -webkit-app-region: drag;
+}
+
+.overlay-line {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-line:empty::after {
+  content: 'Cast info';
+  color: var(--fg-muted);
+}
+
+.overlay-close {
+  -webkit-app-region: no-drag;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.overlay-close:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}

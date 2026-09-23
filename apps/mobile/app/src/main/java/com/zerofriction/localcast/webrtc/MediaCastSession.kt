@@ -4,15 +4,19 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import android.view.Display
 import androidx.core.content.ContextCompat
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.capture.CaptureSize
+import com.zerofriction.localcast.capture.DisplaySize
+import com.zerofriction.localcast.capture.ScreenCapturer
 import com.zerofriction.localcast.signaling.SignalingClient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -28,7 +32,6 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpParameters
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
-import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
@@ -75,6 +78,13 @@ class MediaCastSession(
      * from the session thread with the sample and the measured send bitrate.
      */
     private val onVideoStats: (SenderSample, Long) -> Unit = { _, _ -> },
+
+    /**
+     * The capture format changed live (rotation or a quality step) — the
+     * service re-sends its display-only `session-info` so the desktop's
+     * status line follows. Delivered from the session thread.
+     */
+    private val onCaptureFormat: (width: Int, height: Int, fps: Int) -> Unit = { _, _, _ -> },
 ) {
 
     enum class State { STARTING, NEGOTIATING, STREAMING, CLOSED }
@@ -107,7 +117,7 @@ class MediaCastSession(
     private var eglBase: EglBase? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
-    private var capturer: ScreenCapturerAndroid? = null
+    private var capturer: ScreenCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
 
@@ -134,6 +144,28 @@ class MediaCastSession(
      */
     private var liveBitrateMinBps = config.bitrateMinBps
     private var liveBitrateMaxBps = config.bitrateMaxBps
+
+    /**
+     * Live capture-format state (Phase14 rotation fix). The quality target
+     * moves with [changeQuality]; the actual size is recomputed from the
+     * DISPLAY's current bounds — never the cast-start snapshot, which goes
+     * stale the moment the device rotates. Thread-confined to the session
+     * thread, published via [currentCaptureFormat] for the service's
+     * `session-info`.
+     */
+    private var liveLongEdgePx = config.longEdgePx
+    private var liveFps = config.fps
+    private var captureWidth = 0
+    private var captureHeight = 0
+
+    /** The format in force right now — read by the service from any thread. */
+    data class CaptureFormat(val width: Int, val height: Int, val fps: Int)
+
+    @Volatile
+    var currentCaptureFormat: CaptureFormat? = null
+        private set
+
+    private var displayListener: DisplayManager.DisplayListener? = null
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -243,10 +275,29 @@ class MediaCastSession(
             videoSource = source
             val helper = SurfaceTextureHelper.create("CaptureThread", egl.eglBaseContext)
             surfaceTextureHelper = helper
-            val newCapturer = ScreenCapturerAndroid(projectionPermissionIntent, projectionCallback)
+            val newCapturer = ScreenCapturer(projectionPermissionIntent, projectionCallback)
             capturer = newCapturer
             newCapturer.initialize(helper, context, source.capturerObserver)
             newCapturer.startCapture(width, height, config.fps)
+            captureWidth = width
+            captureHeight = height
+            currentCaptureFormat = CaptureFormat(width, height, config.fps)
+            // Follow device rotation live (Phase14 fix): the stock capturer
+            // does NOT resize on rotation (found live — a portrait-start cast
+            // kept its portrait virtual display forever, and Android squeezed
+            // the rotated screen into it). The default display's change
+            // events arrive on the session thread via the session handler;
+            // [applyCaptureFormat] no-ops unless the size actually changed.
+            val listener = object : DisplayManager.DisplayListener {
+                override fun onDisplayAdded(displayId: Int) = Unit
+                override fun onDisplayRemoved(displayId: Int) = Unit
+                override fun onDisplayChanged(displayId: Int) {
+                    if (displayId == Display.DEFAULT_DISPLAY && active) applyCaptureFormat()
+                }
+            }
+            context.getSystemService(DisplayManager::class.java)
+                .registerDisplayListener(listener, handler)
+            displayListener = listener
 
             val track = newFactory.createVideoTrack(VIDEO_TRACK_ID, source)
             videoTrack = track
@@ -407,6 +458,33 @@ class MediaCastSession(
     }
 
     /**
+     * Re-apply the capture format from the display's *current* bounds and the
+     * live quality target (rotation or a quality step). Runs on the session
+     * thread — the display listener arrives on it via the session handler.
+     * No-ops when nothing changed, so unrelated display events are free;
+     * `force` re-applies the (unchanged) format anyway — a quality step can
+     * change fps alone.
+     */
+    private fun applyCaptureFormat(force: Boolean = false) {
+        val newCapturer = capturer ?: return
+        val (displayWidth, displayHeight) = DisplaySize.physicalPx(context)
+        val target = CaptureSize.followDisplay(liveLongEdgePx, captureWidth, captureHeight, displayWidth, displayHeight)
+        if (target !== null) {
+            newCapturer.changeCaptureFormat(target.first, target.second, liveFps)
+            captureWidth = target.first
+            captureHeight = target.second
+            currentCaptureFormat = CaptureFormat(target.first, target.second, liveFps)
+            Log.i(TAG, "capture → ${target.first}x${target.second} @ ${liveFps} fps (display ${displayWidth}x${displayHeight})")
+            onCaptureFormat(target.first, target.second, liveFps)
+        } else if (force) {
+            newCapturer.changeCaptureFormat(captureWidth, captureHeight, liveFps)
+            currentCaptureFormat = CaptureFormat(captureWidth, captureHeight, liveFps)
+            Log.i(TAG, "capture format re-applied @ ${liveFps} fps")
+            onCaptureFormat(captureWidth, captureHeight, liveFps)
+        }
+    }
+
+    /**
      * One auto-quality step, applied live (Phase12, thermal.md — no
      * renegotiation): the capture pipeline reconfigures to the new
      * resolution/fps and the video sender's bitrate window moves. Runs on the
@@ -416,12 +494,13 @@ class MediaCastSession(
     fun changeQuality(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int) {
         post {
             if (!active) return@post
-            val newCapturer = capturer
-            if (newCapturer !== null) {
-                val (width, height) = CaptureSize.scaleTo(longEdgePx, physicalWidth, physicalHeight)
-                newCapturer.changeCaptureFormat(width, height, fps)
-                Log.i(TAG, "adaptive quality: capture → ${width}x${height} @ ${fps} fps")
-            }
+            liveLongEdgePx = longEdgePx
+            liveFps = fps
+            // The display's live bounds — the cast-start snapshot goes stale
+            // on rotation, and a quality step after one would re-apply the
+            // wrong orientation (found live, fixed together with the
+            // rotation listener above).
+            applyCaptureFormat(force = true)
             liveBitrateMinBps = bitrateMinBps
             liveBitrateMaxBps = bitrateMaxBps
             val currentPc = pc
@@ -536,6 +615,10 @@ class MediaCastSession(
         if (!active && thread === null) return
         active = false
         signaling.removeListener(signalingListener)
+        displayListener?.let { listener ->
+            context.getSystemService(DisplayManager::class.java).unregisterDisplayListener(listener)
+        }
+        displayListener = null
         onState(State.CLOSED)
         handler?.removeCallbacks(statsRunnable)
         closePc()

@@ -34,8 +34,21 @@ export const IPC = {
   window: {
     /** Renderer → main: a cast is live/over — cast-window vs waiting-window minimums. */
     castActive: 'window:cast-active',
-    /** Renderer → main: reshape the window to the stream's aspect (follows rotation). */
-    resizeToStream: 'window:resize-to-stream'
+    /**
+     * Renderer → main: the stream's size changed (first metadata, rotation,
+     * quality steps). The window's shape is the user's — the video letterboxes
+     * via CSS; the size is only cached for the on-demand "Match window to
+     * video" reshape (fit).
+     */
+    streamSize: 'window:stream-size',
+    /**
+     * Renderer → main: the optional session-info overlay window is wanted or
+     * not (the toggle state; main → renderer push carries the effective state
+     * back so the checkbox stays in sync with the overlay's own close button).
+     */
+    sessionInfoOverlay: 'window:session-info-overlay',
+    /** Renderer → main: re-fit the window to the current stream's aspect. */
+    fitToStream: 'window:fit-to-stream'
   }
 } as const
 
@@ -56,6 +69,12 @@ export interface DesktopApi {
   sendIceCandidate(pc: SignalingIceMessage['pc'], candidate: unknown): void
   /** Tells the main process a cast is live (relaxed window minimums) or over. */
   setCastActive(active: boolean): void
-  /** Reshapes the window to a stream's aspect so the video fills it edge-to-edge. */
-  resizeWindowToStream(width: number, height: number): void
+  /** Reports a stream size change (rotation, quality step) — cached for the on-demand fit. */
+  reportStreamSize(width: number, height: number): void
+  /** Turns the optional off-cast session-info window on or off. */
+  setSessionInfoOverlay(enabled: boolean): void
+  /** Subscribes to the session-info window's effective state; returns an unsubscribe function. */
+  onSessionInfoOverlayChanged(listener: (enabled: boolean) => void): () => void
+  /** Re-fits the window to the current stream's aspect (undoes a manual resize). */
+  fitWindowToStream(): void
 }
