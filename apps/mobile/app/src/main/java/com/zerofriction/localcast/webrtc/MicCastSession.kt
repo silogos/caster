@@ -2,7 +2,6 @@ package com.zerofriction.localcast.webrtc
 
 import android.content.Context
 import android.media.AudioManager
-import android.media.MediaRecorder
 import android.media.AudioRecordingConfiguration
 import android.os.Handler
 import android.os.HandlerThread
@@ -62,15 +61,15 @@ class MicCastSession(
     private var audioManager: AudioManager? = null
 
     /**
-     * Factory B's record stays on the voice source (ADR-004) — the
-     * substituter clears the record's privacy-sensitive flag at recording
-     * start (created together with the ADM, which it reflects into), and the
-     * silence monitor matches "ours" in the arbitration configs against the
-     * same voice source.
+     * Factory B's record runs on the shared capture source (ADR-004,
+     * MicRecordSubstituter.CAPTURE_SOURCE) — the substituter clears the
+     * record's privacy-sensitive flag at recording start (created together
+     * with the ADM, which it reflects into), and the silence monitor matches
+     * "ours" in the arbitration configs against the same source.
      */
     private var substituter: MicRecordSubstituter? = null
     private val silenceMonitor = MicSilenceMonitor(
-        ourSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        ourSource = MicRecordSubstituter.CAPTURE_SOURCE,
         log = { Log.d(TAG, it) },
         onSignal = { signal -> post { applySilenceSignal(signal) } },
     )
@@ -158,19 +157,23 @@ class MicCastSession(
             PeerConnectionFactory.initialize(
                 PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions(),
             )
-            // Factory B (ADR-003): the stock ADM records the actual microphone
-            // — voice defaults (VOICE_COMMUNICATION, mono, platform AEC/NS/AGC)
-            // are wanted here, unlike the playback-capture factory A.
+            // Factory B (ADR-003): the stock ADM records the actual microphone.
             // ADR-004: at recording start its record is swapped for a
-            // privacy-insensitive twin (same source, same format) so the
-            // concurrent-capture policy doesn't silence every other app —
-            // the reason PUBG's voice chat died when the cast mic came on.
+            // privacy-insensitive twin so the concurrent-capture policy
+            // doesn't silence every other app — the reason PUBG's voice chat
+            // died when the cast mic came on.
             // Addendum (device round 2): the input rate matches the on-device
             // voice-chat rate — when the game's 16 kHz capture runs
             // concurrently, the shared HAL path reconfigures to it, and a
             // 48 kHz record on that path received raw 16 kHz data (the
             // desktop heard chipmunk).
+            // Addendum (round 3, user-directed): the source is `MIC` — the
+            // exact source the game's voice chat uses, so the audio policy
+            // hosts both captures identically (the voice source kept being
+            // split onto the back mic, which the preferred-device request
+            // could not move).
             val adm = JavaAudioDeviceModule.builder(context)
+                .setAudioSource(MicRecordSubstituter.CAPTURE_SOURCE)
                 .setInputSampleRate(SHARED_VOICE_INPUT_RATE_HZ)
                 .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
                     override fun onWebRtcAudioRecordStart() {

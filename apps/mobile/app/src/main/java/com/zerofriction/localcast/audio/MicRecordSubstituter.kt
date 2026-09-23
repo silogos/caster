@@ -83,7 +83,7 @@ class MicRecordSubstituter(private val context: Context, private val adm: JavaAu
     /**
      * The twin mirrors the stock record's negotiated format exactly (the
      * recorder thread's reads and the encoder's 10 ms frame clock assume it)
-     * and keeps the voice source — only the privacy-sensitive flag differs.
+     * and keeps the capture source — only the privacy-sensitive flag differs.
      */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun buildTwin(stock: AudioRecord, audioInput: Any, byteBufferField: Field): AudioRecord {
@@ -102,7 +102,7 @@ class MicRecordSubstituter(private val context: Context, private val adm: JavaAu
         val readBytes = (byteBufferField.get(audioInput) as ByteBuffer).capacity()
         val minBytes = AudioRecord.getMinBufferSize(stock.sampleRate, channelMask, stock.audioFormat)
         return AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            .setAudioSource(CAPTURE_SOURCE)
             .setAudioFormat(format)
             .setBufferSizeInBytes(maxOf(minBytes, readBytes))
             .setPrivacySensitive(false)
@@ -153,6 +153,21 @@ class MicRecordSubstituter(private val context: Context, private val adm: JavaAu
 
     companion object {
         private const val TAG = "MicRecordSubstituter"
+
+        /**
+         * The mic source the whole capture contract runs on (ADM builder,
+         * twin, silence monitor). Round 3 (user-directed device experiment):
+         * `MIC` instead of `VOICE_COMMUNICATION` — with the game's voice chat
+         * capturing concurrently, the platform routed the voice-source record
+         * onto `AUDIO_DEVICE_IN_BACK_MIC` (the game kept the builtin mic) and
+         * even a preferred-device request did not move it. `MIC` is the exact
+         * source the game's own capture uses, so the audio policy hosts both
+         * captures identically. Cost: the platform AEC/NS/AGC tied to the
+         * voice source is gone (the documented echo limitation stands —
+         * headphones remain the mitigation); `setPrivacySensitive(false)`
+         * stays explicit because MIC is non-sensitive by default anyway.
+         */
+        const val CAPTURE_SOURCE = MediaRecorder.AudioSource.MIC
 
         /**
          * Lazy lookups, never class-init: a library update that renames the
