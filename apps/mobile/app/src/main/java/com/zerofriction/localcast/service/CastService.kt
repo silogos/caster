@@ -80,10 +80,14 @@ data class AdaptiveUiState(
  *    ordering: foreground *before* the projection starts, consent *before* the
  *    service starts) → `MediaCastSession`
  *  - `onStop` from the projection (status-bar chip / system revoke) → session
- *    fatal → Failed("The screen cast was stopped.")
- *  - `bye`/terminal signaling failure/ICE failure → session fatal → Failed
- *  - user stop (app button or notification action) → clean stop, `bye` to the
- *    desktop (fresh QR there)
+ *    fatal → Failed("The screen cast was stopped.") — the pairing session
+ *    survives (retry needs no new scan)
+ *  - `bye`/terminal signaling failure/ICE failure → session fatal → Failed —
+ *    the pairing session is dead too (rescan)
+ *  - user "Stop share screen" → clean stop, the pairing session returns to
+ *    [ConnectedDesktop] (no `bye` — the desktop keeps the session; Home
+ *    shows the connected hub)
+ *  - user "Disconnect" → clean stop + `bye` (fresh QR on the desktop)
  *  - system kill of the service or process → `onDestroy` tears the session
  *    down; the cast does not auto-restart (`START_NOT_STICKY`) — projection
  *    consent cannot be reused after process death, so the user starts a fresh
@@ -96,6 +100,7 @@ class CastService : Service() {
         private const val CHANNEL_ID = "cast"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
+        private const val ACTION_DISCONNECT = "com.zerofriction.localcast.service.DISCONNECT"
         private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
         private const val ACTION_TOGGLE_MIC = "com.zerofriction.localcast.service.TOGGLE_MIC"
         private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
@@ -138,6 +143,15 @@ class CastService : Service() {
         private val _adaptiveState = MutableStateFlow(AdaptiveUiState())
         val adaptiveState: StateFlow<AdaptiveUiState> = _adaptiveState.asStateFlow()
 
+        /**
+         * What libwebrtc actually picked as the video encoder for the
+         * running cast ([SenderSample.encoderImplementation], ~1 Hz getStats)
+         * — the read-only "Encoder in use" readout in the Advanced settings.
+         * Null without a cast — never a faked value.
+         */
+        private val _encoderImplementation = MutableStateFlow<String?>(null)
+        val encoderImplementation: StateFlow<String?> = _encoderImplementation.asStateFlow()
+
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
             // The handover must carry a *live* pairing (found live, 2026-09-20:
@@ -161,8 +175,22 @@ class CastService : Service() {
             ContextCompat.startForegroundService(context, Intent(context, CastService::class.java))
         }
 
+        /**
+         * "Stop share screen" (designs/mobile-app.html): stops the video (and
+         * mic/thermal/auto-quality with it) but the pairing session stays
+         * connected — [ConnectedDesktop] holds the socket, Home shows the
+         * connected hub, and the next Share screen needs no new scan.
+         */
         fun requestStop(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_STOP))
+        }
+
+        /**
+         * "Disconnect": stop the cast *and* tear the pairing session down —
+         * `bye` invalidates it on the desktop (fresh QR), the user rescans.
+         */
+        fun requestDisconnect(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_DISCONNECT))
         }
 
         /** Mute/unmute the game-audio track of the running cast (no-op without one). */
@@ -225,7 +253,11 @@ class CastService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                endCast()
+                endCast(keepSession = true)
+                return START_NOT_STICKY
+            }
+            ACTION_DISCONNECT -> {
+                endCast(keepSession = false)
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE_GAME_AUDIO -> {
@@ -247,7 +279,7 @@ class CastService : Service() {
         }
         val args = pendingStart ?: run {
             // Stopped by the system with nothing pending — nothing to resume.
-            endCast()
+            endCast(keepSession = false)
             return START_NOT_STICKY
         }
         pendingStart = null
@@ -426,6 +458,7 @@ class CastService : Service() {
 
     /** The policy's stats input — called from the media session thread. */
     private fun feedAutoQuality(sample: SenderSample) {
+        _encoderImplementation.value = sample.encoderImplementation
         val controller = adaptive ?: return
         controller.onTick(
             System.currentTimeMillis(),
@@ -509,6 +542,7 @@ class CastService : Service() {
         adaptive = null
         adaptiveCeiling = null
         _adaptiveState.value = AdaptiveUiState()
+        _encoderImplementation.value = null
     }
 
     /**
@@ -546,26 +580,46 @@ class CastService : Service() {
             message
         }
         _state.value = CastState.Failed(shown)
-        endCast()
+        // The pairing session survives a cast-only failure (projection
+        // revoked, a pipeline error — the desktop is fine, a retry needs no
+        // new scan); it is dead when the desktop ended it or the connection
+        // was lost — the user must rescan.
+        endCast(keepSession = failure !== MediaCastSession.Failure.DesktopEnded && failure !== MediaCastSession.Failure.ConnectionLost)
     }
 
     /**
      * The single exit door. Idempotent: every lifecycle edge funnels here, and
      * any of them may fire twice (e.g. `bye` racing a user stop). Nothing is
-     * left behind — session, signaling socket, foreground notification.
+     * left behind — session, foreground notification, and (unless
+     * [keepSession]) the pairing socket.
+     *
+     * [keepSession] is the "Stop share screen" path: the signaling socket
+     * goes back to [ConnectedDesktop] — no `bye`, the desktop keeps the
+     * authorized session, Home shows the connected hub. `false` (Disconnect,
+     * a dead session, a system kill) sends `bye`/closes the socket and the
+     * user rescans.
      */
-    private fun endCast() {
+    private fun endCast(keepSession: Boolean) {
         session?.stop()
         session = null
         micSession?.stop()
         micSession = null
         stopThermalMonitoring()
         stopAutoQuality()
-        // The service owns the pairing connection now (Phase6): ending the
-        // cast ends the pairing session too — `bye` invalidates it on the
-        // desktop (fresh QR there), and the mobile must scan again to cast.
-        signaling?.disconnect()
+        val currentSignaling = signaling
+        val currentDesktopName = desktopName
         signaling = null
+        if (keepSession && currentSignaling !== null) {
+            ConnectedDesktop.adopt(currentSignaling, currentDesktopName)
+        } else {
+            // "Disconnect" (or a dead session): end the pairing too — `bye`
+            // invalidates it on the desktop (fresh QR there) and the mobile
+            // rescans. The socket may be held by this cast OR still by
+            // [ConnectedDesktop] (a disconnect with no cast running) —
+            // [ConnectedDesktop.disconnect] byes whichever side owns it.
+            currentSignaling?.disconnect()
+            ConnectedDesktop.disconnect()
+        }
         config = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -574,20 +628,25 @@ class CastService : Service() {
         if (_state.value !is CastState.Failed) {
             _state.value = CastState.Idle
         }
-        Log.i(TAG, "cast service stopped")
+        Log.i(TAG, "cast service stopped (keepSession=$keepSession)")
     }
 
     override fun onDestroy() {
         // The system can kill the service without another onStartCommand —
-        // never leak the projection, the pcs, or the socket.
+        // never leak the projection, the pcs, or the socket. A clean
+        // [endCast] nulls `signaling` before stopSelf, so this only fires
+        // on a genuine system kill — the session dies with the cast.
         session?.stop()
         session = null
         micSession?.stop()
         micSession = null
         stopThermalMonitoring()
         stopAutoQuality()
-        signaling?.disconnect()
-        signaling = null
+        signaling?.let { current ->
+            signaling = null
+            current.disconnect()
+            ConnectedDesktop.clear()
+        }
         super.onDestroy()
     }
 

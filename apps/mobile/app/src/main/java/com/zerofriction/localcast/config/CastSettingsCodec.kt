@@ -19,11 +19,12 @@ import kotlinx.serialization.json.Json
 object CastSettingsCodec {
 
     /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 3
+    const val VERSION = 4
 
     /** The Phase10/11 formats — accepted through [LEGACY_PROFILE_LABELS]/[LEGACY_DEFAULT_AUTO_QUALITY]. */
     const val LEGACY_VERSION = 1
     const val LEGACY_VERSION_2 = 2
+    const val LEGACY_VERSION_3 = 3
 
     /** Older documents predate the auto-quality switch — the shipped default applies. */
     private const val LEGACY_DEFAULT_AUTO_QUALITY = CastConfig.DEFAULT_AUTO_QUALITY
@@ -38,7 +39,12 @@ object CastSettingsCodec {
         "smooth" to "performance",
     )
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // encodeDefaults: the document carries every field explicitly — a version's
+    // shape stays readable and future migration ladders strip what they know.
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
     /**
      * The stored document. The preset travels as its label (not the enum
@@ -57,6 +63,13 @@ object CastSettingsCodec {
         val mic: Boolean,
         /** Absent in v1/v2 documents — the default applies (kotlinx fills defaults). */
         val autoQuality: Boolean = LEGACY_DEFAULT_AUTO_QUALITY,
+        /** Absent in pre-v4 documents — today's-behavior defaults apply (AdvancedCastSettings.kt). */
+        val encoderImpl: String = EncoderImplementation.HARDWARE.label,
+        val h264HighProfile: Boolean = true,
+        val preferredCodec: String = PreferredVideoCodec.H264.label,
+        val degradationStrategy: String = DegradationStrategy.BALANCED.label,
+        val encoderFpsLimit: Int? = null,
+        val bitrateMode: String = EncoderBitrateMode.CBR.label,
     )
 
     fun encode(settings: CastSettings): String = json.encodeToString(
@@ -71,6 +84,12 @@ object CastSettingsCodec {
             gameAudio = settings.gameAudio,
             mic = settings.mic,
             autoQuality = settings.autoQuality,
+            encoderImpl = settings.encoderImpl.label,
+            h264HighProfile = settings.h264HighProfile,
+            preferredCodec = settings.preferredCodec.label,
+            degradationStrategy = settings.degradationStrategy.label,
+            encoderFpsLimit = settings.encoderFpsLimit,
+            bitrateMode = settings.bitrateMode.label,
         ),
     )
 
@@ -83,7 +102,7 @@ object CastSettingsCodec {
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2) return null
+        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2 && stored.v != LEGACY_VERSION_3) return null
         // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
         val label = if (stored.v == LEGACY_VERSION) {
             LEGACY_PROFILE_LABELS[stored.profile] ?: stored.profile
@@ -95,6 +114,13 @@ object CastSettingsCodec {
         if (stored.fps !in CastSettingChoices.FPS_CHOICES) return null
         if (stored.bitrateMinBps !in 1 until stored.bitrateMaxBps) return null
         if (stored.bitrateMaxBps > CastSettingChoices.MANUAL_BITRATE_MAX_BPS) return null
+        // Advanced (v4): unknown labels and out-of-choice caps are "not ours".
+        val encoderImpl = EncoderImplementation.fromLabel(stored.encoderImpl) ?: return null
+        val preferredCodec = PreferredVideoCodec.fromLabel(stored.preferredCodec) ?: return null
+        val degradationStrategy = DegradationStrategy.fromLabel(stored.degradationStrategy) ?: return null
+        val bitrateMode = EncoderBitrateMode.fromLabel(stored.bitrateMode) ?: return null
+        val encoderFpsLimit = stored.encoderFpsLimit
+        if (encoderFpsLimit !== null && encoderFpsLimit !in AdvancedSettingChoices.ENCODER_FPS_LIMIT_CHOICES) return null
         return CastSettings(
             profile = profile,
             longEdgePx = stored.longEdgePx,
@@ -105,6 +131,12 @@ object CastSettingsCodec {
             gameAudio = stored.gameAudio,
             mic = stored.mic,
             autoQuality = stored.autoQuality,
+            encoderImpl = encoderImpl,
+            h264HighProfile = stored.h264HighProfile,
+            preferredCodec = preferredCodec,
+            degradationStrategy = degradationStrategy,
+            encoderFpsLimit = encoderFpsLimit,
+            bitrateMode = bitrateMode,
         )
     }
 }

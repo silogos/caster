@@ -1,10 +1,15 @@
 package com.zerofriction.localcast.ui.settings
 
 import androidx.lifecycle.ViewModel
+import com.zerofriction.localcast.config.AdvancedSettingChoices
 import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MAX_BPS
 import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_BPS
 import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_FRACTION
 import com.zerofriction.localcast.config.CastSettings
+import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.EncoderBitrateMode
+import com.zerofriction.localcast.config.EncoderImplementation
+import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.QualityProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +36,14 @@ class SettingsViewModel(
     private val _settings = MutableStateFlow(initial)
     val settings: StateFlow<CastSettings> = _settings.asStateFlow()
 
+    /**
+     * A preset applies all of its values — capture targets, Auto bitrate, and
+     * its Advanced defaults (designs/mobile-app.html "presets set the Advanced
+     * defaults": [QualityProfile.h264HighProfile], its degradation strategy
+     * and bitrate mode, hardware encoding, no fps cap). The preferred *codec*
+     * is not preset-owned — an explicit user choice survives preset switches,
+     * as does the auto-quality switch.
+     */
     fun selectProfile(profile: QualityProfile) {
         update {
             it.copy(
@@ -40,6 +53,11 @@ class SettingsViewModel(
                 bitrateAuto = true,
                 bitrateMinBps = profile.bitrateMinBps,
                 bitrateMaxBps = profile.bitrateMaxBps,
+                encoderImpl = EncoderImplementation.HARDWARE,
+                h264HighProfile = profile.h264HighProfile,
+                degradationStrategy = profile.degradation,
+                encoderFpsLimit = null,
+                bitrateMode = profile.bitrateMode,
             )
         }
     }
@@ -93,6 +111,36 @@ class SettingsViewModel(
     /** Phase12 (thermal.md): the auto-quality switch — off means the cast runs exactly at the user's settings. */
     fun setAutoQuality(on: Boolean) {
         update { it.copy(autoQuality = on) }
+    }
+
+    // ---- Advanced (designs/mobile-app.html) — every one is a next-cast setting ----
+
+    fun setEncoderImpl(impl: EncoderImplementation) {
+        update { it.copy(encoderImpl = impl) }
+    }
+
+    fun setH264HighProfile(on: Boolean) {
+        update { it.copy(h264HighProfile = on) }
+    }
+
+    fun setPreferredCodec(codec: PreferredVideoCodec) {
+        update { it.copy(preferredCodec = codec) }
+    }
+
+    fun setDegradationStrategy(strategy: DegradationStrategy) {
+        update { it.copy(degradationStrategy = strategy) }
+    }
+
+    /** null = Off — follow the capture frame rate. */
+    fun setEncoderFpsLimit(limit: Int?) {
+        require(limit === null || limit in AdvancedSettingChoices.ENCODER_FPS_LIMIT_CHOICES) {
+            "fps limit $limit is not one of the Advanced choices"
+        }
+        update { it.copy(encoderFpsLimit = limit) }
+    }
+
+    fun setBitrateMode(mode: EncoderBitrateMode) {
+        update { it.copy(bitrateMode = mode) }
     }
 
     private fun manualMinFor(maxBps: Int): Int = (maxBps * MANUAL_BITRATE_MIN_FRACTION).toInt()

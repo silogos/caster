@@ -1,10 +1,13 @@
 package com.zerofriction.localcast.webrtc
 
+import com.zerofriction.localcast.config.PreferredVideoCodec
+
 /**
  * Codec policy from webrtc.md, applied to the *offer* the mobile creates:
- * H.264 (hardware) first, VP8 fallback second, everything else after. The
- * offer therefore advertises the phone's chosen send order — the desktop
- * answers with the first codec it supports (Chromium/Electron ships both).
+ * the config's preferred codec first (H.264 hardware by default), the other
+ * supported codecs after. The offer therefore advertises the phone's chosen
+ * send order — the desktop answers with the first codec it supports
+ * (Chromium/Electron ships both).
  *
  * SDP munging (reordering the m=video payload list) is the portable way to do
  * this in libwebrtc; `setCodecPreferences` is not uniformly available across
@@ -12,19 +15,27 @@ package com.zerofriction.localcast.webrtc
  */
 object SdpCodecOrderer {
 
-    private val VIDEO_CODEC_PREFERENCE = listOf("h264", "vp8")
+    /** webrtc.md's default policy: H.264 first, VP8 fallback, everything else after. */
+    val DEFAULT_PREFERENCE = listOf("h264", "vp8")
+
+    /** The offer order for the config's preferred codec ([PreferredVideoCodec]). */
+    fun preferenceFor(preferred: PreferredVideoCodec): List<String> =
+        when (preferred) {
+            PreferredVideoCodec.H264 -> DEFAULT_PREFERENCE
+            PreferredVideoCodec.VP8 -> DEFAULT_PREFERENCE.reversed()
+        }
 
     /**
-     * Reorders the payload types of the first `m=video` line by [VIDEO_CODEC_PREFERENCE]
+     * Reorders the payload types of the first `m=video` line by [preference]
      * (names matched case-insensitively against their `a=rtpmap:<pt> <name>/…` lines).
      * Audio lines, attributes and non-video media are untouched; an unknown
      * codec keeps its relative order at the end. Returns the same [sdp] if
      * there is nothing to change.
      */
-    fun preferVideoCodecs(sdp: String): String {
+    fun preferVideoCodecs(sdp: String, preference: List<String> = DEFAULT_PREFERENCE): String {
         val lines = sdp.split("\r\n").toMutableList()
         val videoIndex = lines.indexOfFirst { it.startsWith("m=video") }
-        if (videoIndex == -1) return sdp
+        if (videoIndex ==-1) return sdp
 
         val mLine = lines[videoIndex]
         val parts = mLine.split(" ")
@@ -37,14 +48,14 @@ object SdpCodecOrderer {
             if (!line.startsWith("a=rtpmap:")) continue
             val body = line.removePrefix("a=rtpmap:")
             val spaceAt = body.indexOf(' ')
-            if (spaceAt ==-1) continue
+            if (spaceAt == -1) continue
             val pt = body.substring(0, spaceAt)
             codecName[pt] = body.substring(spaceAt + 1).substringBefore('/').lowercase()
         }
 
         val ordered = payloads.sortedBy { pt ->
-            val index = VIDEO_CODEC_PREFERENCE.indexOf(codecName[pt])
-            if (index == -1) VIDEO_CODEC_PREFERENCE.size else index
+            val index = preference.indexOf(codecName[pt])
+            if (index == -1) preference.size else index
         }
         if (ordered == payloads) return sdp
 

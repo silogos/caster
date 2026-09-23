@@ -1,6 +1,11 @@
 package com.zerofriction.localcast.ui.settings
 
+import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.config.CastSettings
+import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.EncoderBitrateMode
+import com.zerofriction.localcast.config.EncoderImplementation
+import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.QualityProfile
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -114,5 +119,64 @@ class SettingsViewModelTest {
         vm.setGameAudio(false)
         assertEquals(3, persisted.size)
         assertEquals(vm.settings.value, persisted.last())
+    }
+
+    // ---- Advanced (designs/mobile-app.html): presets set them, overrides persist ----
+
+    @Test
+    fun `picking a preset applies its advanced defaults`() {
+        val vm = viewModel()
+        vm.selectProfile(QualityProfile.PERFORMANCE)
+        var settings = vm.settings.value
+        assertEquals(EncoderImplementation.HARDWARE, settings.encoderImpl)
+        assertEquals(true, settings.h264HighProfile)
+        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE, settings.degradationStrategy)
+        assertEquals(null, settings.encoderFpsLimit)
+        assertEquals(EncoderBitrateMode.CBR, settings.bitrateMode)
+
+        vm.selectProfile(QualityProfile.COOL)
+        settings = vm.settings.value
+        assertEquals(false, settings.h264HighProfile)
+        assertEquals(DegradationStrategy.BALANCED, settings.degradationStrategy)
+        assertEquals(EncoderBitrateMode.VBR, settings.bitrateMode)
+    }
+
+    @Test
+    fun `a preset pick keeps the user's preferred codec and auto-quality choice`() {
+        val vm = viewModel()
+        vm.setPreferredCodec(PreferredVideoCodec.VP8)
+        vm.setAutoQuality(false)
+        vm.selectProfile(QualityProfile.SHARP)
+        val settings = vm.settings.value
+        assertEquals(PreferredVideoCodec.VP8, settings.preferredCodec)
+        assertEquals(false, settings.autoQuality)
+        // …but the preset does own its Advanced defaults.
+        assertEquals(DegradationStrategy.MAINTAIN_RESOLUTION, settings.degradationStrategy)
+        assertEquals(true, settings.h264HighProfile)
+    }
+
+    @Test
+    fun `advanced overrides persist and map into the config`() {
+        val vm = viewModel()
+        vm.setEncoderImpl(EncoderImplementation.SOFTWARE)
+        vm.setH264HighProfile(false)
+        vm.setDegradationStrategy(DegradationStrategy.MAINTAIN_FRAMERATE)
+        vm.setEncoderFpsLimit(30)
+        vm.setBitrateMode(EncoderBitrateMode.VBR)
+        assertEquals(5, persisted.size)
+        val config = vm.settings.value.toConfig()
+        assertEquals(EncoderImplementation.SOFTWARE, config.encoderImpl)
+        assertEquals(false, config.h264HighProfile)
+        assertEquals(CastConfig.DEGRADATION_FRAMERATE, config.degradationPreference)
+        assertEquals(30, config.encoderFpsLimit)
+        assertEquals(EncoderBitrateMode.VBR, config.bitrateMode)
+    }
+
+    @Test
+    fun `clearing the fps limit returns to off`() {
+        val vm = viewModel()
+        vm.setEncoderFpsLimit(15)
+        vm.setEncoderFpsLimit(null)
+        assertEquals(null, vm.settings.value.encoderFpsLimit)
     }
 }

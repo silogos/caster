@@ -19,6 +19,14 @@ package com.zerofriction.localcast.config
  * Every value stays individually tweakable after a preset — a config that
  * no longer matches any preset is labeled "custom" for the desktop's
  * display-only status line ([profileLabelFor]; session-info, webrtc.md).
+ *
+ * Each preset also carries its **Advanced defaults** (designs/mobile-app.html,
+ * "presets set the Advanced defaults"): picking a template applies them, the
+ * user can still override every one afterwards. Rationale: hardware encoding
+ * everywhere (thermally the most efficient, thermal.md), Baseline + VBR for
+ * Cool (the lightest per-frame encoder work), and the pressure strategy
+ * matching each preset's promise — smooth (Cool/Balanced), motion
+ * (Performance), detail (Sharp).
  */
 enum class QualityProfile(
     val label: String,
@@ -26,6 +34,9 @@ enum class QualityProfile(
     val fps: Int,
     val bitrateMinBps: Int,
     val bitrateMaxBps: Int,
+    val h264HighProfile: Boolean,
+    val degradation: DegradationStrategy,
+    val bitrateMode: EncoderBitrateMode,
 ) {
     /** thermal.md Cool: long sessions, warm devices, battery priority — the least added heat. */
     COOL(
@@ -34,6 +45,9 @@ enum class QualityProfile(
         fps = 30,
         bitrateMinBps = 2_000_000,
         bitrateMaxBps = 3_000_000,
+        h264HighProfile = false,
+        degradation = DegradationStrategy.BALANCED,
+        bitrateMode = EncoderBitrateMode.VBR,
     ),
     /** thermal.md Balanced (default): the good-enough window for most games. */
     BALANCED(
@@ -42,6 +56,9 @@ enum class QualityProfile(
         fps = 30,
         bitrateMinBps = 4_000_000,
         bitrateMaxBps = 6_000_000,
+        h264HighProfile = true,
+        degradation = DegradationStrategy.BALANCED,
+        bitrateMode = EncoderBitrateMode.CBR,
     ),
     /** thermal.md Performance: fast-motion games; measurably more heat. */
     PERFORMANCE(
@@ -50,6 +67,9 @@ enum class QualityProfile(
         fps = 60,
         bitrateMinBps = 6_000_000,
         bitrateMaxBps = 10_000_000,
+        h264HighProfile = true,
+        degradation = DegradationStrategy.MAINTAIN_FRAMERATE,
+        bitrateMode = EncoderBitrateMode.CBR,
     ),
     /** Fidelity over thermals: most detail, most heat — the user's explicit choice. */
     SHARP(
@@ -58,6 +78,9 @@ enum class QualityProfile(
         fps = 30,
         bitrateMinBps = 8_000_000,
         bitrateMaxBps = 12_000_000,
+        h264HighProfile = true,
+        degradation = DegradationStrategy.MAINTAIN_RESOLUTION,
+        bitrateMode = EncoderBitrateMode.CBR,
     ),
 }
 

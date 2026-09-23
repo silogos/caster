@@ -48,3 +48,38 @@ The panel itself is `ui/settings/CastSettingsPanel.kt` (stateless — settings +
 - The manual bitrate floor is a fixed half of the ceiling; a separately tunable floor would be a second knob with no measured need.
 - No resolution above the physical screen is offered as a choice: `CaptureSize` keeps the capture native below the target, so `sharp` on an 800×1280 tablet changes only fps/bitrate there. A per-device filtered choice list would need `DisplaySize` on the home page — deferred until a real device needs it.
 - Thermal profiles landed in Phase11 as the preset relabels (`cool`/`performance`), with monitoring added — [thermal.md](thermal.md); the label derivation stayed the display's source of truth, as planned above.
+
+
+## Redesign: scan-first flow + Advanced encoder settings (2026-09-23)
+
+Supersedes parts of the Phase10 layout above (the settings *content* is unchanged; its home moved). Design source of truth: [designs/mobile-app.html](../../designs/mobile-app.html) — reviewed in the prototype, then ported.
+
+### What changed
+
+- **Scan-first (the app opens on the scanner).** A successful pairing moves to the **Home hub** automatically; the scan screen no longer starts casts. The `Connected` pairing state is transient there: the session is handed to `service/ConnectedDesktop.kt` (app-scoped) and navigation follows.
+- **Home is the connected hub**: title + connection status + **Disconnect** (ends the session — back to the scanner); **Share screen** (the cast trigger; reads "Stop share screen" while casting) with the **gear** beside it; the **Audio** rows — *Game audio* and *Microphone*, each one switch. **Stopping the video is not disconnecting**: "Stop share screen" hands the socket back to `ConnectedDesktop` (no `bye`, rescan-free retry within the QR session's TTL; [mobile.md](../architecture/mobile.md) stop policy).
+- **One control per audio track — no separate mute buttons** (user decision): only the **microphone** is ever fully removed from a cast (stream torn down, hardware freed for the game's voice chat — ADR-004 semantics); **game audio "off" mutes the track**, which always stays part of the cast (the desktop's mixer row never disappears). Mid-cast toggles act live (`CastService` actions) *and* persist as the next-cast defaults.
+- **The gear opens the Cast settings screen** ("all cast settings"): the Phase10 Share screen section plus the new collapsible **Advanced** section.
+
+### Advanced settings (settings document v4)
+
+Encoder-level knobs — every default reproduces today's cast exactly:
+
+| Setting | Values | Default | Wire effect |
+|---|---|---|---|
+| Encoder | Hardware / Software | Hardware | `webrtc/CastEncoderFactory`: `DefaultVideoEncoderFactory` vs MediaCodec software-only predicate (+libwebrtc software fallback chain) |
+| Preferred video codec | H.264 / VP8 | H.264 | Offer payload order (`SdpCodecOrderer`) |
+| H.264 profile | Baseline / High | High | `enableH264HighProfile` factory flag (High profile leaves the offer when off) |
+| Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference` |
+| Encoder fps limit | Off / 15 / 30 / 60 | Off | `RTCRtpSender.encodings.maxFramerate` |
+| Bitrate mode | CBR / VBR | CBR (per-preset) | **Placebo until Phase "forked encoder"**: libwebrtc hardcodes CBR (verified in the prebuilt's bytecode); the setting persists and maps into `CastConfig`, but VBR needs the copied `HardwareVideoEncoder` source to reach the MediaFormat. The UI states CBR as today's behavior. |
+
+Presets set the Advanced defaults (user decision): Cool → Baseline + VBR + Balanced; Balanced → High + CBR + Balanced; Performance → High + CBR + **Keep frame rate**; Sharp → High + CBR + **Keep resolution** — all Hardware. The preferred codec and auto-quality switch survive preset picks; everything else advanced resets with the preset. A read-only **"Encoder in use"** readout shows the active cast's actual `encoderImplementation` (getStats, ~1 Hz, via `CastService`) — "visible during a cast" when unknown, never a faked value.
+
+### Persistence (v3 → v4)
+
+`CastSettingsCodec` v4 adds the six Advanced fields with today's-behavior defaults, so v1/v2/v3 documents decode unchanged (legacy ladder unchanged); `encodeDefaults = true` keeps the document fully explicit. Unknown Advanced labels or an fps limit outside the choices decode to null → defaults (same never-guess convention). JVM tests cover the migration, round-trips, and validation.
+
+### Verification (2026-09-23)
+
+Mobile JVM **147/147** (codec v4 migration + advanced round-trips/validation; preset→advanced defaults; setters), `assembleDebug` green. Lint reports 4 **pre-existing** errors in `MicRecordSubstituter`, `PlaybackCaptureAudioSource`, `ThermalSource`, and the manifest (`MissingPermission`/`NewApi`/camera-feature) — present before this phase, untouched by it, flagged for their owning phases. **Remaining (needs the device in hand):** the live A/B of Hardware vs Software on the Y700 (the original PUBG contention investigation this UI exists for), and a device walk of the new flow (scan → hub → share/stop/disconnect), including session-expiry falling back to the scanner.

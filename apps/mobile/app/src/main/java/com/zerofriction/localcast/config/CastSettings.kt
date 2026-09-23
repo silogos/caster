@@ -32,6 +32,13 @@ data class CastSettings(
     val mic: Boolean,
     /** Stats/thermal-driven auto quality (Phase12, thermal.md) — on by default. */
     val autoQuality: Boolean,
+    // ---- Advanced (designs/mobile-app.html; defaults reproduce today's cast) ----
+    val encoderImpl: EncoderImplementation = EncoderImplementation.HARDWARE,
+    val h264HighProfile: Boolean = true,
+    val preferredCodec: PreferredVideoCodec = PreferredVideoCodec.H264,
+    val degradationStrategy: DegradationStrategy = DegradationStrategy.BALANCED,
+    val encoderFpsLimit: Int? = null,
+    val bitrateMode: EncoderBitrateMode = EncoderBitrateMode.CBR,
 ) {
     fun toConfig(): CastConfig = CastConfig(
         profile = profileLabelFor(longEdgePx, fps, bitrateMinBps, bitrateMaxBps),
@@ -39,10 +46,19 @@ data class CastSettings(
         fps = fps,
         bitrateMinBps = bitrateMinBps,
         bitrateMaxBps = bitrateMaxBps,
-        degradationPreference = CastConfig.DEGRADATION_BALANCED,
+        degradationPreference = when (degradationStrategy) {
+            DegradationStrategy.BALANCED -> CastConfig.DEGRADATION_BALANCED
+            DegradationStrategy.MAINTAIN_FRAMERATE -> CastConfig.DEGRADATION_FRAMERATE
+            DegradationStrategy.MAINTAIN_RESOLUTION -> CastConfig.DEGRADATION_RESOLUTION
+        },
         gameAudio = gameAudio,
         mic = mic,
         autoQuality = autoQuality,
+        encoderImpl = encoderImpl,
+        h264HighProfile = h264HighProfile,
+        preferredCodec = preferredCodec,
+        encoderFpsLimit = encoderFpsLimit,
+        bitrateMode = bitrateMode,
     )
 
     companion object {

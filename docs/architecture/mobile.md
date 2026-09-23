@@ -25,14 +25,14 @@ Small, explicit modules — no giant `CastManager` (see AGENTS.md):
 
 ```text
 com.zerofriction.localcast/
-├── ui/            # Compose screens: Home (header: connection state + cast button; content: cast settings, Phase10), Scan (pairing)
+├── ui/            # Compose screens: Scan (the launch screen), Home (the connected hub: share trigger + gear), CastSettings (the gear screen)
 ├── pairing/       # QR scan, payload parsing, pairing state machine
 ├── signaling/     # WebSocket client, protocol envelope, message types
-├── webrtc/        # PeerConnectionFactory setup, the two PeerConnections, track wiring
+├── webrtc/        # PeerConnectionFactory setup, the two PeerConnections, track wiring, encoder-factory policy
 ├── capture/       # MediaProjection virtual display + video frame source
 ├── audio/         # PlaybackCapture ADM (game audio), mic capture
-├── service/       # CastService: foreground service owning the whole cast session
-├── config/        # Cast settings (presets, persistence, the one CastConfig conversion)
+├── service/       # CastService (the cast's FGS) + ConnectedDesktop (the pairing holder between casts)
+├── config/        # Cast settings (presets, Advanced encoder knobs, persistence, the one CastConfig conversion)
 ├── thermal/       # Thermal status monitoring (read-only diagnostics; Phase11)
 ├── adaptive/      # Auto-quality policy machine: stats + thermal in, announced level changes out (Phase12)
 └── diagnostics/   # Structured logging facade
@@ -44,7 +44,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 
 - **`CastService`** is a **foreground service** (type `mediaProjection`, plus `microphone` while the mic session is on — `CastForegroundTypes`) that owns the whole cast session: MediaProjection, the peer connections, **and the pairing signaling connection** (handed over by the pairing machine at cast start — Phase6). The Activity is only UI; the cast survives the app being backgrounded while a game runs, the scan screen being left, and the task being removed. The mic type is added/removed at the mic toggle because Android11+ silences a backgrounded app's microphone unless its FGS declares the type (found live on Android16 — [features/microphone.md](../features/microphone.md)).
 - **Ordering constraint (Android 14+):** the service enters the foreground *before* `createVirtualDisplay`/projection starts, and the media-projection consent result is obtained *before* the service starts. Implemented: consent → handover → foreground → projection.
-- **Stop policy (Phase6 decision):** ending a cast ends the pairing session too (`bye` → the desktop shows a fresh QR; a new cast means a new scan). The service must stop for clean resource release, and no background process can be trusted to hold the socket. Every lifecycle edge (user stop via app or notification, projection revoked, desktop gone, process death) funnels through one idempotent teardown — no leaked projections/displays (the acceptance matrix lives in [features/cast-session.md](../features/cast-session.md)).
+- **Stop policy (redesigned, designs/mobile-app.html):** there are now two distinct exits. **"Stop share screen"** stops only the cast (video, mic, thermal, auto-quality, FGS) and hands the pairing socket back to **`ConnectedDesktop`** — an app-scoped holder; no `bye` is sent, the desktop keeps the authorized session (until its QR expiry, ≤10 min), and the Home hub shows the connected state so the next Share needs no new scan. **"Disconnect"** stops the cast *and* ends the pairing (`bye` → fresh QR on the desktop → rescan). Cast-only failures (projection revoked, pipeline errors) keep the session; desktop-gone failures clear it. The service still stops on every exit — no background process holds a socket beyond `ConnectedDesktop`'s process-lifetime holder, and every lifecycle edge funnels through one idempotent teardown. (The Phase6 rule "ending a cast ends the pairing" is superseded; a *system kill* still ends everything — `START_NOT_STICKY`.)
 - Session state is exposed to the UI as a `StateFlow` (`Idle` / `Starting` / `Casting` / `Failed`), rendered by both the home and scan screens — not via callbacks scattered across classes.
 - **Consent mode pitfall (Android 14+):** the projection dialog defaults to *Share one app*; a single-app share ends the moment that app leaves the foreground. Users must choose *Share full screen*. Handled cleanly (it is a normal projection-revoked stop), and since Phase13 the scan screen carries a UX affordance: a hint under the cast trigger — "When your phone asks what to share, choose 'Share full screen'."
 
@@ -66,7 +66,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 - **Projection callbacks.** The app must handle `MediaProjection.Callback#onStop` (user revoked from status bar / system timeout) as a first-class stop path.
 - **Rotation.** Screen rotation changes the captured surface dimensions mid-stream; the capture pipeline must reconfigure the video source without dropping the session. The stock `ScreenCapturerAndroid` does **not** do this by itself (found live in the Phase14 device session) — `MediaCastSession` listens to the default display's change events and re-applies the capture format live from the display's current bounds (`CaptureSize.followDisplay`), no-opping on unrelated display events and 180° turns.
 - **AudioPlaybackCapture policy** is per-app on the device — and **opt-out is the platform default for apps targeting API 29+**: only apps that set `allowAudioPlaybackCapture="true"` (or target ≤28) can be captured; opted-out apps produce silence, not errors. See [audio.md](audio.md) and the Phase7 verification record — the honest "This app's audio can't be captured" UI state covers this.
-- **Hardware encoders** vary by SoC; H.264 is preferred with VP8 fallback negotiated in the offer (see [webrtc.md](webrtc.md)).
+- **Hardware encoders** vary by SoC; H.264 is preferred with VP8 fallback negotiated in the offer (see [webrtc.md](webrtc.md)). Since the Advanced settings (designs/mobile-app.html) the encoder is user-configurable per cast: **Hardware** (SoC video hardware first, libwebrtc software fallback — the default) or **Software** (MediaCodec software codecs only, so the video hardware stays free for a game — the risk-register R5 escape hatch), plus the H.264 profile toggle (High on by default), the degradation strategy, an encoder-side fps cap, and the bitrate mode. All are next-cast settings, persisted through [CastSettingsCodec] v4, and the presets carry their own Advanced defaults.
 
 ## Known limitations
 

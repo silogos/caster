@@ -80,11 +80,11 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 
 | Track | Preference | Notes |
 |---|---|---|
-| Video | H.264 (hardware) → VP8 fallback | Mobile's offer lists both (H.264 first); desktop picks H.264 (Chromium/Electron ships proprietary codecs). If the device's HW encoder proves unreliable for a codec, mobile drops it from the offer. |
-| Game audio | Opus, 48 kHz, **stereo** | Music/game soundstage. |
-| Microphone | Opus, 48 kHz, **mono** | Voice. |
+| Video | H.264 (hardware) → VP8 fallback | Mobile's offer lists both (the **preferred codec** is user-configurable in the Advanced settings, H.264 first by default); desktop picks the first it supports (Chromium/Electron ships proprietary codecs). If the device's HW encoder proves unreliable for a codec, mobile drops it from the offer — and since the Advanced settings, the user can also drop to **Software** encoders entirely (`c2.android`/`OMX.google`, via the factory's MediaCodecInfo predicate — risk-register R5's per-device escape hatch), or restrict H.264 to (Constrained) Baseline with the profile toggle (High is the default). |
+| Game audio | Opus, 48 kHz, **stereo** | Music/game soundstage. The track is always part of the cast when RECORD_AUDIO allows; "game audio off" mutes it, never removes it (designs/mobile-app.html). |
+| Microphone | Opus, 48 kHz, **mono** | Voice. The only stream ever fully removed from a cast (its own PC, built/torn down on demand). |
 
-Initial sender targets (Phase 5, conservative, adjusted in Phases 10–12): 720p, 30 fps, 4–6 Mbps, `degradationPreference: BALANCED`. Sender-side parameters are set via `RTCRtpSender` parameters from the mobile `config` module only.
+Initial sender targets (Phase 5, conservative, adjusted in Phases 10–12): 720p, 30 fps, 4–6 Mbps, `degradationPreference: BALANCED`. Sender-side parameters are set via `RTCRtpSender` parameters from the mobile `config` module only. Since the Advanced settings, the degradation preference (Balanced / Maintain framerate / Maintain resolution — per-preset defaults from the QualityProfile table) and an optional encoder-side fps cap (`maxFramerate`, none by default) are also config-driven.
 
 ## Connection lifecycle
 

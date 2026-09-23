@@ -1,12 +1,7 @@
 package com.zerofriction.localcast.ui.pairing
 
 import android.Manifest
-import android.app.Activity
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
-import android.os.Build
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -17,11 +12,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -32,9 +25,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +41,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,85 +49,52 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
-import com.zerofriction.localcast.audio.GameAudioState
-import com.zerofriction.localcast.audio.MicState
-import com.zerofriction.localcast.capture.DisplaySize
-import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
-import com.zerofriction.localcast.service.CastState
-import com.zerofriction.localcast.service.CastService
-import com.zerofriction.localcast.signaling.SignalingClient
-import com.zerofriction.localcast.thermal.ThermalState
-import com.zerofriction.localcast.ui.home.DebugToneButton
-import com.zerofriction.localcast.ui.home.AdaptiveStatusLine
-import com.zerofriction.localcast.ui.home.GameAudioControls
-import com.zerofriction.localcast.ui.home.MicControls
-import com.zerofriction.localcast.ui.home.ThermalStatusLine
-import com.zerofriction.localcast.service.AdaptiveUiState
+import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
+/**
+ * The launch screen (designs/mobile-app.html): the app opens on the scanner.
+ * A successful pairing is handed to [ConnectedDesktop] — the app-scoped
+ * session holder the Home hub renders — and [onPaired] navigates to Home.
+ * No cast can be started here: the share trigger lives on Home. The failure
+ * states stay above the still-live scanner (pairing.md §Failure modes) —
+ * friendly icon + mapped plain words, codes in logs (AGENTS.md).
+ */
 @Composable
 fun ScanScreen(
+    onPaired: () -> Unit,
     viewModel: ScanViewModel = viewModel(),
-    /**
-     * The system back button leaves the scan screen. Without it, back
-     * backgrounds the whole app and rememberSaveable reopens the scan screen
-     * on return — a dead end (found live in Phase7). The cast is service-owned
-     * and survives; an un-cast pairing is dropped by the ViewModel as usual.
-     */
-    onBackToHome: () -> Unit = {},
 ) {
-    val context = LocalContext.current
-    val backDispatcher = (context as? ComponentActivity)?.onBackPressedDispatcher
-    DisposableEffect(backDispatcher, onBackToHome) {
-        val callback = object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = onBackToHome()
-        }
-        backDispatcher?.addCallback(callback)
-        onDispose { callback.remove() }
-    }
-
     val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
-    val castState by viewModel.castState.collectAsStateWithLifecycle()
-    val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
-    val micState by CastService.micState.collectAsStateWithLifecycle()
-    val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
-    val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
+
+    // Pairing succeeded → the session moves to ConnectedDesktop and Home
+    // takes over. The socket handover must happen before navigation — the
+    // hub (and the share flow) reads it from there.
+    LaunchedEffect(pairingState) {
+        val connected = pairingState as? PairingClient.State.Connected
+        if (connected !== null) {
+            val signaling = viewModel.releaseSignalingClient()
+            if (signaling !== null) {
+                ConnectedDesktop.adopt(signaling, connected.desktopName)
+                onPaired()
+            }
+        }
+    }
 
     ScanContent(
         pairingState = pairingState,
-        castState = castState,
-        gameAudioState = gameAudioState,
-        micState = micState,
-        thermalState = thermalState,
-        adaptiveState = adaptiveState,
-        releaseSignalingClient = viewModel::releaseSignalingClient,
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
-        onDisconnect = viewModel::onDisconnect,
     )
 }
 
-/**
- * Phase6 render rules: the cast service owns the session, so a running cast
- * (Starting/Casting) takes precedence over the pairing machine — while a cast
- * is live there is nothing to scan and the pairing machine owns nothing. A
- * Failed cast falls through to the scan UI: ending the cast ends the pairing
- * session too (the desktop shows a fresh QR), so the user rescans.
- */
 @Composable
 fun ScanContent(
     pairingState: PairingClient.State,
-    castState: CastState = CastState.Idle,
-    gameAudioState: GameAudioState = GameAudioState.Off,
-    micState: MicState = MicState.Off,
-    thermalState: ThermalState = ThermalState(),
-    adaptiveState: AdaptiveUiState = AdaptiveUiState(),
-    releaseSignalingClient: () -> SignalingClient? = { null },
     onQrScanned: (String) -> Unit,
     onManualPayloadSubmit: (String) -> Unit,
-    onDisconnect: () -> Unit,
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -165,47 +123,14 @@ fun ScanContent(
             )
             Spacer(Modifier.height(16.dp))
 
-            when (castState) {
-                is CastState.Starting -> {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = stringResource(R.string.starting_cast),
-                        fontSize = 15.sp,
-                    )
-                }
-
-                is CastState.Casting -> {
-                    Text(
-                        text = stringResource(R.string.casting_to, castState.desktopName),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = stringResource(R.string.casting_background_hint),
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(bottom = 16.dp),
-                    )
-                    GameAudioControls(gameAudioState)
-                    MicControls(micState = micState, gameAudioState = gameAudioState)
-                    // Phase11: the thermal read-out rides wherever the cast's
-                    // status is rendered — the scan screen is where the user
-                    // actually watches a started cast (found live in review).
-                    ThermalStatusLine(thermalState)
-                    AdaptiveStatusLine(adaptiveState)
-                    if (BuildConfig.DEBUG) {
-                        DebugToneButton()
-                    }
-                    OutlinedButton(onClick = { CastService.requestStop(context) }) {
-                        Text(stringResource(R.string.stop_casting))
-                    }
-                }
-
-                is CastState.Failed -> {
+            when (val state = pairingState) {
+                // Friendly error states (pairing.md §Failure modes): an icon
+                // plus the mapped plain-words message above the still-live
+                // scanner — codes stay in logs (AGENTS.md).
+                is PairingClient.State.Failed -> {
                     StatusMessage(
                         icon = Icons.Filled.Warning,
-                        message = castState.message,
+                        message = pairingErrorMessage(state.error),
                         tint = MaterialTheme.colorScheme.error,
                     )
                     ScanUi(
@@ -216,94 +141,58 @@ fun ScanContent(
                     )
                 }
 
-                CastState.Idle -> when (val state = pairingState) {
-                    PairingClient.State.Idle,
-                    is PairingClient.State.Failed,
-                    PairingClient.State.Ended -> {
-                        // Friendly error states (pairing.md §Failure modes): an
-                        // icon plus the mapped plain-words message above the
-                        // still-live scanner — codes stay in logs (AGENTS.md).
-                        if (state is PairingClient.State.Failed) {
-                            StatusMessage(
-                                icon = Icons.Filled.Warning,
-                                message = pairingErrorMessage(state.error),
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        if (state == PairingClient.State.Ended) {
-                            StatusMessage(
-                                icon = Icons.Filled.Info,
-                                message = stringResource(R.string.session_ended),
-                                tint = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                        ScanUi(
-                            hasCameraPermission = hasCameraPermission,
-                            onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                            onQrScanned = onQrScanned,
-                            onManualPayloadSubmit = onManualPayloadSubmit,
-                        )
-                    }
-
-                    // The Phase13 mockup's intermediate step: the QR decoded,
-                    // a desktop is being paired with.
-                    PairingClient.State.Connecting, PairingClient.State.Authenticating -> {
-                        Text(
-                            text = stringResource(R.string.desktop_found),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        CircularProgressIndicator()
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = stringResource(R.string.pairing_with_desktop),
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-
-                    is PairingClient.State.Reconnecting -> {
-                        CircularProgressIndicator()
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = state.desktopName?.let { stringResource(R.string.reconnecting_to, it) }
-                                ?: stringResource(R.string.reconnecting),
-                            fontSize = 15.sp,
-                        )
-                    }
-
-                    is PairingClient.State.Connected -> {
-                        // The mockup's terminal pairing step: "Connected" →
-                        // START CAST. The consent hint below the trigger is
-                        // the mobile.md affordance for the Android 14+ dialog
-                        // that defaults to "Share one app".
-                        Icon(
-                            imageVector = Icons.Filled.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(56.dp),
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = stringResource(R.string.connected_to, state.desktopName),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.height(24.dp))
-                        CastControls(castState = castState, desktopName = state.desktopName, releaseSignalingClient = releaseSignalingClient)
-                        Text(
-                            text = stringResource(R.string.share_full_screen_hint),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
-                        )
-                        TextButton(onClick = onDisconnect) {
-                            Text(stringResource(R.string.disconnect))
-                        }
-                    }
+                PairingClient.State.Ended -> {
+                    StatusMessage(
+                        icon = Icons.Filled.Info,
+                        message = stringResource(R.string.session_ended),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                    ScanUi(
+                        hasCameraPermission = hasCameraPermission,
+                        onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        onQrScanned = onQrScanned,
+                        onManualPayloadSubmit = onManualPayloadSubmit,
+                    )
                 }
+
+                // The Phase13 mockup's intermediate step: the QR decoded,
+                // a desktop is being paired with. Success navigates to Home.
+                PairingClient.State.Connecting, PairingClient.State.Authenticating -> {
+                    Text(
+                        text = stringResource(R.string.desktop_found),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.pairing_with_desktop),
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                is PairingClient.State.Reconnecting -> {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = state.desktopName?.let { stringResource(R.string.reconnecting_to, it) }
+                            ?: stringResource(R.string.reconnecting),
+                        fontSize = 15.sp,
+                    )
+                }
+
+                // Connected is transient here — the LaunchedEffect above
+                // hands the session over and navigates to the Home hub.
+                PairingClient.State.Idle,
+                is PairingClient.State.Connected,
+                -> ScanUi(
+                    hasCameraPermission = hasCameraPermission,
+                    onGrantCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    onQrScanned = onQrScanned,
+                    onManualPayloadSubmit = onManualPayloadSubmit,
+                )
             }
         }
     }
@@ -367,87 +256,6 @@ private fun ScanUi(
     }
 }
 
-/**
- * The cast trigger, shown while paired. `Start casting` runs the
- * MediaProjection consent (per session, never pre-granted — mobile.md) and
- * then hands the pairing's signaling connection to the foreground service —
- * Phase6 ownership: the service owns it from here on, so this screen can be
- * left freely while the cast runs. The notification permission is requested
- * first on 13+ but is not fatal — the cast runs either way, only the FGS
- * notification's visibility depends on it.
- */
-@Composable
-private fun CastControls(
-    castState: CastState,
-    desktopName: String,
-    releaseSignalingClient: () -> SignalingClient?,
-) {
-    val context = LocalContext.current
-    val mediaProjectionManager = remember { context.getSystemService(MediaProjectionManager::class.java) }
-
-    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val consentData = result.data
-        if (result.resultCode == Activity.RESULT_OK && consentData != null) {
-            val signaling = releaseSignalingClient()
-            if (signaling != null) {
-                val (width, height) = DisplaySize.physicalPx(context)
-                // Phase10: the cast uses the persisted settings, read fresh at
-                // start — settings changes take effect on the next cast.
-                val settings = CastSettingsStore(context).load()
-                CastService.start(
-                    context,
-                    CastService.StartArgs(
-                        signaling = signaling,
-                        config = settings.toConfig(),
-                        projectionIntent = consentData,
-                        physicalWidth = width,
-                        physicalHeight = height,
-                        desktopName = desktopName,
-                    ),
-                )
-            }
-        }
-    }
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-    }
-
-    fun requestNotificationsOrConsent() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-        }
-    }
-
-    // Phase7: the platform requires RECORD_AUDIO for playback capture (and
-    // to start the WebRTC ADM). Non-fatal on denial — the cast then runs
-    // video-only and the home screen says game audio is off.
-    val recordAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        requestNotificationsOrConsent()
-    }
-
-    fun requestConsentAndStart() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        } else {
-            requestNotificationsOrConsent()
-        }
-    }
-
-    // Starting/Casting is rendered by the outer card; here only the trigger —
-    // labeled like the home button ("Start Cast") per the Phase13 mockup.
-    when (castState) {
-        CastState.Idle, is CastState.Failed -> Button(onClick = ::requestConsentAndStart) {
-            Text(stringResource(R.string.start_cast))
-        }
-
-        is CastState.Starting, is CastState.Casting -> Unit
-    }
-}
-
 /** Icon + plain-words message row — the pairing screen's friendly states. */
 @Composable
 private fun StatusMessage(
@@ -464,7 +272,7 @@ private fun StatusMessage(
             imageVector = icon,
             contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.height(20.dp),
         )
         Text(text = message, fontSize = 15.sp, color = tint)
     }
@@ -488,10 +296,8 @@ private fun ScanContentPreview() {
     LocalCastTheme {
         ScanContent(
             pairingState = PairingClient.State.Idle,
-            castState = CastState.Casting("MacBook Pro"),
             onQrScanned = {},
             onManualPayloadSubmit = {},
-            onDisconnect = {},
         )
     }
 }

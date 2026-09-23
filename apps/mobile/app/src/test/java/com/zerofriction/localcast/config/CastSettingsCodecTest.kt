@@ -51,7 +51,7 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a future version decodes to null`() {
-        val future = CastSettingsCodec.encode(custom).replace(""""v":3""", """"v":4""")
+        val future = CastSettingsCodec.encode(custom).replace(""""v":4""", """"v":5""")
         assertNull(CastSettingsCodec.decode(future))
     }
 
@@ -66,7 +66,7 @@ class CastSettingsCodecTest {
 
     /** A v1 document: downgraded version field, pre-rename label, same values. */
     private fun v1Document(v3Document: String, legacyLabel: String): String = v3Document
-        .replace(""""v":3""", """"v":1""")
+        .replace(""""v":4""", """"v":1""")
         .replace(""""profile":"${custom.profile.label}"""", """"profile":"$legacyLabel"""")
 
     @Test
@@ -91,7 +91,7 @@ class CastSettingsCodecTest {
 
     /** A v2 document: only the version field downgraded — no `autoQuality` key at all. */
     private fun v2Document(v3Document: String): String = v3Document
-        .replace(""""v":3""", """"v":2""")
+        .replace(""""v":4""", """"v":2""")
         .replace(""",""autoQuality":true""", "")
 
     @Test
@@ -107,8 +107,67 @@ class CastSettingsCodecTest {
     }
 
     @Test
-    fun `the round-trip document carries the v3 version`() {
-        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":3"""))
+    fun `the round-trip document carries the v4 version`() {
+        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":4"""))
+    }
+
+    // ---- v3 legacy documents (pre-Advanced) decode with today's-behavior defaults ----
+
+    /**
+     * A v3 document: the version downgraded and every Advanced key stripped
+     * (leading-comma form — the Advanced fields all follow earlier fields, so
+     * the object's closing brace is never touched).
+     */
+    private fun v3Document(v4Document: String): String =
+        Regex(""","(encoderImpl|h264HighProfile|preferredCodec|degradationStrategy|encoderFpsLimit|bitrateMode)":[^,}]*""")
+            .replace(v4Document.replace(""""v":4""", """"v":3"""), "")
+
+    @Test
+    fun `a v3 document decodes with the Advanced defaults`() {
+        val stored = v3Document(CastSettingsCodec.encode(custom))
+        assertEquals(custom, CastSettingsCodec.decode(stored))
+    }
+
+    // ---- Advanced (v4) round-trips and validation ----
+
+    @Test
+    fun `advanced overrides round-trip`() {
+        val advanced = custom.copy(
+            encoderImpl = EncoderImplementation.SOFTWARE,
+            h264HighProfile = false,
+            preferredCodec = PreferredVideoCodec.VP8,
+            degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
+            encoderFpsLimit = 30,
+            bitrateMode = EncoderBitrateMode.VBR,
+        )
+        assertEquals(advanced, CastSettingsCodec.decode(CastSettingsCodec.encode(advanced)))
+    }
+
+    @Test
+    fun `unknown Advanced labels decode to null`() {
+        val badEncoder = CastSettingsCodec.encode(custom).replace(""""encoderImpl":"hardware"""", """"encoderImpl":"qti"""")
+        assertNull(CastSettingsCodec.decode(badEncoder))
+
+        val badCodec = CastSettingsCodec.encode(custom).replace(""""preferredCodec":"h264"""", """"preferredCodec":"av1"""")
+        assertNull(CastSettingsCodec.decode(badCodec))
+
+        val badDegradation = CastSettingsCodec.encode(custom).replace(""""degradationStrategy":"balanced"""", """"degradationStrategy":"fluid"""")
+        assertNull(CastSettingsCodec.decode(badDegradation))
+
+        val badMode = CastSettingsCodec.encode(custom).replace(""""bitrateMode":"cbr"""", """"bitrateMode":"abrr"""")
+        assertNull(CastSettingsCodec.decode(badMode))
+    }
+
+    @Test
+    fun `an fps limit outside the choices decodes to null`() {
+        val bad = CastSettingsCodec.encode(custom.copy(encoderFpsLimit = 30))
+            .replace(""""encoderFpsLimit":30""", """"encoderFpsLimit":45""")
+        assertNull(CastSettingsCodec.decode(bad))
+    }
+
+    @Test
+    fun `a null fps limit round-trips as off`() {
+        assertEquals(null, CastSettingsCodec.decode(CastSettingsCodec.encode(custom.copy(encoderFpsLimit = null)))?.encoderFpsLimit)
     }
 
     @Test

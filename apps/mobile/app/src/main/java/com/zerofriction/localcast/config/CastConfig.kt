@@ -36,6 +36,17 @@ data class CastConfig(
      * reversible — off leaves the cast exactly at the user's settings.
      */
     val autoQuality: Boolean,
+    // ---- Advanced (designs/mobile-app.html, AdvancedCastSettings.kt) ----
+    /** Hardware-with-fallback (today's behavior) or software-only encoders. */
+    val encoderImpl: EncoderImplementation = EncoderImplementation.HARDWARE,
+    /** H.264 High profile in the offer; false stays on (Constrained) Baseline. */
+    val h264HighProfile: Boolean = true,
+    /** The codec the offer advertises first (webrtc.md codec policy). */
+    val preferredCodec: PreferredVideoCodec = PreferredVideoCodec.H264,
+    /** Encoder-side fps cap; null follows the capture frame rate. */
+    val encoderFpsLimit: Int? = null,
+    /** Rate-control mode; CBR is libwebrtc's (today's) realtime mode. */
+    val bitrateMode: EncoderBitrateMode = EncoderBitrateMode.CBR,
 ) {
     companion object {
         /** webrtc.md: initial sender targets (adjusted in Phases 10–12). */
@@ -45,6 +56,10 @@ data class CastConfig(
         const val DEFAULT_BITRATE_MIN_BPS = 4_000_000
         const val DEFAULT_BITRATE_MAX_BPS = 6_000_000
         const val DEGRADATION_BALANCED = "balanced"
+
+        /** [DegradationStrategy] labels carried on the sender (RtpParameters). */
+        const val DEGRADATION_FRAMERATE = "framerate"
+        const val DEGRADATION_RESOLUTION = "resolution"
 
         /** audio.md: game audio is part of the default cast (set off in Phase10's UI). */
         const val DEFAULT_GAME_AUDIO = true
