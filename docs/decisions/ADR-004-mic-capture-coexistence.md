@@ -1,6 +1,6 @@
 # ADR-004: Mic capture coexistence — the cast mic must not win the arbitration
 
-- **Status:** accepted (fix after Phase 8 review period, 2026-09-23) — device verification pending
+- **Status:** accepted (fix after Phase 8 review period, 2026-09-23) — verified on device (Y700/Android 16: PUBG voice chat + cast mic coexist cleanly after round 3; see the addenda)
 
 ## Context
 

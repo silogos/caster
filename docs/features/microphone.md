@@ -46,6 +46,8 @@ Fallback if 1 fails on device: one builder call — `setAudioSource(MIC)` (non-s
 
 **Device round 3 (user-directed):** round 2's preferred-device request did not move the routing — the platform still split the `VOICE_COMMUNICATION` record onto the back mic. The capture source itself is now **`MIC`** (`MicRecordSubstituter.CAPTURE_SOURCE` — shared by the ADM builder, the twin, and the silence monitor), the exact source the game's voice chat uses, so both captures are hosted identically (same source, same 16 kHz, same builtin mic). Cost: no platform AEC/NS/AGC — the echo limitation below stands, headphones remain the mitigation ([ADR-004 round-3 addendum](../decisions/ADR-004-mic-capture-coexistence.md)).
 
+**Verified on device (Lenovo TB321FU / Android 16, 2026-09-23, user-confirmed after round 3):** cast + game audio + mic ON with PUBG voice chat active — the game's mic reaches its voice chat **and** the cast mic is clean at the desktop (no chipmunk, no delay; the earlier retoggle workaround is no longer needed). dumpsys evidence in the working state: the mic capture runs as `MIC` @ 16 kHz on `AUDIO_DEVICE_IN_BUILTIN_MIC` — the same source/rate/device configuration the game's capture uses, hosted on the shared path; game audio stays on its own `REMOTE_SUBMIX` 48 kHz path. Remaining from the matrix: the explicit reverse-direction silence case and the echo speaker-vs-headset sanity (Phase 15).
+
 
 
 ### Backgrounded operation — the `microphone` FGS type (found live in the Phase9 listen)
