@@ -175,10 +175,31 @@ export class ReceiverSession {
     this.options.micSink.clear()
   }
 
-  /** Final teardown (window closing). */
+  /**
+   * Final teardown (window closing).
+   */
   close(): void {
     this.closed = true
     this.handleMobileGone()
+  }
+
+  /**
+   * One getStats report per active pc, entries normalized to plain objects.
+   * Phase15's debug hook: the CDP capture script (scripts/capture-session-stats.mjs)
+   * reaches the renderer-local receiver through `window.__castReceiver` and records
+   * the receive-side stats — read-only, never a signaling or media path.
+   */
+  async statsSnapshot(): Promise<Partial<Record<PcId, Array<Record<string, unknown>>>>> {
+    const snapshot: Partial<Record<PcId, Array<Record<string, unknown>>>> = {}
+    for (const [pcId, state] of this.active) {
+      const report = await state.pc.getStats()
+      snapshot[pcId] = Array.from(report).map((entry) =>
+        Array.isArray(entry) && entry.length === 2
+          ? (entry[1] as Record<string, unknown>)
+          : (entry as Record<string, unknown>)
+      )
+    }
+    return snapshot
   }
 
   private wireHandlers(pcId: PcId, state: ActivePc): void {

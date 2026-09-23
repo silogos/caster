@@ -319,4 +319,23 @@ describe('ReceiverSession — rendering and teardown', () => {
       vi.useRealTimers()
     }
   })
+
+  it('statsSnapshot returns one normalized report per active pc (Phase15 debug hook)', async () => {
+    const h = makeHarness()
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    const mediaPc = h.pcs[0]
+    mediaPc.statsAsTuples = true // production shape: RTCStatsReport is maplike
+    mediaPc.statsEntries = [{ type: 'inbound-rtp', kind: 'video', bytesReceived: 5000 }]
+    h.pcs[1].statsEntries = [{ type: 'inbound-rtp', kind: 'audio', bytesReceived: 500 }]
+
+    const snapshot = await h.session.statsSnapshot()
+    expect(Object.keys(snapshot).sort()).toEqual(['media', 'mic'])
+    expect(snapshot.media).toEqual([{ type: 'inbound-rtp', kind: 'video', bytesReceived: 5000 }])
+    expect(snapshot.mic).toEqual([{ type: 'inbound-rtp', kind: 'audio', bytesReceived: 500 }])
+
+    // Torn-down pcs disappear from the snapshot (mobile gone → empty).
+    h.session.handleMobileGone()
+    expect(await h.session.statsSnapshot()).toEqual({})
+  })
 })

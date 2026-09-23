@@ -117,6 +117,13 @@ const receiver = new ReceiverSession({
   log
 })
 
+// Phase15's debug hook for the CDP manual-verification scripts
+// (scripts/capture-session-stats.mjs): the receiver is renderer-local and its
+// live getStats reports are the receive-side evidence channel for the long
+// matrices (OBS session, thermal protocol, drift check). Read-only from the
+// scripts' side — never a signaling or media path.
+;(window as unknown as { __castReceiver: ReceiverSession }).__castReceiver = receiver
+
 // The stream's size (first metadata, every rotation, quality steps) feeds the
 // main process's cache — the on-demand "Match window to video" reshape uses
 // it. The window itself is the user's canvas: the video letterboxes via CSS
