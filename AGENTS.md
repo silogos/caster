@@ -47,3 +47,4 @@ This is **Zero-Friction Local Cast**: an Android → desktop screen/audio/mic ca
 
 - One coherent commit per phase (or per logical unit inside a phase). Suggested prefixes: `feat:`, `fix:`, `chore:`, `docs:`, `test:`.
 - Never mix unrelated features into one commit.
+- **Issue + PR workflow (mandatory):** when shipping a phase or feature, first open a GitHub issue documenting it (motivation, what shipped, verification results, remaining items — mirror the format of existing issues), then open the PR. The PR body must **open with the closing keyword `Closes #N`** referencing the issue — this links the issue in the PR's **Development** sidebar and auto-closes the issue on merge. A plain `#N` mention is not enough. Also post a short comment on the issue (branch, commit hashes, verification summary) as the implementation record.
