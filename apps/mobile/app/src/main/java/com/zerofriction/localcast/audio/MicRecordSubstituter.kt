@@ -1,6 +1,9 @@
 package com.zerofriction.localcast.audio
 
+import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
@@ -39,7 +42,7 @@ import java.nio.ByteBuffer
  * the mic works exactly as before this fix — with the documented
  * coexistence cost — logged, never surfaced as a mic failure.
  */
-class MicRecordSubstituter(private val adm: JavaAudioDeviceModule) {
+class MicRecordSubstituter(private val context: Context, private val adm: JavaAudioDeviceModule) {
 
     /** Called from the ADM's `onWebRtcAudioRecordStart` — its recording thread. */
     fun onRecordStart() {
@@ -62,6 +65,7 @@ class MicRecordSubstituter(private val adm: JavaAudioDeviceModule) {
                 logDegrade("the twin record could not be initialized")
                 return
             }
+            routeToBuiltinMic(twin)
             twin.startRecording()
             if (twin.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 twin.release()
@@ -103,6 +107,34 @@ class MicRecordSubstituter(private val adm: JavaAudioDeviceModule) {
             .setBufferSizeInBytes(maxOf(minBytes, readBytes))
             .setPrivacySensitive(false)
             .build()
+    }
+
+    /**
+     * Route the twin to the built-in microphone explicitly. The default
+     * routing is not ours to choose: when another app's voice chat captures
+     * concurrently, the platform split our record onto
+     * `AUDIO_DEVICE_IN_BACK_MIC` while the game kept `AUDIO_DEVICE_IN_BUILTIN_
+     * MIC` (found live via dumpsys) — a different processing path that fed the
+     * 48 kHz record raw 16 kHz data (the desktop heard chipmunk) and, at
+     * best, a mic the user isn't speaking into. Naming the device ties the
+     * cast mic to the mic the user actually speaks into, and with the
+     * session's input rate matching the voice-chat rate
+     * (SHARED_VOICE_INPUT_RATE_HZ, MicCastSession) the twin shares the same
+     * device+rate configuration the game's capture already runs.
+     */
+    private fun routeToBuiltinMic(record: AudioRecord) {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val builtinMic = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
+        } ?: run {
+            Log.w(TAG, "no built-in mic device found — default routing stays")
+            return
+        }
+        if (record.setPreferredDevice(builtinMic)) {
+            Log.i(TAG, "cast mic routed to the built-in microphone")
+        } else {
+            logDegrade("the built-in mic was not accepted as preferred device")
+        }
     }
 
     private fun stopAndRelease(record: AudioRecord) {

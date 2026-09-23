@@ -165,7 +165,13 @@ class MicCastSession(
             // privacy-insensitive twin (same source, same format) so the
             // concurrent-capture policy doesn't silence every other app —
             // the reason PUBG's voice chat died when the cast mic came on.
+            // Addendum (device round 2): the input rate matches the on-device
+            // voice-chat rate — when the game's 16 kHz capture runs
+            // concurrently, the shared HAL path reconfigures to it, and a
+            // 48 kHz record on that path received raw 16 kHz data (the
+            // desktop heard chipmunk).
             val adm = JavaAudioDeviceModule.builder(context)
+                .setInputSampleRate(SHARED_VOICE_INPUT_RATE_HZ)
                 .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
                     override fun onWebRtcAudioRecordStart() {
                         substituter?.onRecordStart()
@@ -183,7 +189,7 @@ class MicCastSession(
                     override fun onWebRtcAudioRecordError(errorMessage: String) = micFailed("record: $errorMessage")
                 })
                 .createAudioDeviceModule()
-            substituter = MicRecordSubstituter(adm)
+            substituter = MicRecordSubstituter(context, adm)
             val newFactory = PeerConnectionFactory.builder()
                 .setAudioDeviceModule(adm)
                 .createPeerConnectionFactory()
@@ -465,6 +471,15 @@ class MicCastSession(
 
     companion object {
         private const val TAG = "MicCastSession"
+
+        /**
+         * ADR-004 addendum: the input rate the twin shares with on-device
+         * voice chat (PUBG captures 16 kHz stereo; dumpsys evidence). Running
+         * the ADM at the same rate keeps our capture aligned with the shared
+         * HAL path when both capture concurrently — no resampling mismatch
+         * (chipmunk), and no reconfiguration churn at toggle time.
+         */
+        const val SHARED_VOICE_INPUT_RATE_HZ = 16_000
 
         /** webrtc.md: each side polls getStats ~1 Hz. */
         const val STATS_INTERVAL_MS = 1_000L

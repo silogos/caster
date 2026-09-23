@@ -35,3 +35,14 @@ Factory B keeps the `VOICE_COMMUNICATION` source — the HAL voice processing (A
 - **Positive:** two non-sensitive captures are allowed to coexist (the same shape of traffic as a streaming app + game voice chat, which the device evidence already shows working); viewer-facing voice quality unchanged; degradation is the exact pre-fix behavior.
 - **Costs / accepted:** factory B now carries the second reflection site (pinned to `audioInput`/`audioRecord`/`byteBuffer` — same accepted cost as factory A's substitution, ADR-003 addendum); the "ours" match in the silence monitor is by source, so another capture on `VOICE_COMMUNICATION` being silenced would show the fact on our UI (rare, self-clearing, and the log disambiguates).
 - **Explicitly revisit this ADR if:** the device test shows the substituted record still silencing the game's capture (→ the `MIC` fallback, then re-evaluate the substitution), or a libwebrtc update ships a public privacy-sensitive configuration option (→ replace the reflection with the public API).
+
+## Addendum (device round 2, 2026-09-23): the arbitration was fixed, then the shared HAL path broke the audio — rate + routing
+
+The privacy-insensitive twin worked (the casted game's voice chat receives the mic again), but two new symptoms appeared when the game's voice chat captured **concurrently** with the cast mic:
+
+1. The desktop mic stream got **delayed**, then
+2. turned into **chipmunk audio** — the classic pitch-up of a rate mismatch. dumpsys (live) showed why: the game's capture is `MIC`, **16 kHz** stereo on `AUDIO_DEVICE_IN_BUILTIN_MIC`, while our record was `VOICE_COMMUNICATION`, **48 kHz** mono that the platform routed to `AUDIO_DEVICE_IN_BACK_MIC` — a different device path that fed our 48 kHz record raw 16 kHz data (48/16 = exactly the 3× chipmunk). Retoggling the mic only helped once the game's mic was already off: the re-created record opened into the same mis-matched shared path.
+
+**What shipped:** the cast mic's capture contract is now aligned with the shared path from the start — factory B runs at **`SHARED_VOICE_INPUT_RATE_HZ = 16 kHz`** (`MicCastSession`, matching the on-device voice-chat rate), and the twin is explicitly routed to **`AUDIO_DEVICE_IN_BUILTIN_MIC`** via `setPreferredDevice` (`MicRecordSubstituter.routeToBuiltinMic`) so it reads the same physical mic the user speaks into, in the same device+rate configuration the game's capture already runs.
+
+**Accepted cost:** the cast mic is 16 kHz mono (wideband voice) rather than the ADM's default 48 kHz — slightly duller for viewers, but consistent with the voice-chat path it must coexist with. Revisit only if viewer quality complains. Routing may still be overridden by the platform (the preferred device is a request; the fallback is the default routing, logged).

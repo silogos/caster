@@ -42,6 +42,8 @@ A side claim that Android 16 introduced *new* compatibility rules here could not
 
 Fallback if 1 fails on device: one builder call — `setAudioSource(MIC)` (non-sensitive by default) — re-test, and ADR-004 records the outcome. Note: this ROM discards app logcat (Phase 7 constraint), so the monitor's diagnostics are for other devices/emulator; on-device verification of this fix rides on the game's own mic indicator and the desktop listen.
 
+**Device round 2 (same day, live-found):** the arbitration fix worked — the game's voice chat receives the mic — but concurrent capture surfaced a second platform behavior: the platform routed our record to `AUDIO_DEVICE_IN_BACK_MIC` (the game kept `BUILTIN_MIC`) and the shared-path rate churn turned the desktop stream into delay → **chipmunk** (our 48 kHz record receiving the game's 16 kHz path data, 3× pitch-up; a mic retoggle only helped once the game's mic was off). Fix: factory B input rate **16 kHz** (`SHARED_VOICE_INPUT_RATE_HZ`) + the twin explicitly routed to the built-in mic (`routeToBuiltinMic`, `setPreferredDevice`) — the same device+rate configuration the game's capture runs. Tradeoff: mic = 16 kHz mono wideband voice instead of 48 kHz (duller for viewers, accepted). Full evidence + rationale: [ADR-004 addendum](../decisions/ADR-004-mic-capture-coexistence.md). Re-test matrix: items 1–4 above, plus **no chipmunk/delay while the game's voice chat is on** and **cast mic reads the built-in mic** (verify via dumpsys `Input device: AUDIO_DEVICE_IN_BUILTIN_MIC`).
+
 
 
 ### Backgrounded operation — the `microphone` FGS type (found live in the Phase9 listen)
