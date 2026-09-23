@@ -1,6 +1,6 @@
 # Feature: Microphone
 
-Implemented in: **Phase8** (see [roadmap](../development/roadmap.md)). Status: **implemented; JVM 58/58 + desktop53/53 green; verified live on device (2026-09-20)** — mic offers answered on their own pc, mic stream rendered at the receiver, on/off toggle cycles exercised, simultaneous operation with game audio observed. The remaining acceptance item is the user's **audible listen** (see *Verification*).
+Implemented in: **Phase8** (see [roadmap](../development/roadmap.md)). Status: **implemented; JVM 138/138 green; verified live on device (2026-09-20)** — mic offers answered on their own pc, mic stream rendered at the receiver, on/off toggle cycles exercised, simultaneous operation with game audio observed. **2026-09-23 fix ([ADR-004](../decisions/ADR-004-mic-capture-coexistence.md)):** the cast mic no longer silences the casted game's voice chat (PUBG) — see *Concurrent-capture coexistence*; the fix's device matrix below is **pending**. The remaining Phase 8 acceptance item is the user's **audible listen** (see *Verification*).
 
 ## What is implemented
 
@@ -20,9 +20,29 @@ Every mic failure (record init/start error, `createPeerConnection` null, ICE `FA
 
 ### State + UI
 
-`MicState` (`audio/` module): `Off` (not in this cast), `Active`, `NeedsPermission` (RECORD_AUDIO denied), `Failed`. No silence detection — a quiet microphone is normal, unlike opted-out game audio. `MicControls` renders next to `GameAudioControls` on both screens while casting: the state as a plain fact, the on/off button, and the headphones tip when **both** audio sources are in this cast (the documented echo trap: the phone speaker + live mic [audio.md](../architecture/audio.md) — the mic picks the game audio up acoustically; AEC has no reference signal for playback capture, so the honest v1 mitigation is the hint).
+`MicState` (`audio/` module): `Off` (not in this cast), `Active`, `Silenced` (the platform muted our capture under the concurrent-capture policy — [ADR-004](../decisions/ADR-004-mic-capture-coexistence.md); recovers by itself), `NeedsPermission` (RECORD_AUDIO denied), `Failed`. A quiet microphone is still normal and never surfaced — `Silenced` is about the platform's arbitration, not the room's volume. `MicControls` renders next to `GameAudioControls` on both screens while casting: the state as a plain fact, the on/off button, and the headphones tip when **both** audio sources are in this cast (the documented echo trap: the phone speaker + live mic [audio.md](../architecture/audio.md) — the mic picks the game audio up acoustically; AEC has no reference signal for playback capture, so the honest v1 mitigation is the hint).
 
 `NeedsPermission`'s button asks for the grant from the activity (the service cannot show dialogs); granting turns the mic on immediately — denial keeps the honest fact, never an error.
+
+### Concurrent-capture coexistence (ADR-004, fix of 2026-09-23)
+
+Found live: with a cast running, turning the cast mic on **muted the microphone of the game being cast** (PUBG voice chat); the game's mic returned the moment the cast mic went off. Streaming apps on the same device did not cause it (TikTok + PUBG coexist). Root cause (platform rule, "Sharing audio input"): the stock ADM's `VOICE_COMMUNICATION` source is **privacy-sensitive by default**, and a privacy-sensitive capture wins the concurrent-capture arbitration while every other recording is silenced.
+
+The fix (factory B): keep the voice source — its platform AEC/NS/AGC is tied to it and wanted for viewers — but swap the ADM's mic `AudioRecord` at recording start for a twin with `setPrivacySensitive(false)` (`audio/MicRecordSubstituter`; the fork's builder exposes no privacy-sensitive API, hence the same reflection substitution factory A uses). Any substitution failure degrades to the pre-fix stock record — logged, never a mic failure. The reverse case (another app's recording wins and the *platform* silences ours) is surfaced by `MicSilenceMonitor` + `AudioRecordingCallback` as the plain-words `MicState.Silenced` (new state + string) and recovers automatically; "ours" is matched by audio source because the uid-level accessors are system APIs.
+
+A side claim that Android 16 introduced *new* compatibility rules here could not be found in the official behavior-change pages (recorded as unverified in ADR-004) — the arbitration rule predates Android 16.
+
+**Pending device matrix (this fix's acceptance):**
+
+1. Cast + game audio + mic ON while PUBG voice chat is active → the game's mic reaches its teammates **and** the cast mic is audible at the desktop (the real acceptance).
+2. Regression: cast + mic OFF → the game's mic unaffected.
+3. Regression: mic toggle cycle mid-cast + backgrounded with the `microphone` FGS type — unchanged behavior.
+4. Reverse direction: cast mic ON first, the game's voice chat started after — if the platform silences our capture, the UI shows `mic_silenced` (plain words) and recovers when the game stops recording.
+5. Echo sanity: speaker vs headset (the known limitation below stands).
+
+Fallback if 1 fails on device: one builder call — `setAudioSource(MIC)` (non-sensitive by default) — re-test, and ADR-004 records the outcome. Note: this ROM discards app logcat (Phase 7 constraint), so the monitor's diagnostics are for other devices/emulator; on-device verification of this fix rides on the game's own mic indicator and the desktop listen.
+
+
 
 ### Backgrounded operation — the `microphone` FGS type (found live in the Phase9 listen)
 
@@ -56,3 +76,9 @@ RECORD_AUDIO was already requested non-fatally before every cast (Phase7 needs i
 **Remaining acceptance item — the audible listen:** the room was quiet during the measurement window, so the mic stream's peak at the receiver was ≈ 0.00003 (a live but silent stream — nobody spoke). A planned loud-sample test (macOS `say` through the Mac's speakers into the phone's mic) raced the mic being toggled off. So: everything short of *heard* audio is verified; the user's listen of a spoken word on the desktop speakers closes the acceptance, exactly like Phase 7's test tone.
 
 **Also pending (Phase 15 matrix):** runtime RECORD_AUDIO denial on device, mic quality through the APM (noise suppression strength), behavior of a mic pc when Wi-Fi flaps mid-toggle (the reconnect ladder itself was observed re-authing cleanly three times when the phone's Wi-Fi grew unstable at the end of the session), and the formal backgrounded-mic verification on the fixed build (the `microphone` FGS type above — the silencing was found live; the fixed behavior still needs a backgrounded listen).
+
+## Verification (2026-09-23 — the ADR-004 coexistence fix, code-level)
+
+**Tests:** mobile JVM **138/138** (6 new: `MicSilenceMonitorTest` — another app's loss doesn't touch us, our source silenced → `Silenced` with the metadata log line, automatic recovery, the playback-capture record excluded from the decision, idempotent config repeats). `assembleDebug` green.
+
+**Device matrix:** pending — see the checklist under *Concurrent-capture coexistence* above; needs the phone in hand (PUBG voice chat + the desktop listen), exactly like Phase 14's OBS acceptance.

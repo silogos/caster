@@ -53,6 +53,7 @@
     <string name="mic_off">Microphone is off for this cast.</string>
     <string name="mic_needs_permission">Microphone needs permission to join the cast.</string>
     <string name="mic_unavailable">Microphone isn\'t available for this cast.</string>
+    <string name="mic_silenced">Another app on this phone is using the microphone, so it isn\'t reaching the desktop. It recovers by itself when that app stops recording.</string>
     <string name="turn_on_mic">Turn on microphone</string>
     <string name="turn_off_mic">Turn off microphone</string>
     <string name="mic_headphones_hint">Tip: use headphones — otherwise the mic picks up the game audio playing from this phone.</string>

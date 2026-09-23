@@ -305,10 +305,18 @@ fun MicControls(micState: MicState, gameAudioState: GameAudioState) {
             fontSize = 13.sp,
         )
 
+        // The platform muted this capture because another app's recording has
+        // priority (ADR-004) — a plain fact, not a technical error, and it
+        // recovers by itself when that app stops recording.
+        MicState.Silenced -> Text(
+            text = stringResource(R.string.mic_silenced),
+            fontSize = 13.sp,
+        )
+
         MicState.Active -> Unit
     }
     when (micState) {
-        MicState.Off, MicState.Active -> OutlinedButton(
+        MicState.Off, MicState.Active, MicState.Silenced -> OutlinedButton(
             onClick = { CastService.requestToggleMic(context) },
         ) {
             Text(

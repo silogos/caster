@@ -1,9 +1,15 @@
 package com.zerofriction.localcast.webrtc
 
 import android.content.Context
+import android.media.AudioManager
+import android.media.MediaRecorder
+import android.media.AudioRecordingConfiguration
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
+import com.zerofriction.localcast.audio.MicRecordSubstituter
+import com.zerofriction.localcast.audio.MicSilenceMonitor
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.signaling.SignalingClient
 import kotlinx.serialization.json.JsonElement
@@ -53,6 +59,36 @@ class MicCastSession(
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
     private var pc: PeerConnection? = null
+    private var audioManager: AudioManager? = null
+
+    /**
+     * Factory B's record stays on the voice source (ADR-004) — the
+     * substituter clears the record's privacy-sensitive flag at recording
+     * start (created together with the ADM, which it reflects into), and the
+     * silence monitor matches "ours" in the arbitration configs against the
+     * same voice source.
+     */
+    private var substituter: MicRecordSubstituter? = null
+    private val silenceMonitor = MicSilenceMonitor(
+        ourSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        log = { Log.d(TAG, it) },
+        onSignal = { signal -> post { applySilenceSignal(signal) } },
+    )
+
+    /** Held so unregister can pass the exact instance that was registered. */
+    private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<AudioRecordingConfiguration>) {
+            silenceMonitor.onRecordings(
+                configs.map { MicSilenceMonitor.Recording(it.clientAudioSource, it.isClientSilenced) },
+            )
+        }
+    }
+
+    /**
+     * The state this session last published — the silence monitor may only
+     * move between Active and Silenced, never overwrite a terminal state.
+     */
+    private var publishedState: MicState = MicState.Off
 
     /** Desktop candidates that arrived before the answer set the remote description. */
     private val pendingCandidates = mutableListOf<IceCandidate>()
@@ -125,16 +161,29 @@ class MicCastSession(
             // Factory B (ADR-003): the stock ADM records the actual microphone
             // — voice defaults (VOICE_COMMUNICATION, mono, platform AEC/NS/AGC)
             // are wanted here, unlike the playback-capture factory A.
+            // ADR-004: at recording start its record is swapped for a
+            // privacy-insensitive twin (same source, same format) so the
+            // concurrent-capture policy doesn't silence every other app —
+            // the reason PUBG's voice chat died when the cast mic came on.
             val adm = JavaAudioDeviceModule.builder(context)
+                .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
+                    override fun onWebRtcAudioRecordStart() {
+                        substituter?.onRecordStart()
+                    }
+
+                    override fun onWebRtcAudioRecordStop() = Unit
+                })
                 .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
                     override fun onWebRtcAudioRecordInitError(errorMessage: String) = micFailed("record init: $errorMessage")
                     override fun onWebRtcAudioRecordStartError(
                         errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
                         errorMessage: String,
                     ) = micFailed("record start ($errorCode): $errorMessage")
+
                     override fun onWebRtcAudioRecordError(errorMessage: String) = micFailed("record: $errorMessage")
                 })
                 .createAudioDeviceModule()
+            substituter = MicRecordSubstituter(adm)
             val newFactory = PeerConnectionFactory.builder()
                 .setAudioDeviceModule(adm)
                 .createPeerConnectionFactory()
@@ -145,12 +194,57 @@ class MicCastSession(
             val newAudioTrack = newFactory.createAudioTrack(AUDIO_TRACK_ID, newAudioSource)
             audioTrack = newAudioTrack
 
-            onState(MicState.Active)
+            registerSilenceMonitor()
+
+            publishState(MicState.Active)
             negotiate()
         } catch (t: Throwable) {
             Log.e(TAG, "building the mic pipeline failed", t)
             micFailed(t.message ?: t.javaClass.simpleName)
         }
+    }
+
+    // ---- silence monitor (ADR-004): who won the mic arbitration ----
+
+    /**
+     * The platform tells every holder of RECORD_AUDIO how the active
+     * recordings fare — metadata only, never content (AGENTS.md logging).
+     * The monitor turns that into a single fact: did the capture this session
+     * owns get silenced (e.g. another app's voice chat has priority)?
+     */
+    private fun registerSilenceMonitor() {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManager = am
+        try {
+            am?.registerAudioRecordingCallback(
+                recordingCallback,
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (t: Throwable) {
+            // Diagnostics only — the mic itself is unaffected.
+            Log.w(TAG, "registering the recording callback failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Monitor transition → UI state. Guarded three ways: the session is still
+     * up, the current published state is in the Active/Silenced pair (a
+     * terminal Off/Failed is never overwritten by a late config event), and
+     * the pair actually moves.
+     */
+    private fun applySilenceSignal(signal: MicSilenceMonitor.Signal) {
+        if (!active) return
+        val target = when (signal) {
+            MicSilenceMonitor.Signal.OwnSourceSilenced -> MicState.Silenced
+            MicSilenceMonitor.Signal.OwnSourceCleared -> MicState.Active
+        }
+        if (publishedState != MicState.Active && publishedState != MicState.Silenced) return
+        if (publishedState != target) publishState(target)
+    }
+
+    private fun publishState(next: MicState) {
+        publishedState = next
+        onState(next)
     }
 
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
@@ -329,6 +423,12 @@ class MicCastSession(
         if (!active && thread === null) return
         active = false
         signaling.removeListener(signalingListener)
+        try {
+            audioManager?.unregisterAudioRecordingCallback(recordingCallback)
+        } catch (t: Throwable) {
+            Log.d(TAG, "unregistering the recording callback failed: ${t.message}")
+        }
+        audioManager = null
         handler?.removeCallbacks(statsRunnable)
         closePc()
         audioTrack?.dispose()
@@ -342,7 +442,7 @@ class MicCastSession(
         thread?.quitSafely()
         thread = null
         handler = null
-        onState(terminal)
+        publishState(terminal)
         Log.i(TAG, "mic session torn down")
     }
 

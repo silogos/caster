@@ -6,8 +6,10 @@ package com.zerofriction.localcast.audio
  * runs. Deliberately separate from [GameAudioState]: the two tracks are
  * separate products end to end, and one must never gate the other.
  *
- * There is no "silent" state here (unlike game audio): a quiet microphone is
- * normal and never a fact worth surfacing.
+ * There is no "quiet" state here (unlike game audio's Silent): a quiet
+ * microphone is normal and never a fact worth surfacing. [Silenced] is a
+ * different fact — the platform itself muted the capture under the
+ * concurrent-capture policy while another app owns the input (ADR-004).
  */
 sealed interface MicState {
     /**
@@ -18,6 +20,14 @@ sealed interface MicState {
 
     /** Capturing; the mic is on its way to (or already) the desktop. */
     data object Active : MicState
+
+    /**
+     * The capture started but the platform silenced it — another app's
+     * recording has priority under the concurrent-capture rules, so the
+     * desktop would only ever receive digital silence. Recovers by itself
+     * if that app stops recording (ADR-004).
+     */
+    data object Silenced : MicState
 
     /** RECORD_AUDIO is denied — mic can't join this cast. */
     data object NeedsPermission : MicState
