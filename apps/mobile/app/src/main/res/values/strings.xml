@@ -97,6 +97,49 @@
     <string name="settings_auto_quality">Automatic quality</string>
     <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
 
+    <!-- Home hub (designs/mobile-app.html): the connected home — the share
+         trigger with the gear beside it, then the audio rows. "Stop share
+         screen" stops the video only; the pairing session stays connected. -->
+    <string name="share_screen_action">Share screen</string>
+    <string name="stop_share_screen">Stop share screen</string>
+    <string name="cast_settings_title">Cast settings</string>
+    <string name="home_game_audio">Game audio</string>
+    <string name="home_microphone">Microphone</string>
+    <string name="home_game_audio_hint">Off silences the game audio, but its track stays part of the cast.</string>
+    <string name="home_mic_hint">Off removes the microphone from the cast and frees it for the game\'s own voice chat.</string>
+
+    <!-- Advanced settings (designs/mobile-app.html) — encoder-level knobs.
+         Defaults reproduce today's cast exactly; every value is next-cast. -->
+    <string name="settings_advanced">Advanced</string>
+    <string name="settings_preset_sets_advanced_hint">Picking a template also sets the Advanced defaults below — you can still override them.</string>
+    <string name="settings_encoder">Encoder</string>
+    <string name="settings_encoder_hardware">Hardware</string>
+    <string name="settings_encoder_software">Software</string>
+    <string name="settings_encoder_hardware_hint">Hardware encoding is the most efficient for the phone\'s heat. On some phones it can compete with a game for the chip — if a game stutters while casting, try Software.</string>
+    <string name="settings_encoder_software_hint">Software encoding frees the phone\'s video hardware (more CPU used by the cast, less contention with the game). It runs hotter on the CPU, so watch the thermal status.</string>
+    <string name="settings_preferred_codec">Preferred video codec</string>
+    <string name="settings_codec_h264">H.264</string>
+    <string name="settings_codec_vp8">VP8</string>
+    <string name="settings_h264_profile">H.264 profile</string>
+    <string name="settings_h264_profile_baseline">Baseline</string>
+    <string name="settings_h264_profile_high">High</string>
+    <string name="settings_h264_profile_codec_hint">Profile applies to H.264 only.</string>
+    <string name="settings_degradation">Under network pressure</string>
+    <string name="degradation_balanced">Balanced</string>
+    <string name="degradation_framerate">Keep frame rate</string>
+    <string name="degradation_resolution">Keep resolution</string>
+    <string name="settings_degradation_hint">What the cast gives up first when Wi-Fi slows down. Balanced trades a little of both; \"Keep frame rate\" stays smooth and drops detail; \"Keep resolution\" stays sharp and drops frames.</string>
+    <string name="settings_encoder_fps_limit">Encoder fps limit</string>
+    <string name="settings_encoder_fps_off">Off</string>
+    <string name="settings_encoder_fps_hint">Caps how many frames per second the encoder works on. The effective rate is the lower of this and the capture frame rate — e.g. capture 60 fps with a 30 fps limit encodes 30. Off follows the capture frame rate.</string>
+    <string name="settings_bitrate_mode">Bitrate mode</string>
+    <string name="settings_bitrate_mode_cbr">CBR</string>
+    <string name="settings_bitrate_mode_vbr">VBR</string>
+    <string name="settings_bitrate_mode_hint">CBR keeps the output bitrate constant — the encoder works at full effort on every frame (today\'s behavior). VBR spends fewer bits on easy frames, so the encoder\'s average load is lower.</string>
+    <string name="settings_encoder_in_use">Encoder in use</string>
+    <string name="settings_encoder_in_use_none">— (visible during a cast)</string>
+    <string name="settings_advanced_note">Advanced settings — overrides here do not change which template is selected. Everything takes effect on the next cast.</string>
+
     <!-- Auto-quality transitions (Phase12) — plain words for what the policy
              did (AGENTS.md); the thresholds and holds stay in the logs. -->
     <string name="adaptive_lowered_thermal">The phone got hot, so the quality was lowered to %1$s.</string>

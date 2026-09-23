@@ -23,7 +23,6 @@ import kotlinx.serialization.json.JsonNull
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -249,20 +248,27 @@ class MediaCastSession(
             val egl = EglBase.create()
             eglBase = egl
             // Game audio rides the media pc (ADR-003): factory A's ADM is the
-            // playback-capture ADM. The projection doesn't exist yet — the
-            // audio source fetches it lazily at record start (one consent =
-            // one projection, reused from the capturer).
-            val newAudio = if (config.gameAudio && hasRecordAudioPermission()) {
-                PlaybackCaptureAudioSource(context, projection = { capturer?.mediaProjection }, onState = onGameAudioState)
-            } else {
-                if (config.gameAudio) {
-                    Log.w(TAG, "RECORD_AUDIO not granted — casting without game audio")
+            // playback-capture ADM. The track is ALWAYS part of the cast when
+            // permission allows (designs/mobile-app.html: only the microphone
+            // is ever fully removed) — `gameAudio=false` means muted, so the
+            // receiver's mixer row never disappears; the live toggle flips the
+            // same mute. The projection doesn't exist yet — the audio source
+            // fetches it lazily at record start (one consent = one projection,
+            // reused from the capturer).
+            val newAudio = if (hasRecordAudioPermission()) {
+                PlaybackCaptureAudioSource(context, projection = { capturer?.mediaProjection }, onState = onGameAudioState).also {
+                    if (!config.gameAudio) it.setMuted(true)
                 }
+            } else {
+                Log.w(TAG, "RECORD_AUDIO not granted — casting without game audio")
                 null
             }
             audio = newAudio
             val factoryBuilder = PeerConnectionFactory.builder()
-                .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
+                // Encoder policy from the config (designs/mobile-app.html):
+                // hardware-with-fallback (today's behavior) or software-only,
+                // H.264 High profile only when the user left it on.
+                .setVideoEncoderFactory(CastEncoderFactory.create(egl.eglBaseContext, config))
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             if (newAudio !== null) factoryBuilder.setAudioDeviceModule(newAudio.adm)
             val newFactory = factoryBuilder.createPeerConnectionFactory()
@@ -317,8 +323,15 @@ class MediaCastSession(
             }
 
             // The monitor's initial value has no transition to report —
-            // publish the starting state explicitly (Off = not in this cast).
-            onGameAudioState(if (newAudio !== null) GameAudioState.Active else GameAudioState.Off)
+            // publish the starting state explicitly (Off = not in this cast;
+            // a cast with game audio muted starts in Muted).
+            onGameAudioState(
+                when {
+                    newAudio === null -> GameAudioState.Off
+                    !config.gameAudio -> GameAudioState.Muted
+                    else -> GameAudioState.Active
+                },
+            )
 
             // Display-only summary for the desktop status line (webrtc.md) —
             // not configuration; the desktop never acts on it. The mic flag is
@@ -380,10 +393,14 @@ class MediaCastSession(
         newPc.createOffer(
             object : SdpObserver {
                 override fun onCreateSuccess(original: SessionDescription) {
-                    // Codec policy lives in the offer (webrtc.md): H.264 first.
+                    // Codec policy lives in the offer (webrtc.md): the
+                    // config's preferred codec first (H.264 by default).
                     val munged = SessionDescription(
                         original.type,
-                        SdpCodecOrderer.preferVideoCodecs(original.description),
+                        SdpCodecOrderer.preferVideoCodecs(
+                            original.description,
+                            SdpCodecOrderer.preferenceFor(config.preferredCodec),
+                        ),
                     )
                     newPc.setLocalDescription(
                         object : SdpObserver {
@@ -436,8 +453,10 @@ class MediaCastSession(
     /**
      * Sender-side parameters from the config module only (webrtc.md): the
      * *live* bitrate window ([liveBitrateMinBps]/[liveBitrateMaxBps] — the
-     * config's at cast start, moved by [changeQuality]) and BALANCED
-     * degradation. Called once the answer exists; if the pc refuses (early
+     * config's at cast start, moved by [changeQuality]), the degradation
+     * preference (Advanced → "Under network pressure"; BALANCED by default),
+     * and the encoder-side fps cap (Advanced → "Encoder fps limit"; none by
+     * default). Called once the answer exists; if the pc refuses (early
      * states), the values reapply on the next call. Targets the *video*
      * sender explicitly — since Phase7 the pc also carries an audio sender,
      * and `senders` order is not a contract.
@@ -449,8 +468,13 @@ class MediaCastSession(
         parameters.encodings.first().apply {
             minBitrateBps = liveBitrateMinBps
             maxBitrateBps = liveBitrateMaxBps
+            config.encoderFpsLimit?.let { limit -> maxFramerate = limit }
         }
-        parameters.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+        parameters.degradationPreference = when (config.degradationPreference) {
+            CastConfig.DEGRADATION_BALANCED -> RtpParameters.DegradationPreference.BALANCED
+            CastConfig.DEGRADATION_FRAMERATE -> RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            else -> RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+        }
         val result = sender.setParameters(parameters)
         if (!result) {
             Log.w(TAG, "setParameters rejected — bitrate/degradation targets may not be applied")

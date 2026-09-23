@@ -1,6 +1,11 @@
 package com.zerofriction.localcast.ui.home
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -14,13 +19,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,12 +38,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -44,6 +56,7 @@ import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
+import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.config.QualityProfile
@@ -52,95 +65,153 @@ import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
-import com.zerofriction.localcast.ui.settings.CastSettingsPanel
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 /**
- * The home page (Phase10 restructure): a **header** for the connection
- * state (status + Start/Stop button) and, as its content, the cast settings
- * themselves (overview.md: the mobile is the configuration owner; the desktop
- * exposes none of this). The settings persist immediately and take effect on
- * the next cast — the note under the header says so.
- *
- * While a cast runs, the content also shows the live controls for that cast
- * (game-audio mute, mic on/off — Phases 7/8): settings apply to the *next*
- * cast, the live toggles to the *current* one.
+ * The Home hub (designs/mobile-app.html): reached only through a successful
+ * pairing on the scan screen. The header states the connection, the share
+ * trigger (with the gear to all cast settings beside it) starts and stops
+ * the **video** — "Stop share screen" leaves the pairing connected — and
+ * Disconnect ends everything. The audio rows are the live toggles *and* the
+ * next-cast defaults: only the microphone is ever fully removed from a cast;
+ * game-audio "off" mutes the track, which stays part of the cast.
  */
 @Composable
 fun HomeScreen(
-    onStartCast: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onDisconnected: () -> Unit,
     viewModel: HomeViewModel = viewModel(),
+    settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory()),
 ) {
+    val context = LocalContext.current
     val castState by viewModel.castState.collectAsStateWithLifecycle()
+    val connection by ConnectedDesktop.state.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
     val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
-
-    // The settings state (Phase10): the home page is its home now — one
-    // ViewModel scoped to the activity, backed by the persistent store.
-    val context = LocalContext.current
-    val settingsViewModel: SettingsViewModel = viewModel(
-        factory = remember(context) {
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    val store = CastSettingsStore(context.applicationContext)
-                    return SettingsViewModel(store.load(), store::save) as T
-                }
-            }
-        },
-    )
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+
+    // No pairing session → nothing to show here: back to the scan screen.
+    LaunchedEffect(connection) {
+        if (connection is ConnectedDesktop.State.None) onDisconnected()
+    }
+
+    // ---- The share consent ladder (mobile.md): every grant is non-fatal —
+    // RECORD_AUDIO denial means a video-only cast, the notification prompt is
+    // visibility-only, and the projection consent is per cast, never stored.
+    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val consentData = result.data
+        if (result.resultCode == Activity.RESULT_OK && consentData != null) {
+            val signaling = ConnectedDesktop.releaseForCast()
+            if (signaling !== null) {
+                val (width, height) = DisplaySize.physicalPx(context)
+                // "Changes take effect on the next cast": read the store fresh.
+                val castSettings = CastSettingsStore(context).load()
+                CastService.start(
+                    context,
+                    CastService.StartArgs(
+                        signaling = signaling,
+                        config = castSettings.toConfig(),
+                        projectionIntent = consentData,
+                        physicalWidth = width,
+                        physicalHeight = height,
+                        desktopName = (ConnectedDesktop.state.value as? ConnectedDesktop.State.Connected)?.desktopName
+                            ?: "",
+                    ),
+                )
+            }
+        }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        val manager = context.getSystemService(MediaProjectionManager::class.java)
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+    // Non-fatal on denial (mobile.md): a video-only cast beats no cast.
+    val recordAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            val manager = context.getSystemService(MediaProjectionManager::class.java)
+            projectionLauncher.launch(manager.createScreenCaptureIntent())
+        }
+    }
+    val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) CastService.requestToggleMic(context)
+    }
 
     HomeContent(
         castState = castState,
+        connection = connection,
         gameAudioState = gameAudioState,
         micState = micState,
         thermalState = thermalState,
         adaptiveState = adaptiveState,
         settings = settings,
-        onSelectProfile = settingsViewModel::selectProfile,
-        onSelectLongEdge = settingsViewModel::selectLongEdge,
-        onSelectFps = settingsViewModel::selectFps,
-        onSetBitrateAuto = settingsViewModel::setBitrateAuto,
-        onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
-        onSetGameAudio = settingsViewModel::setGameAudio,
-        onSetMic = settingsViewModel::setMic,
-        onSetAutoQuality = settingsViewModel::setAutoQuality,
-        onStartCast = onStartCast,
+        onSetGameAudio = { on ->
+            settingsViewModel.setGameAudio(on)
+            if (castState is CastState.Casting && (gameAudioState == GameAudioState.Muted) != !on) {
+                CastService.requestToggleGameAudio(context)
+            }
+        },
+        onSetMic = { on ->
+            settingsViewModel.setMic(on)
+            if (castState is CastState.Casting) {
+                when {
+                    on && micState == MicState.NeedsPermission ->
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+
+                    on != (micState != MicState.Off) -> CastService.requestToggleMic(context)
+                }
+            }
+        },
+        onShareScreen = {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                val manager = context.getSystemService(MediaProjectionManager::class.java)
+                projectionLauncher.launch(manager.createScreenCaptureIntent())
+            }
+        },
+        onStopShareScreen = { CastService.requestStop(context) },
+        onDisconnect = { CastService.requestDisconnect(context) },
+        onOpenSettings = onOpenSettings,
     )
 }
 
 @Composable
 fun HomeContent(
     castState: CastState,
+    connection: ConnectedDesktop.State = ConnectedDesktop.State.Connected("Gaming PC"),
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
     thermalState: ThermalState = ThermalState(),
     adaptiveState: AdaptiveUiState = AdaptiveUiState(),
     settings: CastSettings = CastSettings.default(),
-    onSelectProfile: (QualityProfile) -> Unit = {},
-    onSelectLongEdge: (Int) -> Unit = {},
-    onSelectFps: (Int) -> Unit = {},
-    onSetBitrateAuto: (Boolean) -> Unit = {},
-    onSetManualBitrateMax: (Int) -> Unit = {},
     onSetGameAudio: (Boolean) -> Unit = {},
     onSetMic: (Boolean) -> Unit = {},
-    onSetAutoQuality: (Boolean) -> Unit = {},
-    onStartCast: () -> Unit = {},
+    onShareScreen: () -> Unit = {},
+    onStopShareScreen: () -> Unit = {},
+    onDisconnect: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
-    val context = LocalContext.current
-
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
     ) {
-        // ---- Header: the connection state + the cast trigger ----
+        // ---- Header: title, connection status, Disconnect ----
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -153,206 +224,172 @@ fun HomeContent(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
-                Text(
-                    text = when (val state = castState) {
-                        is CastState.Casting -> stringResource(R.string.casting_to, state.desktopName)
-                        is CastState.Starting -> stringResource(R.string.starting_cast)
-                        is CastState.Failed -> state.message
-                        CastState.Idle -> stringResource(R.string.home_not_connected)
-                    },
-                    fontSize = 14.sp,
-                    color = if (castState is CastState.Failed) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+                when (val state = castState) {
+                    is CastState.Failed -> StatusRow(
+                        message = state.message,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                    else -> Text(
+                        text = when (state) {
+                            is CastState.Casting -> stringResource(R.string.casting_to, state.desktopName)
+                            else -> (connection as? ConnectedDesktop.State.Connected)
+                                ?.let { stringResource(R.string.connected_to, it.desktopName) }
+                                ?: stringResource(R.string.home_not_connected)
+                        },
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            when (castState) {
-                CastState.Idle, is CastState.Failed -> Button(onClick = onStartCast) {
-                    Text(stringResource(R.string.start_cast))
-                }
-
-                is CastState.Starting -> CircularProgressIndicator()
-
-                is CastState.Casting -> OutlinedButton(
-                    onClick = { CastService.requestStop(context) },
-                ) {
-                    Text(stringResource(R.string.stop_casting))
-                }
+            TextButton(onClick = onDisconnect) {
+                Text(stringResource(R.string.disconnect))
             }
         }
 
-        Text(
-            text = stringResource(R.string.settings_changes_next_cast),
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-
-        // ---- Content: live controls for the running cast (if any), then
-        // the settings for the next one ----
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            if (castState is CastState.Casting) {
+        // ---- Share screen + gear (all cast settings) ----
+        when (castState) {
+            is CastState.Starting -> {
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    text = stringResource(R.string.live_cast_section),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                GameAudioControls(gameAudioState)
-                MicControls(micState = micState, gameAudioState = gameAudioState)
-                ThermalStatusLine(thermalState)
-                AdaptiveStatusLine(adaptiveState)
-                if (BuildConfig.DEBUG) {
-                    DebugToneButton()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.width(10.dp))
+                    Text(text = stringResource(R.string.starting_cast), fontSize = 14.sp)
+                }
+                // mobile.md consent affordance (Android 14+): the dialog shown
+                // during this window defaults to the cast-killing choice.
+                HintText(stringResource(R.string.share_full_screen_hint))
+            }
+
+            else -> {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 12.dp),
+                ) {
+                    Button(onClick = if (castState is CastState.Casting) onStopShareScreen else onShareScreen) {
+                        Text(
+                            stringResource(
+                                if (castState is CastState.Casting) R.string.stop_share_screen else R.string.share_screen_action,
+                            ),
+                        )
+                    }
+                    OutlinedButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.cast_settings_title))
+                    }
                 }
             }
-
-            CastSettingsPanel(
-                settings = settings,
-                onSelectProfile = onSelectProfile,
-                onSelectLongEdge = onSelectLongEdge,
-                onSelectFps = onSelectFps,
-                onSetBitrateAuto = onSetBitrateAuto,
-                onSetManualBitrateMax = onSetManualBitrateMax,
-                onSetGameAudio = onSetGameAudio,
-                onSetMic = onSetMic,
-                onSetAutoQuality = onSetAutoQuality,
-            )
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-/**
- * The game-audio row of a running cast (Phase7, audio.md): a live mute
- * toggle plus an honest fact line. The capture can't produce sound for
- * opted-out apps or without the RECORD_AUDIO grant — those surface as plain
- * statements, never as technical errors (AGENTS.md).
- */
-@Composable
-fun GameAudioControls(gameAudioState: GameAudioState) {
-    val context = LocalContext.current
-    when (gameAudioState) {
-        GameAudioState.Off -> Text(
-            text = stringResource(R.string.game_audio_off),
-            fontSize = 13.sp,
-        )
-
-        GameAudioState.Failed -> Text(
-            text = stringResource(R.string.game_audio_unavailable),
-            fontSize = 13.sp,
-        )
-
-        GameAudioState.Silent -> {
-            Text(
-                text = stringResource(R.string.game_audio_cannot_capture),
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(4.dp))
         }
 
-        else -> Unit
-    }
-    when (gameAudioState) {
-        GameAudioState.Active, GameAudioState.Muted, GameAudioState.Silent -> OutlinedButton(
-            onClick = { CastService.requestToggleGameAudio(context) },
-        ) {
-            Text(
-                stringResource(
-                    if (gameAudioState == GameAudioState.Muted) {
-                        R.string.unmute_game_audio
-                    } else {
-                        R.string.mute_game_audio
-                    },
-                ),
-            )
-        }
-        else -> Unit
-    }
-}
+        // ---- Audio rows: live toggles and next-cast defaults ----
+        SectionLabel(R.string.settings_audio)
+        // Game audio: the track always rides the cast (when permission
+        // allows) — the switch is audibility. Only the microphone is ever
+        // fully removed (designs/mobile-app.html, ADR-004 semantics).
+        AudioRow(
+            label = stringResource(R.string.home_game_audio),
+            checked = when {
+                castState is CastState.Casting && gameAudioState != GameAudioState.Off ->
+                    gameAudioState != GameAudioState.Muted
 
-/**
- * The mic row of a running cast (Phase8, audio.md): a live on/off toggle —
- * on builds the `mic` pc on demand, off tears it down; the cast itself is
- * never renegotiated or stopped. Needs-permission surfaces as a plain fact
- * whose button asks for the grant, never as a technical error (AGENTS.md).
- * The headphones tip appears only when both audio sources are in this cast:
- * the phone speaker + live mic is the documented echo trap (audio.md).
- */
-@Composable
-fun MicControls(micState: MicState, gameAudioState: GameAudioState) {
-    val context = LocalContext.current
-    when (micState) {
-        MicState.Off -> Text(
-            text = stringResource(R.string.mic_off),
-            fontSize = 13.sp,
+                else -> settings.gameAudio
+            },
+            onCheckedChange = onSetGameAudio,
         )
-
-        MicState.NeedsPermission -> Text(
-            text = stringResource(R.string.mic_needs_permission),
-            fontSize = 13.sp,
-        )
-
-        MicState.Failed -> Text(
-            text = stringResource(R.string.mic_unavailable),
-            fontSize = 13.sp,
-        )
-
-        // The platform muted this capture because another app's recording has
-        // priority (ADR-004) — a plain fact, not a technical error, and it
-        // recovers by itself when that app stops recording.
-        MicState.Silenced -> Text(
-            text = stringResource(R.string.mic_silenced),
-            fontSize = 13.sp,
-        )
-
-        MicState.Active -> Unit
-    }
-    when (micState) {
-        MicState.Off, MicState.Active, MicState.Silenced -> OutlinedButton(
-            onClick = { CastService.requestToggleMic(context) },
-        ) {
-            Text(
-                stringResource(
-                    if (micState == MicState.Active) {
-                        R.string.turn_off_mic
-                    } else {
-                        R.string.turn_on_mic
-                    },
-                ),
-            )
+        HintText(stringResource(R.string.home_game_audio_hint))
+        when (gameAudioState) {
+            GameAudioState.Silent -> FactText(stringResource(R.string.game_audio_cannot_capture))
+            GameAudioState.Failed -> FactText(stringResource(R.string.game_audio_unavailable))
+            GameAudioState.Off -> if (castState is CastState.Casting) FactText(stringResource(R.string.game_audio_off))
+            else -> Unit
         }
 
-        // Only the app (not the service) can show the permission dialog;
-        // granting turns the mic on right away — denial keeps the honest fact.
-        MicState.NeedsPermission -> {
-            val permissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
-                if (granted) CastService.requestToggleMic(context)
-            }
-            OutlinedButton(
-                onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+        AudioRow(
+            label = stringResource(R.string.home_microphone),
+            checked = if (castState is CastState.Casting) micState != MicState.Off else settings.mic,
+            onCheckedChange = onSetMic,
+        )
+        HintText(stringResource(R.string.home_mic_hint))
+        when (micState) {
+            MicState.Silenced -> FactText(stringResource(R.string.mic_silenced))
+            MicState.Failed -> FactText(stringResource(R.string.mic_unavailable))
+            else -> Unit
+        }
+
+        // ---- "This cast": the live status lines while the video runs ----
+        if (castState is CastState.Casting) {
+            SectionLabel(R.string.live_cast_section)
+            if (micState == MicState.Active &&
+                (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
             ) {
-                Text(stringResource(R.string.turn_on_mic))
+                FactText(stringResource(R.string.mic_headphones_hint))
+            }
+            ThermalStatusLine(thermalState)
+            AdaptiveStatusLine(adaptiveState)
+            if (BuildConfig.DEBUG) {
+                DebugToneButton()
             }
         }
-
-        MicState.Failed -> Unit
+        Spacer(Modifier.height(24.dp))
     }
-    if (micState == MicState.Active && gameAudioState != GameAudioState.Off) {
-        Text(
-            text = stringResource(R.string.mic_headphones_hint),
-            fontSize = 13.sp,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+}
+
+/** Icon + message row — the one failure treatment on every screen (prototype). */
+@Composable
+private fun StatusRow(message: String, color: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(text = "⚠", fontSize = 15.sp, color = color)
+        Text(text = message, fontSize = 14.sp, color = color)
+    }
+}
+
+@Composable
+private fun SectionLabel(labelRes: Int) {
+    Spacer(Modifier.height(20.dp))
+    Text(
+        text = stringResource(labelRes),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Medium,
+    )
+}
+
+/** The 13sp muted explanation under a control. */
+@Composable
+private fun HintText(text: String) {
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top =8.dp),
+        lineHeight = 18.sp,
+    )
+}
+
+/** A 13sp plain-words fact about the running cast (AGENTS.md: no jargon). */
+@Composable
+private fun FactText(text: String) {
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(top = 4.dp),
+        lineHeight = 18.sp,
+    )
+}
+
+/** Label + switch — one control per track (prototype: no separate mute buttons). */
+@Composable
+private fun AudioRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+    ) {
+        Text(text = label, fontSize = 15.sp, modifier = Modifier.padding(end = 16.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -458,13 +495,28 @@ fun DebugToneButton() {
     }
 }
 
+/** The settings store, injected once — the Home's audio rows persist through it. */
+@Composable
+private fun settingsFactory(): ViewModelProvider.Factory {
+    val context = LocalContext.current
+    return remember(context) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val store = CastSettingsStore(context.applicationContext)
+                return SettingsViewModel(store.load(), store::save) as T
+            }
+        }
+    }
+}
+
 @Preview(showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
-private fun HomeContentPreview() {
+private fun HomeContentConnectedPreview() {
     LocalCastTheme {
         HomeContent(
             castState = CastState.Idle,
-            gameAudioState = GameAudioState.Off,
+            connection = ConnectedDesktop.State.Connected("Gaming PC"),
             settings = CastSettings.default(),
         )
     }
@@ -475,7 +527,8 @@ private fun HomeContentPreview() {
 private fun HomeContentCastingPreview() {
     LocalCastTheme {
         HomeContent(
-            castState = CastState.Casting("MacBook Pro"),
+            castState = CastState.Casting("Gaming PC"),
+            connection = ConnectedDesktop.State.Connected("Gaming PC"),
             gameAudioState = GameAudioState.Active,
             micState = MicState.Active,
             settings = CastSettings.default(),
