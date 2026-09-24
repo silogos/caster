@@ -56,11 +56,17 @@ export interface PairingSessionView {
 /**
  * Push event for the renderer: which mobile (if any) is paired right now.
  * `name` comes from the hello user-agent (docs/architecture/webrtc.md) so the
- * desktop can show "Connected to Pixel 8" — the desktop only *displays* it.
+ * desktop can show "Connected to Pixel8" — the desktop only *displays* it.
+ *
+ * `disconnected` (Phase15): the authorized socket dropped but the pairing
+ * session is still live (the reconnect window, pairing.md) — the receiver
+ * keeps showing the device ("No input video"), never the QR; `waiting` (QR
+ * hero) means the session itself is gone (bye/expiry/regenerate).
  */
 export type MobileStateEvent =
   | { state: 'waiting' }
   | { state: 'connected'; name: string }
+  | { state: 'disconnected'; name: string }
   | { state: 'session-info'; info: CastSessionInfo }
 
 /**

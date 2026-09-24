@@ -47,8 +47,9 @@ body {
   color: var(--fg-muted);
 }
 
-/* The paired (check) and session-error (warning) hero states — the waiting
-   state's "hero" is the QR card itself. */
+/* The session-error (warning) hero state — the waiting state's "hero" is the
+   QR card itself; the paired state renders the Phase15 no-input stage
+   instead (noInputView). */
 .hero-icon {
   display: flex;
   align-items: center;
@@ -68,10 +69,6 @@ body {
   width: 36px;
   height: 36px;
   fill: var(--fg);
-}
-
-#icon-check svg {
-  fill: var(--success);
 }
 
 #icon-warning svg {
@@ -116,6 +113,33 @@ body {
   font-size: 12px;
   color: var(--fg-muted);
   max-width: 420px;
+}
+
+/* Phase15 "no input" stage: the receiver behaves like a monitor without a
+   signal while the pairing session is alive — muted, low-key copy only; the
+   QR hero is reserved for a session that is truly gone. */
+.no-input {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.no-input[hidden] {
+  display: none;
+}
+
+.no-input-heading {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+
+.no-input-subline {
+  font-size: 15px;
+  color: var(--fg-muted);
 }
 
 /* Receiver/environment control only (overview.md) — the desktop exposes no

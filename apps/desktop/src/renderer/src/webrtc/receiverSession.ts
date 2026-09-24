@@ -205,8 +205,15 @@ export class ReceiverSession {
   private wireHandlers(pcId: PcId, state: ActivePc): void {
     state.pc.onicecandidate = (event) => {
       // The whole candidate object goes on the wire verbatim (webrtc.md) —
-      // including Chromium's mDNS-obfuscated host candidates (risk R4).
-      this.options.signaling.sendIceCandidate(pcId, event.candidate)
+      // including Chromium's mDNS-obfuscated host candidates (risk R4). But
+      // first it must survive the renderer→main IPC hop: RTCIceCandidate is
+      // not structured-cloneable, and Electron's serializer delivered an
+      // empty there (Phase15 live finding — the mobile logged one
+      // "malformed candidate" per cast and connectivity survived only via
+      // ICE peer-reflexive discovery). toJSON() is exactly the
+      // RTCIceCandidateInit shape the wire wants.
+      const candidate = (event.candidate as { toJSON?: () => unknown } | null)?.toJSON?.() ?? event.candidate
+      this.options.signaling.sendIceCandidate(pcId, candidate)
     }
     state.pc.ontrack = (event) => {
       const stream = event.streams[0]
