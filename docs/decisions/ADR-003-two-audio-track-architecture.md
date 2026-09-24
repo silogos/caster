@@ -1,6 +1,6 @@
 # ADR-003: Two-audio-track architecture (game audio + microphone as separate streams)
 
-- **Status:** accepted (Phase0, 2026-09-19) — **amended by the Phase7 spike result (2026-09-20), see the addendum below**
+- **Status:** accepted (Phase0, 2026-09-19) — **amended by the Phase7 spike result (2026-09-20), see the addendum below; factory B's capture contract revised by [ADR-004](ADR-004-mic-capture-coexistence.md) (2026-09-23), see the final addendum**
 
 ## Context
 
@@ -48,3 +48,7 @@ The spike disproved the decision's literal wording but not its architecture. Byt
 **Accepted cost:** the approach is pinned to the library's internal field names (`audioInput`, `audioRecord`, `byteBuffer`) — checked at first swap, not compile time. A dependency bump that renames them is caught by the video-only fallback, not a crash. Implementation details and the full verification record: [features/game-audio.md](../features/game-audio.md).
 
 **Product finding that outranks this ADR's optimism:** the platform's capture default is **opt-out** (apps targeting API 29+ are not capturable unless they set `android:allowAudioPlaybackCapture="true"`), so most modern apps — including most games — are silent by design. The capture pipeline is only half the feature; the source app's consent is the other half, and no amount of engineering changes that ([audio.md](../architecture/audio.md)).
+
+## Addendum (factory B revised by ADR-004, 2026-09-23)
+
+The decision's factory B wording — stock `JavaAudioDeviceModule` with the default `VOICE_COMMUNICATION` source — was revised live during the Phase 8 review window: the concurrent-capture arbitration (privacy-sensitive sources silence every other recording) and the shared HAL path (rate/routing splits) forced the whole capture contract onto **`MIC` @16 kHz**, the game voice chat's own configuration. The two-PC architecture itself is unchanged. Full history and rationale: [ADR-004](ADR-004-mic-capture-coexistence.md) and its addenda.
