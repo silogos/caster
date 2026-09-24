@@ -22,6 +22,16 @@ data class SenderSample(
     val encoderImplementation: String?,
     /** Remote receiver's reported loss fraction (0..1) — the link-struggle signal for Phase12. */
     val fractionLost: Double?,
+    /**
+     * Cumulative seconds the encoder spent encoding (RTCStats
+     * `totalEncodeTime`) — Phase16's per-frame encode cost comes from its
+     * delta over frames. Null while the prebuilt does not report it.
+     */
+    val totalEncodeTimeSeconds: Double? = null,
+    /** Cumulative frames handed to the packetizer; null while not reported (Phase16). */
+    val framesSent: Long? = null,
+    /** Cumulative retransmitted packets; null while not reported (Phase16). */
+    val retransmittedPacketsSent: Long? = null,
 )
 
 /**
@@ -69,6 +79,9 @@ object SenderStats {
             rttMs = rttSeconds?.let { (it * 1000).toLong() },
             encoderImplementation = video["encoderImplementation"] as? String,
             fractionLost = fractionLost,
+            totalEncodeTimeSeconds = (video["totalEncodeTime"] as? Number)?.toDouble(),
+            framesSent = (video["framesSent"] as? Number)?.toLong(),
+            retransmittedPacketsSent = (video["retransmittedPacketsSent"] as? Number)?.toLong(),
         )
     }
 

@@ -93,6 +93,38 @@ class SenderStatsTest {
         assertNull(sample.encoderImplementation)
     }
 
+    // ---- Phase16: per-frame encode cost + packetizer retransmits ----
+
+    @Test
+    fun `extracts totalEncodeTime framesSent and retransmittedPacketsSent when the prebuilt reports them`() {
+        val sample = SenderStats.sampleVideoSend(
+            listOf(
+                mapOf(
+                    "type" to "outbound-rtp",
+                    "kind" to "video",
+                    "bytesSent" to 750_000L,
+                    "framesEncoded" to 900L,
+                    "totalEncodeTime" to 4.5,
+                    "framesSent" to 898L,
+                    "retransmittedPacketsSent" to 12L,
+                ),
+            ),
+        )!!
+        assertEquals(4.5, sample.totalEncodeTimeSeconds!!, 1e-9)
+        assertEquals(898L, sample.framesSent)
+        assertEquals(12L, sample.retransmittedPacketsSent)
+    }
+
+    @Test
+    fun `encode-cost fields are null when the prebuilt does not report them`() {
+        val sample = SenderStats.sampleVideoSend(
+            listOf(mapOf("type" to "outbound-rtp", "kind" to "video", "bytesSent" to 10L)),
+        )!!
+        assertNull(sample.totalEncodeTimeSeconds)
+        assertNull(sample.framesSent)
+        assertNull(sample.retransmittedPacketsSent)
+    }
+
     // ---- mic pc (Phase8): bytesSent proves the mic is actually flowing ----
 
     @Test

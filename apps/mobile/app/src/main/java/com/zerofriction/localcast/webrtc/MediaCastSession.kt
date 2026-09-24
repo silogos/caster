@@ -134,6 +134,13 @@ class MediaCastSession(
     /** Grown once the answer's parameters exist; sampled by the stats poller. */
     private var lastBytesSent = 0L
     private var lastStatsAtMs = 0L
+    /**
+     * Phase16 encode-cost baseline: the previous tick's cumulative
+     * `totalEncodeTime` and `framesEncoded` — their deltas give ms/frame.
+     * Null until the first two samples with encode time exist.
+     */
+    private var lastTotalEncodeTimeSeconds: Double? = null
+    private var lastFramesEncoded = 0L
     /** Phase15 probe: first null-sample ticks log the report's shape (bounded — not a 1 Hz firehose). */
     private var nullSampleLogs = 0
     private val statsIntervalMs = statsIntervalMs
@@ -622,12 +629,25 @@ class MediaCastSession(
                     } else {
                         0
                     }
+                    // Per-frame encode cost from the cumulative encode-time delta
+                    // — null until two samples exist, or the prebuilt reports no
+                    // `totalEncodeTime` at all (defensive, Phase16).
+                    val encodeMsPerFrame = sample.totalEncodeTimeSeconds?.let { now ->
+                        lastTotalEncodeTimeSeconds?.let { before ->
+                            val dFrames = sample.framesEncoded - lastFramesEncoded
+                            val dSeconds = now - before
+                            if (dFrames > 0 && dSeconds >= 0) dSeconds * 1000.0 / dFrames else null
+                        }
+                    }
+                    lastTotalEncodeTimeSeconds = sample.totalEncodeTimeSeconds
+                    lastFramesEncoded = sample.framesEncoded
+                    val encodePart = encodeMsPerFrame?.let { String.format(", encode %.1f ms/f", it) } ?: ""
                     Log.i(
                         TAG,
                         "stats: ${bitrateBps / 1_000} kbps, ${sample.framesEncoded} encoded" +
                             ", ${sample.framesDropped} dropped, ${sample.framesPerSecond} fps" +
                             ", ${sample.frameWidth}x${sample.frameHeight}" +
-                            ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}",
+                            ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}" + encodePart,
                     )
                     lastBytesSent = sample.bytesSent
                     lastStatsAtMs = nowMs

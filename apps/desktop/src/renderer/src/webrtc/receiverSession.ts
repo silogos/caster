@@ -1,5 +1,13 @@
 import type { PcId, SignalingIceMessage, SignalingSdpMessage } from '../../../shared/types'
-import { bitrateBps, sampleVideoReceive, type VideoReceiveSample } from './stats'
+import {
+  bitrateBps,
+  concealmentRate,
+  jitterBufferMs,
+  sampleAudioReceive,
+  sampleVideoReceive,
+  type AudioReceiveSample,
+  type VideoReceiveSample
+} from './stats'
 
 /**
  * The renderer's media half of the desktop (docs/architecture/desktop.md):
@@ -73,6 +81,12 @@ export interface ReceiverSessionOptions {
 
 const DEFAULT_STATS_INTERVAL_MS = 1_000
 
+/** Interval concealment rate ×100, rounded — null while counters are missing or reset. */
+function audioConcealmentPct(audio: AudioReceiveSample, state: ActivePc): number | null {
+  const rate = concealmentRate(audio, state.lastAudioSample)
+  return rate !== null ? Number((rate * 100).toFixed(1)) : null
+}
+
 interface ActivePc {
   pc: PeerConnectionLike
   /** Remote candidates that arrived before setRemoteDescription finished. */
@@ -80,6 +94,8 @@ interface ActivePc {
   remoteDescriptionSet: boolean
   statsTimer: ReturnType<typeof setInterval> | null
   lastSample: VideoReceiveSample | null
+  /** The pc's inbound audio (game audio on media, the mic itself) — Phase16 visibility. */
+  lastAudioSample: AudioReceiveSample | null
   lastSampleAtMs: number
 }
 
@@ -113,6 +129,7 @@ export class ReceiverSession {
       remoteDescriptionSet: false,
       statsTimer: null,
       lastSample: null,
+      lastAudioSample: null,
       lastSampleAtMs: 0
     }
     this.active.set(pcId, state)
@@ -235,7 +252,7 @@ export class ReceiverSession {
       const stateName = state.pc.connectionState
       this.options.log('info', `connection ${stateName} (pc=${pcId})`)
       if (stateName === 'connected') {
-        if (pcId === 'media') this.startStats(state)
+        this.startStats(pcId, state)
       } else if (stateName === 'failed' || stateName === 'closed') {
         // ICE-restart/recovery is the mobile's call (it is the offerer); the
         // desktop only stops polling and logs. The media pc's sink is only
@@ -253,8 +270,14 @@ export class ReceiverSession {
     }
   }
 
-  /** webrtc.md: poll getStats ~1 Hz and log the receive-side video numbers. */
-  private startStats(state: ActivePc): void {
+  /**
+   * webrtc.md: poll getStats ~1 Hz and log the receive-side numbers. The media
+   * pc logs the video sample (Phase16: now including the decode/render fields —
+   * reported fps, jitter-buffer residence, freezes, keyframes, repair
+   * requests, frame size) plus its game-audio track; the mic pc logs its own
+   * audio line — audio reception was invisible at the receiver until now.
+   */
+  private startStats(pcId: PcId, state: ActivePc): void {
     if (state.statsTimer !== null) return
     const now = this.options.now ?? Date.now
     state.lastSampleAtMs = now()
@@ -268,19 +291,50 @@ export class ReceiverSession {
               ? (entry[1] as Record<string, unknown>)
               : (entry as Record<string, unknown>)
           )
-          const sample = sampleVideoReceive(entries)
           const atMs = now()
           const intervalMs = atMs - state.lastSampleAtMs
-          this.options.log('info', 'stats', {
-            bitrateBps: Math.round(bitrateBps(sample.bytesReceived, state.lastSample?.bytesReceived ?? 0, intervalMs)),
-            rttMs: sample.rttMs !== null ? Math.round(sample.rttMs) : null,
-            packetsLost: sample.packetsLost,
-            jitterMs: Number(sample.jitterMs.toFixed(1)),
-            framesDecoded: sample.framesDecoded,
-            framesDropped: sample.framesDropped,
-            decoder: sample.decoderImplementation
-          })
-          state.lastSample = sample
+          const audio = sampleAudioReceive(entries)
+          if (pcId === 'media') {
+            const sample = sampleVideoReceive(entries)
+            const bufferMs = jitterBufferMs(sample, state.lastSample)
+            this.options.log('info', 'stats', {
+              bitrateBps: Math.round(bitrateBps(sample.bytesReceived, state.lastSample?.bytesReceived ?? 0, intervalMs)),
+              rttMs: sample.rttMs !== null ? Math.round(sample.rttMs) : null,
+              packetsLost: sample.packetsLost,
+              jitterMs: Number(sample.jitterMs.toFixed(1)),
+              framesDecoded: sample.framesDecoded,
+              framesDropped: sample.framesDropped,
+              decoder: sample.decoderImplementation,
+              fps: sample.framesPerSecond !== null ? Number(sample.framesPerSecond.toFixed(1)) : null,
+              jitterBufferMs: bufferMs !== null ? Number(bufferMs.toFixed(1)) : null,
+              freezeCount: sample.freezeCount,
+              keyFramesDecoded: sample.keyFramesDecoded,
+              pliCount: sample.pliCount,
+              nackCount: sample.nackCount,
+              frame:
+                sample.frameWidth !== null && sample.frameHeight !== null
+                  ? `${sample.frameWidth}x${sample.frameHeight}`
+                  : null,
+              gameAudio:
+                audio !== null
+                  ? {
+                      bitrateBps: Math.round(bitrateBps(audio.bytesReceived, state.lastAudioSample?.bytesReceived ?? 0, intervalMs)),
+                      packetsLost: audio.packetsLost,
+                      jitterMs: Number(audio.jitterMs.toFixed(1)),
+                      concealmentPct: audioConcealmentPct(audio, state)
+                    }
+                  : null
+            })
+            state.lastSample = sample
+          } else if (audio !== null) {
+            this.options.log('info', 'mic stats', {
+              bitrateBps: Math.round(bitrateBps(audio.bytesReceived, state.lastAudioSample?.bytesReceived ?? 0, intervalMs)),
+              packetsLost: audio.packetsLost,
+              jitterMs: Number(audio.jitterMs.toFixed(1)),
+              concealmentPct: audioConcealmentPct(audio, state)
+            })
+          }
+          state.lastAudioSample = audio
           state.lastSampleAtMs = atMs
         })
         .catch((error) => this.options.log('warn', 'getStats failed', { error: String(error) }))

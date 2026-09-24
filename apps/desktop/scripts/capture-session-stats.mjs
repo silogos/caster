@@ -3,13 +3,14 @@
 // receive-side trail for the long matrices (OBS session, thermal protocol,
 // mixer drift). The receiver exposes itself via the `window.__castReceiver`
 // debug hook (renderer main.ts); the reports are read-only evidence, never
-// a signaling or media path.
+// a signaling or media path. Phase16: the hook grew a `measureRender` method
+// (requestVideoFrameCallback probe) — this capture script stays stats-only.
 //
 // Usage: node scripts/capture-session-stats.mjs [port=9222] [durationSec=∞]
 //   stdout: one JSON line per tick — {"t":"…","pcs":{"media":[…],"mic":[…]}}
 //   stderr: start/end and per-minute heartbeats
-// Stop with Ctrl-C (or the duration); redirect stdout to a file, e.g.
-//   node scripts/capture-session-stats.mjs 9222 1800 > run-balanced.jsonl
+// Stop with Ctrl-C (or the duration); redirect stdout to a file — the Phase16
+// analyzer (scripts/analyze-session-stats.mjs) turns the JSONL into a summary.
 const port = process.argv[2] ?? '9222'
 const durationSec = process.argv[3] !== undefined ? Number(process.argv[3]) : null
 const TICK_MS = 1_000
@@ -53,7 +54,7 @@ for (;;) {
   const elapsedSec = (Date.now() - startedAt) /1_000
   if (durationSec !== null && elapsedSec >= durationSec) break
 
-  const snapshot = await evaluate('window.__castReceiver.statsSnapshot()', true)
+  const snapshot = await evaluate('window.__castReceiver.receiver.statsSnapshot()', true)
   process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), pcs: snapshot })}\n`)
 
   if (elapsedSec - lastHeartbeat >= 60) {
