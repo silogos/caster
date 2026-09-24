@@ -43,6 +43,14 @@ export interface PairingServerOptions {
   hosts?: () => string[]
   /** Injected clock for tests. */
   now?: () => number
+  /**
+   * Whether the authorized mobile's socket is still connected. While true, an
+   * authorized session past expiry defers its regeneration (Phase15 live
+   * finding: the sweep used to kill a live cast exactly at TTL). Once the
+   * socket drops, the already-expired session regenerates on the next sweep —
+   * the reconnect window still ends at expiry, as documented.
+   */
+  hasLiveAuthorizedSocket?: () => boolean
   /** Pushed to the renderer whenever the session is replaced (or creation failed → null). */
   onSessionChanged?: (view: PairingSessionView | null) => void
 }
@@ -51,6 +59,7 @@ export class PairingServer {
   private readonly port: number
   private readonly hosts: () => string[]
   private readonly now: () => number
+  private readonly hasLiveAuthorizedSocket?: () => boolean
   private readonly onSessionChanged?: (view: PairingSessionView | null) => void
   private session: PairingSessionRecord | null = null
   private qrDataUrlCache = new WeakMap<PairingSessionRecord, string>()
@@ -59,6 +68,7 @@ export class PairingServer {
     this.port = options.port
     this.hosts = options.hosts ?? getLanIpv4Hosts
     this.now = options.now ?? Date.now
+    this.hasLiveAuthorizedSocket = options.hasLiveAuthorizedSocket
     this.onSessionChanged = options.onSessionChanged
   }
 
@@ -146,6 +156,10 @@ export class PairingServer {
    * or when a previous creation attempt failed. Returns true when a fresh
    * session was created. Called from a slow sweep in the app entry — timers
    * stay at the edges so unit tests can drive the clock.
+   *
+   * Phase15: an *authorized* session whose socket is still connected defers
+   * regeneration — the TTL governs the pending QR and the reconnect window,
+   * never a live cast (live finding: casts died at exactly 600 s).
    */
   async ensureFreshSession(): Promise<boolean> {
     if (this.session === null) {
@@ -153,6 +167,9 @@ export class PairingServer {
       return true
     }
     if (this.isExpired(this.session)) {
+      if (this.session.state === 'authorized' && this.hasLiveAuthorizedSocket?.() === true) {
+        return false
+      }
       await this.createSession()
       return true
     }

@@ -137,6 +137,9 @@ app.whenReady().then(async () => {
 
   pairing = new PairingServer({
     port: signaling.actualPort,
+    // Phase15: the expiry sweep must not kill a live cast at the QR's TTL —
+    // an authorized session with a connected socket defers regeneration.
+    hasLiveAuthorizedSocket: () => signaling.hasAuthorizedConnection(),
     onSessionChanged: (view) => pushToRenderer(IPC.pairing.sessionUpdated, view)
   })
   signaling.attachPairing(pairing)

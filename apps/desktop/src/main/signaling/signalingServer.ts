@@ -187,6 +187,18 @@ export class SignalingServer {
     }
   }
 
+  /**
+   * Whether the authorized mobile's socket is still connected (Phase15): the
+   * pairing session's expiry sweep defers regeneration while this is true —
+   * a live cast must not be killed by the QR's TTL (pairing.md).
+   */
+  hasAuthorizedConnection(): boolean {
+    for (const conn of this.connections.values()) {
+      if (conn.phase === 'authorized') return true
+    }
+    return false
+  }
+
   // ---- Desktop → mobile senders (the ReceiverSession's half of the plumbing, Phase5+) ----
 
   /** Send the SDP answer for one PeerConnection (mobile is always the offerer, webrtc.md). */
