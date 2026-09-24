@@ -101,7 +101,7 @@ One fixed-duration cast per profile on the real device, same content across runs
 | T4 | 20-min cast, `sharp` | Same; outside the adaptive ladder by design | — |
 | T5 | 30+ min OBS Window Capture session | Clean, correctly-proportioned, smooth feed; window stays where placed; rotation mid-cast re-fits the bars without moving the window (Phase14's remaining acceptance, [obs-streaming.md](obs-streaming.md)) | — |
 | T6 | Profile switch visible in the stats line | The ~1 Hz line shows the new WxH/bitrate window immediately after a settings change takes effect on the next cast ([thermal.md](thermal.md) feature doc's remaining item) | — |
-| T7 | Thermal-driven step-down (if any run reaches `MODERATE`+ for120 s) | `adaptive quality: DOWN (THERMAL)` announced; one rung only; "Restore quality" returns it (if no run reaches it in 20 min, record that fact — itself a thermal result) | — |
+| T7 | Thermal-driven step-down (if any run reaches `MODERATE`+ for 120 s) | `adaptive quality: DOWN (THERMAL)` announced; one rung only; "Restore quality" returns it (if no run reaches it in 20 min, record that fact — itself a thermal result) | partial — session D observed the full staircase live (timings exact, every transition announced); controlled run + Restore-quality check owed |
 | T8 | Glass-to-glass latency measurement | The on-screen clock method (R6): a ms clock displayed on the phone, both screens photographed — measured number replaces the Phase5 "eyeballed" gap | — |
 
 ## Results record
@@ -151,6 +151,16 @@ Nothing below is filled in until the case actually runs on hardware — no resul
 **Fix:** an authorized session with a still-connected socket now **defers the expiry sweep** (`PairingServer.ensureFreshSession` + `SignalingServer.hasAuthorizedConnection()`); the TTL still governs the pending QR and the reconnect window (once the socket drops, the expired session regenerates — a drop past TTL means a re-scan, unchanged). Desktop 88/88 (2 new: defer-while-live, pending-still-regenerates); [pairing.md](../architecture/pairing.md) §Session lifecycle updated (same-phase rule).
 
 **Also observed, unchanged:** both casts also ran the **thermal ladder at SEVERE** from start (device on USB charge, ambient-hot) and adaptive quality walked `performance → balanced → cool` correctly on its 120 s holds — the first live observation of the full thermal step-down chain (T7 material). Thermal samples reported `headroom n/a, battery n/a` during this window — why the battery-temperature and headroom reads went dry while SEVERE is an open question for the T-runs.
+
+### Session D — 2026-09-24 (Phase16 measurement sessions; instrumentation builds)
+
+Two live casts on the measurement rig (custo 920px/60fps start, game content; sender logcat + receiver JSONL captured throughout — analyzed in [performance.md](performance.md)). The sessions doubled as reliability material:
+
+- **The thermal staircase, observed live end-to-end (partial T7):** the device began SEVERE (pre-warmed by prior use) and auto-quality walked the full ladder — custom 1920/60 → performance → balanced → cool — one rung per ~2 min, the 120 s holds and 90 s dwell exactly as specified, every transition announced in the log. Not a controlled T-run (no cooldown, SEVERE from the first sample, warm ambient) and the Restore-quality path was not exercised — the controlled T1–T4/T7 protocol is still owed.
+- **The fps placebo (live-found, live-fixed — the session's biggest finding):** the30 fps steps of the ladder did nothing to the actual encode rate (61 fps kept being encoded at ~30 ms/frame): MediaProjection capture cannot throttle, and nothing else applied the profile's fps. Fixed via the sender-side encoder cap and re-measured in the second cast: the same steps then really cut the encoder t 0 fps / ~13 ms/frame ([performance.md](performance.md)).
+- **Two receiver copies raced** (both bind attempts logged): a second desktop instance bound an ephemeral signaling port and showed a QR nobody scanned — the exact R7/R9-shaped confusion. Fixed with the Electron single-instance lock (found in the working tree during the session, verified, committed separately).
+- **SEVERE vs headroom, contradiction recorded:** throughout both casts the platform reported status SEVERE while the same samples carried headroom ≈ 1.1–1.2 (comfortable) and battery temperature read normally (39.5→41.5 °C). This contradicts session B/C's "reads went dry at SEVERE" — here nothing went dry; the signals simply disagree. Tuning should treat headroom as the more plausible of the two on this device; both are recorded per sample for the T-runs.
+- **Freeze bursts are content-shaped (metric caveat):** receiver freezeCount grows around resolution steps and while the cast screen is static (settings screens — the encoder sends on change, gaps exceed Chromium's freeze threshold); steady windows show zero freeze growth. freezeCount is a content-sensitive metric — record it, but never read it as a defect signal on its own.
 
 ## Findings & fixes (as they surface)
 
