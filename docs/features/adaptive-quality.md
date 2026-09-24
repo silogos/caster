@@ -18,7 +18,7 @@ Named constants carry the tuning (`THERMAL_HOLD_MS`, `NET_HOLD_MS`, `HEALTHY_HOL
 
 ### How a step is applied and announced
 
-A step must never renegotiate: `MediaCastSession.changeQuality(longEdge, fps, min, max)` reconfigures the capture pipeline (`changeCaptureFormat`) and moves the video sender's bitrate window (`setParameters`) live on the session thread. The session's *live* window (not the frozen cast config) is what `applySenderParameters` applies, so re-auths keep the stepped values.
+A step must never renegotiate: `MediaCastSession.changeQuality(longEdge, fps, min, max)` reconfigures the capture pipeline (`changeCaptureFormat`) and moves the video sender's bitrate window (`setParameters`) live on the session thread. **Phase16:** the step's fps now also reaches the actual encode rate through the encoder cap (`encodings.maxFramerate`, [performance.md](performance.md)) — measured live, a 30 fps step previously left the encoder running at 61 fps. The session's *live* window (not the frozen cast config) is what `applySenderParameters` applies, so re-auths keep the stepped values.
 
 Every transition is announced four ways (acceptance: "every transition logged and user-visible"):
 
@@ -35,7 +35,7 @@ Every transition is announced four ways (acceptance: "every transition logged an
 ## What is deliberately not here
 
 - No desktop involvement anywhere (configuration ownership, overview.md) — the desktop shows the label it is given and nothing else.
-- No fps-target enforcement and no content-adaptive bitrate tricks beyond libwebrtc's own — the sender windows are set, the encoder adapts inside them (BALANCED degradation, unchanged since Phase5).
+- No content-adaptive bitrate tricks beyond libwebrtc's own — the sender windows are set, the encoder adapts inside them (BALANCED degradation, unchanged since Phase5). Fps-target enforcement *was* added in Phase16, via the sender-side encoder cap (not the capturer, which cannot throttle) — [performance.md](performance.md).
 - No thermal *step-up* ever (thermal.md: step back up only manually for thermal descents).
 - No per-step "try and measure" loop: one step per hold window; Phase 15's measurements may retune the constants, the shape stays.
 

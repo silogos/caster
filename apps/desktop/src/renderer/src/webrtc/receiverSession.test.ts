@@ -304,13 +304,46 @@ describe('ReceiverSession — rendering and teardown', () => {
       const pc = h.pcs[0]
       pc.statsAsTuples = true // production shape: RTCStatsReport is maplike
       pc.statsEntries = [
-        { type: 'inbound-rtp', kind: 'video', bytesReceived: 1000, packetsLost: 0, jitter: 0, framesDecoded: 10, framesDropped: 0 },
+        {
+          type: 'inbound-rtp',
+          kind: 'video',
+          bytesReceived: 1000,
+          packetsLost: 0,
+          jitter: 0,
+          framesDecoded: 10,
+          framesDropped: 0,
+          framesPerSecond: 29.97,
+          jitterBufferDelay: 0.05,
+          jitterBufferEmittedCount: 10,
+          freezeCount: 0,
+          keyFramesDecoded: 1,
+          pliCount: 0,
+          nackCount: 2,
+          frameWidth: 1280,
+          frameHeight: 720
+        },
+        { type: 'inbound-rtp', kind: 'audio', bytesReceived: 500, packetsLost: 0, jitter: 0.001, concealedSamples: 0, totalSamplesReceived: 48_000 },
         { type: 'candidate-pair', nominated: true, state: 'succeeded', currentRoundTripTime: 0.002 }
       ]
       pc.connectionState = 'connected'
       pc.onconnectionstatechange?.()
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(logMock).toHaveBeenCalledWith('info', 'stats', expect.objectContaining({ bitrateBps: 8000, rttMs: 2 }))
+      // Phase16: the line now carries the decode/render fields and the
+      // game-audio track that rides the media pc.
+      expect(logMock).toHaveBeenCalledWith(
+        'info',
+        'stats',
+        expect.objectContaining({
+          bitrateBps: 8000,
+          rttMs: 2,
+          fps: 30,
+          jitterBufferMs: 5,
+          frame: '1280x720',
+          nackCount: 2,
+          keyFramesDecoded: 1,
+          gameAudio: { bitrateBps: 4000, packetsLost: 0, jitterMs: 1, concealmentPct: 0 }
+        })
+      )
       pc.connectionState = 'failed'
       pc.onconnectionstatechange?.()
       await vi.advanceTimersByTimeAsync(5_000)
@@ -320,18 +353,49 @@ describe('ReceiverSession — rendering and teardown', () => {
     }
   })
 
-  it('does not start video stats polling for the mic pc', async () => {
+  it('polls the mic pc as its own audio line, never the video stats line (Phase16)', async () => {
     vi.useFakeTimers()
     try {
       const h = makeHarness()
       const logMock = h.log as unknown as ReturnType<typeof vi.fn>
       await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
       const pc = h.pcs[0]
+      pc.statsEntries = [
+        { type: 'inbound-rtp', kind: 'audio', bytesReceived: 48_000, packetsLost: 1, jitter: 0.002, concealedSamples: 48, totalSamplesReceived: 96_000 },
+        { type: 'candidate-pair', nominated: true, state: 'succeeded', currentRoundTripTime: 0.004 }
+      ]
       pc.connectionState = 'connected'
       pc.onconnectionstatechange?.()
-      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(logMock).toHaveBeenCalledWith(
+        'info',
+        'mic stats',
+        expect.objectContaining({ bitrateBps: 384_000, packetsLost: 1, jitterMs: 2, concealmentPct: 0.1 })
+      )
       expect(logMock).not.toHaveBeenCalledWith('info', 'stats', expect.anything())
       expect(logMock).toHaveBeenCalledWith('info', 'connection connected (pc=mic)')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops the mic pc polling when the mic pc goes away (toggle off)', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = makeHarness()
+      const logMock = h.log as unknown as ReturnType<typeof vi.fn>
+      await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+      const pc = h.pcs[0]
+      pc.statsEntries = [{ type: 'inbound-rtp', kind: 'audio', bytesReceived: 1_000 }]
+      pc.connectionState = 'connected'
+      pc.onconnectionstatechange?.()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(logMock).toHaveBeenCalledWith('info', 'mic stats', expect.anything())
+      pc.connectionState = 'closed'
+      pc.onconnectionstatechange?.()
+      const logged = logMock.mock.calls.length
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(logMock.mock.calls.length).toBe(logged) // the poll died with the pc
     } finally {
       vi.useRealTimers()
     }

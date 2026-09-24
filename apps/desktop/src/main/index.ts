@@ -103,7 +103,26 @@ function asStreamSize(raw: unknown): { width: number; height: number } | null {
   return { width: width as number, height: height as number }
 }
 
+// One instance at a time (Phase15 live finding): a second copy used to bind
+// an ephemeral signaling port and show a QR advertising a port nobody
+// scanned — two windows, two QRs, one very confused user (R7/R9 territory).
+// The duplicate logs and quits; launching again just focuses the live window.
+const gotInstanceLock = app.requestSingleInstanceLock()
+if (!gotInstanceLock) {
+  logger.info(LOG_SCOPE, 'another instance is already running — this copy exits')
+  app.quit()
+}
+app.on('second-instance', () => {
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
+
 app.whenReady().then(async () => {
+  // A duplicate copy: quit was already requested — never bind sockets or
+  // compete for the pairing port.
+  if (!gotInstanceLock) return
   // Order matters: bind the signaling port first (the QR must carry the actual
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({

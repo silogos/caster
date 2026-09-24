@@ -76,7 +76,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ## Phase 16 — Performance Optimization
 **Scope:** profile-guided optimization only (capture, encode, network, decode, render, audio, service overhead). Each optimization tied to a measurement before/after.
-**Accept:** documented before/after for each accepted change; no speculative rewrites.
+**Accept:** documented before/after for each accepted change; no speculative rewrites. *(Batc  shipped 2026-09-24: full profiling instrumentation + both-ends analysis workbench; the profiles' fps placebo found live and fixed via the encoder cap ( 0 fps step kept encodin 1 fps; after the fix the step really halves t 0 fps, ~4.6× lighter encoder work — [features/performance.md](../features/performance.md)); the jitterBufferTarget latency candidate measured and rejected with data; T7's thermal staircase observed live, timings exact. Desktop115/115, mobile JVM153/153. Remaining for the phase: T8 glass-to-glass photo measurement, T1–T4 thermal protocol on the fixed build, N7 retune data.)*
 
 ---
 

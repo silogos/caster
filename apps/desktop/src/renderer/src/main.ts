@@ -4,6 +4,7 @@ import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
+import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
 const heroHeadingEl = document.getElementById('hero-heading') as HTMLHeadingElement
@@ -122,12 +123,41 @@ const receiver = new ReceiverSession({
   log
 })
 
-// Phase15's debug hook for the CDP manual-verification scripts
-// (scripts/capture-session-stats.mjs): the receiver is renderer-local and its
-// live getStats reports are the receive-side evidence channel for the long
-// matrices (OBS session, thermal protocol, drift check). Read-only from the
-// scripts' side — never a signaling or media path.
-;(window as unknown as { __castReceiver: ReceiverSession }).__castReceiver = receiver
+// Phase15/16's debug hook for the CDP manual-verification scripts
+// (scripts/capture-session-stats.mjs and friends): the receiver is
+// renderer-local and its live getStats reports are the receive-side evidence
+// channel for the long matrices (OBS session, thermal protocol, drift check).
+// Phase16 adds `measureRender` — the requestVideoFrameCallback probe over the
+// live <video>, the receiver's first direct decode→render visibility.
+// Read-only from the scripts' side — never a signaling or media path.
+
+// One probe window: 120 presentations (~4 s at 30 fps, ~2 s at 60).
+const PROBE_FRAME_COUNT = 120
+// Silence between presentations that reads as a stalled stream.
+const PROBE_STALL_TIMEOUT_MS = 3_000
+
+function measureRender(frameCount = PROBE_FRAME_COUNT): Promise<RenderProbeSummary | string> {
+  if (typeof videoEl.requestVideoFrameCallback !== 'function') {
+    return Promise.resolve('measureRender unavailable: no requestVideoFrameCallback in this Chromium')
+  }
+  if (videoEl.srcObject === null) {
+    return Promise.resolve('measureRender unavailable: no live stream on the video element')
+  }
+  return collectPresentationStamps(
+    videoEl as unknown as VideoWithFrameCallback,
+    frameCount,
+    PROBE_STALL_TIMEOUT_MS
+  )
+    .then((stamps) => summarizeStamps(stamps))
+    .catch((error: unknown) => `render probe failed: ${String(error)}`)
+}
+
+;(window as unknown as {
+  __castReceiver: {
+    receiver: ReceiverSession
+    measureRender: (frames?: number) => Promise<RenderProbeSummary | string>
+  }
+}).__castReceiver = { receiver, measureRender }
 
 // The stream's size (first metadata, every rotation, quality steps) feeds the
 // main process's cache — the on-demand "Match window to video" reshape uses
