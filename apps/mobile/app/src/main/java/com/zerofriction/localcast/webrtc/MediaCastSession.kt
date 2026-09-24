@@ -134,6 +134,8 @@ class MediaCastSession(
     /** Grown once the answer's parameters exist; sampled by the stats poller. */
     private var lastBytesSent = 0L
     private var lastStatsAtMs = 0L
+    /** Phase15 probe: first null-sample ticks log the report's shape (bounded — not a 1 Hz firehose). */
+    private var nullSampleLogs = 0
     private val statsIntervalMs = statsIntervalMs
 
     /**
@@ -602,7 +604,17 @@ class MediaCastSession(
             val currentPc = pc
             if (currentPc === null || !active) return
             currentPc.getStats { report ->
-                val sample = SenderStats.sampleVideoSend(report.statsMap.values.map { it.members })
+                // RTCStats exposes `type` as a getter on the object, not a key in
+                // `members` (verified against the pinned 1.3.8 prebuilt on-device,
+                // Phase15 — every entry's members["type"] was null) — merge it in
+                // so the sampler sees it.
+                val entries = report.statsMap.values.map { stats ->
+                    buildMap<String, Any> {
+                        put("type", stats.type)
+                        putAll(stats.members)
+                    }
+                }
+                val sample = SenderStats.sampleVideoSend(entries)
                 if (sample !== null) {
                     val nowMs = System.currentTimeMillis()
                     val bitrateBps = if (lastStatsAtMs > 0) {
@@ -620,6 +632,10 @@ class MediaCastSession(
                     lastBytesSent = sample.bytesSent
                     lastStatsAtMs = nowMs
                     onVideoStats(sample, bitrateBps)
+                } else if (nullSampleLogs < 5) {
+                    nullSampleLogs += 1
+                    val types = report.statsMap.values.map { it.members["type"] }.groupBy { it }.mapValues { it.value.size }
+                    Log.w(TAG, "stats: no video outbound-rtp sample — report has ${report.statsMap.size} entries, types $types")
                 }
             }
             if (active) {
@@ -629,6 +645,7 @@ class MediaCastSession(
     }
 
     private fun scheduleStats() {
+        Log.d(TAG, "stats polling scheduled (interval ${statsIntervalMs} ms)")
         handler?.removeCallbacks(statsRunnable)
         handler?.postDelayed(statsRunnable, statsIntervalMs)
     }

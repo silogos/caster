@@ -108,8 +108,24 @@ One fixed-duration cast per profile on the real device, same content across runs
 
 Nothing below is filled in until the case actually runs on hardware — no result is assumed (risk-register rule: evidence only). Each entry: date, case IDs, verdicts, evidence excerpts, and any fixes.
 
-*(empty — execution begins with the first device session)*
+### Session A — 2026-09-24 (Lenovo TB321FU / Android 16 → macOS, same Wi-Fi)
+
+**Instrumentation first — a live-found and live-fixed bug:** the ~1 Hz sender-stats line never appeared (Phase5 blamed the device's disabled aplog; aplog is enabled now and other app logs appear, so the excuse died). Probe: the getStats callback fired with a 14–15-entry report whose every `members["type"]` was null — `RTCStats` exposes `type` as a **getter on the object, not a key in `members`** (verified against the pinned1.3.8 classes.jar). The sampler read a key that never exists → always null → **no stats line ever, and Phase12's adaptive quality was starved of every sample on real hardware**. Fixed in `MediaCastSession`/`MicCastSession` (merge `stats.type` into the entry map before sampling); mobile JVM 147/147. Device-verified on the fixed build: the line now logs complete (`stats: 10016 kbps, 866 encoded, 0 dropped, 55.0 fps, 1280x800, rtt9 ms, encoder c2.qti.avc.encoder` — HW encoder, RTT 4–12 ms, 0 drops during game content). The fixed lines are now the measurement channel the thermal protocol and T-cases need.
+
+| Case | Verdict | Evidence |
+|---|---|---|
+| L1 | **PASS** | Cast continued through a foreground game and back; user-confirmed + stats show 30–55 fps @ 1280x800, ~6–10 Mbps while the game ran |
+| L2 | **PASS (behavior documented — OS ends the cast)** | Locking the screen **stops the media projection** on this device/OS (`media projection stopped — ending the cast`, `cast ended: projection revoked`) → clean `Failed(ProjectionRevoked)`, `media session torn down`, desktop back to a fresh QR, re-cast works. There is no "no input video" phase to show: the OS revokes the projection itself, and ending the cast is the correct honest response. The matrix expectation ("capture shows lock-screen content per OS policy") is corrected to this. |
+| L3 | **PASS** | Physical rotation landscape→portrait→landscape: `capture → 800x1280 (display1600x2560)` and back, stats show the frame flips (600x960, 800x1280), no crash (the Android-14 second-createVirtualDisplay trap stays closed), stream continued; user-confirmed "aman" |
+| L8 | **PASS** | Desktop process killed mid-cast: socket abort → ladder 1→2→5→10→30→30… s (each attempt a 10 s connect timeout) → ~3.5 min later `session expired — no auto-retry, user must re-scan` → clean Failed state, connected state cleared; leak check clean (`dumpsys media_projection` null, no service). The terminal path was session-expiry (not `unknown-session` — the desktop never came back to answer) — same clean family |
+| L10 | **PASS** | `am force-stop` mid-cast: cast ended, no active notification, no service, `dumpsys media_projection` null; desktop detected the drop (`authorized mobile disconnected — reconnect window open until expiry`) and returned to the QR hero |
+| L11 | partial — clean after L8, L10 and the session's app-initiated stops | `media session torn down` logged; `dumpsys media_projection` empty after each checked case |
+
+**Open findings from session A (under investigation):**
+1. **One `malformed candidate from desktop — ignoring` per cast** — a desktop ICE candidate fails the mobile's decode every session; connectivity survives via ICE peer-reflexive discovery (the mobile never learns the desktop's host candidates properly). R4's "byte-for-byte verbatim" is being violated somewhere between the desktop renderer's `RTCIceCandidate` and the wire. A desktop-side probe (log the outbound candidate at the IPC→socket relay) is running on the next cast.
+2. **A reconnect attempt that didn't time out at its 10 s deadline** (07:38:44 → 07:40:31, ~107 s hung in "connecting" before failing with a different message shape: `Failed to connect` vs the usual `failed to connect … after 10000ms`) — the connect-timeout appears to not cover some failure path in `SignalingTransport`. Rare but real; needs a look when the network matrix (N) starts.
+3. Session-start capture ramp: `640x400 →960x600 → 1280x800` in the first ~12 s of each cast (the capturer's start format then `followDisplay` resize) — not a defect; noted because the thermal protocol's FPS-stability window should exclude it.
 
 ## Findings & fixes (as they surface)
 
-*(empty)*
+- **2026-09-24 — sender stats never sampled (L-baseline instrumentation):** `RTCStats.type` is an object getter, not a `members` key; the sampler read `members["type"]` and always got null → no 1 Hz stats line and **no adaptive-quality input ever reached `AdaptiveQualityController` on real hardware** (the JVM tests faked the member shape — a fake test mirroring the implementation, caught only by the device). Fixed by merging `stats.type` into the entry map at both call sites (`MediaCastSession`, `MicCastSession`); 147/147 JVM; device-verified (see Results, session A).
