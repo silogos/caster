@@ -39,6 +39,10 @@ let sessionInfoOverlayEnabled = false
 let sessionInfoWindow: BrowserWindow | null = null
 let lastMobileState: MobileStateEvent | null = null
 let lastStreamSize: { width: number; height: number } | null = null
+// The paired device's name, tracked separately from lastMobileState (which
+// mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
+// name after the socket is gone, and only a real session replacement clears it.
+let pairedMobileName: string | null = null
 
 function pushToRenderer(
   channel: string,
@@ -57,10 +61,22 @@ function pushToRenderer(
  */
 function pushMobileState(state: MobileStateEvent): void {
   lastMobileState = state.state === 'waiting' ? null : state
+  if (state.state === 'connected') pairedMobileName = state.name
   pushToRenderer(IPC.pairing.mobileState, state)
   if (sessionInfoWindow !== null && !sessionInfoWindow.isDestroyed()) {
     sessionInfoWindow.webContents.send(IPC.pairing.mobileState, state)
   }
+}
+
+/**
+ * 'waiting' is pushed only when the session itself is replaced (bye, expiry
+ * sweep, regenerate button) — that is the only moment the QR hero honestly
+ * means "no device is paired" (Phase15: a socket drop alone keeps the
+ * reconnect window open, so the receiver shows "No input video" instead).
+ */
+function pushWaiting(): void {
+  pairedMobileName = null
+  pushMobileState({ state: 'waiting' })
 }
 
 /** IPC input from the renderer is untrusted at the process boundary — validate before it reaches the socket. */
@@ -93,10 +109,22 @@ app.whenReady().then(async () => {
   const signaling = new SignalingServer({
     desktopName: hostname(),
     onMobileConnected: ({ name }) => pushMobileState({ state: 'connected', name }),
-    onMobileDisconnected: () => pushMobileState({ state: 'waiting' }),
+    // Phase15: the authorized socket dropped — the pairing session is still
+    // live (reconnect window open until expiry), so the receiver keeps
+    // showing the device instead of falling back to the QR hero.
+    onMobileDisconnected: () => {
+      if (pairedMobileName !== null) {
+        pushMobileState({ state: 'disconnected', name: pairedMobileName })
+      } else {
+        pushWaiting()
+      }
+    },
     onBye: (reason) => {
       logger.info(LOG_SCOPE, 'session ended', { reason })
-      pairing?.createSession().catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
+      pairing
+        ?.createSession()
+        .then(() => pushWaiting())
+        .catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
     },
     // Media plumbing (webrtc.md): the main process relays SDP/ICE frames
     // between the socket and the renderer's ReceiverSession — it never answers
@@ -109,21 +137,35 @@ app.whenReady().then(async () => {
 
   pairing = new PairingServer({
     port: signaling.actualPort,
+    // Phase15: the expiry sweep must not kill a live cast at the QR's TTL —
+    // an authorized session with a connected socket defers regeneration.
+    hasLiveAuthorizedSocket: () => signaling.hasAuthorizedConnection(),
     onSessionChanged: (view) => pushToRenderer(IPC.pairing.sessionUpdated, view)
   })
   signaling.attachPairing(pairing)
   await pairing.createSession()
 
   // Regenerate the QR once the session has expired (the desktop clock is
-  // authoritative, pairing.md) or after a failed creation attempt.
+  // authoritative, pairing.md) or after a failed creation attempt. A fresh
+  // session means no device is paired anymore — 'waiting' (QR hero) follows.
   setInterval(() => {
-    pairing?.ensureFreshSession().catch((error) => logger.error(LOG_SCOPE, 'expiry sweep failed', { error: String(error) }))
+    pairing
+      ?.ensureFreshSession()
+      .then((regenerated) => {
+        if (regenerated) pushWaiting()
+      })
+      .catch((error) => logger.error(LOG_SCOPE, 'expiry sweep failed', { error: String(error) }))
   }, EXPIRY_SWEEP_INTERVAL_MS)
 
   ipcMain.handle(IPC.pairing.getSession, () => pairing!.currentView())
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
-    return pairing!.createSession()
+    return pairing!
+      .createSession()
+      .then((session) => {
+        pushWaiting()
+        return session
+      })
   })
 
   // Renderer (ReceiverSession) → socket: the desktop's half of the media plumbing.

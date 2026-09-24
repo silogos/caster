@@ -1,12 +1,12 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { heroView } from './pairingHero'
+import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
 const heroHeadingEl = document.getElementById('hero-heading') as HTMLHeadingElement
-const iconCheckEl = document.getElementById('icon-check') as HTMLDivElement
 const iconWarningEl = document.getElementById('icon-warning') as HTMLDivElement
 const qrCardEl = document.getElementById('qr-card') as HTMLDivElement
 const qrEl = document.getElementById('qr') as HTMLImageElement
@@ -27,6 +27,11 @@ const closeSettingsEl = document.getElementById('close-settings') as HTMLButtonE
 // and the one-click re-fit after a manual resize.
 const sessionInfoOverlayEl = document.getElementById('session-info-overlay') as HTMLInputElement
 const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
+// Phase15 "no input" stage: the monitor-without-signal view shown while the
+// pairing session is alive but no video flows (noInputView.ts — pure copy).
+const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
+const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
+const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
 
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
@@ -117,6 +122,13 @@ const receiver = new ReceiverSession({
   log
 })
 
+// Phase15's debug hook for the CDP manual-verification scripts
+// (scripts/capture-session-stats.mjs): the receiver is renderer-local and its
+// live getStats reports are the receive-side evidence channel for the long
+// matrices (OBS session, thermal protocol, drift check). Read-only from the
+// scripts' side — never a signaling or media path.
+;(window as unknown as { __castReceiver: ReceiverSession }).__castReceiver = receiver
+
 // The stream's size (first metadata, every rotation, quality steps) feeds the
 // main process's cache — the on-demand "Match window to video" reshape uses
 // it. The window itself is the user's canvas: the video letterboxes via CSS
@@ -148,19 +160,41 @@ function releaseVideoWindow(): void {
 window.addEventListener('resize', fillVideoWindow)
 
 let connectedName: string | null = null
+// True while the paired device's socket is down but the session's reconnect
+// window is still open (MobileStateEvent 'disconnected', Phase15) — the
+// no-input stage then says "waiting to reconnect" instead of "start casting".
+let reconnecting = false
 let sessionInfo: CastSessionInfo | null = null
 // No LAN IP / session generation failed — the hero shows the friendly error
 // until a session (re)appears or the user retries via the regenerate button.
 let pairingSessionError = false
 
-// The pairing stage's waiting/connected/error screens (Phase13): one pure
-// view model (pairingHero.ts) decides what the user sees; this applies it.
+// The receiver's stage split (Phase15): a live pairing session shows the
+// monitor-style "No input video" view — the desktop is a receiver, not a
+// pairing screen, while a device is paired. The QR hero (below) renders only
+// when no session exists: un-paired waiting or a creation error.
 function renderHero(): void {
-  const view = heroView(connectedName, pairingSessionError)
+  if (connectedName !== null) {
+    const view = noInputView(connectedName, reconnecting)
+    noInputStageEl.hidden = false
+    noInputHeadingEl.textContent = view.heading
+    noInputSublineEl.textContent = view.subline
+    heroHeadingEl.hidden = true
+    statusEl.hidden = true
+    qrCardEl.hidden = true
+    hintEl.hidden = true
+    regenerateEl.hidden = true
+    return
+  }
+  noInputStageEl.hidden = true
+  // The pairing stage's waiting/error screens (Phase13): one pure view model
+  // (pairingHero.ts) decides what the user sees; this applies it.
+  const view = heroView(pairingSessionError)
   qrCardEl.hidden = !view.showQr
-  iconCheckEl.hidden = view.icon !== 'check'
   iconWarningEl.hidden = view.icon !== 'warning'
+  heroHeadingEl.hidden = false
   heroHeadingEl.textContent = view.heading
+  statusEl.hidden = false
   statusEl.textContent = view.subline
   statusEl.classList.toggle('is-error', view.icon === 'warning')
   hintEl.hidden = !view.showHint
@@ -182,7 +216,19 @@ function showSessionError(): void {
 function showMobileState(state: MobileStateEvent): void {
   if (state.state === 'connected') {
     connectedName = state.name
+    reconnecting = false
     sessionInfo = null
+    renderHero()
+    renderStatus()
+  } else if (state.state === 'disconnected') {
+    // Phase15: the paired device's socket is gone but the session's
+    // reconnect window is open — the stage keeps the device ("Waiting for X
+    // to reconnect…"), never the QR. Media is dead either way (a returning
+    // mobile always sends a fresh offer), so the answerers are torn down.
+    connectedName = state.name
+    reconnecting = true
+    sessionInfo = null
+    receiver.handleMobileGone()
     renderHero()
     renderStatus()
   } else if (state.state === 'session-info') {
@@ -190,9 +236,10 @@ function showMobileState(state: MobileStateEvent): void {
     sessionInfo = state.info
     renderStatus()
   } else {
-    // 'waiting': the mobile is gone — the cast is over even if the socket
-    // later reconnects (a returning mobile always sends a fresh offer).
+    // 'waiting': the session itself is gone (bye/expiry/regenerate) — the QR
+    // hero is the honest screen now; rescan is the only way back.
     connectedName = null
+    reconnecting = false
     sessionInfo = null
     receiver.handleMobileGone()
     renderHero()

@@ -230,13 +230,30 @@ describe('ReceiverSession — ICE', () => {
   it('relays local candidates to the mobile verbatim, per pc (incl. mDNS shapes)', async () => {
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
     await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
-    const mDnsCandidate = { candidate: 'candidate:21 UDP1 abcdef.local9 typ host', sdpMid: '0', sdpMLineIndex: 0 }
+    const mDnsCandidate = { candidate: 'candidate:2 1 UDP1 abcdef.local9 typ host', sdpMid: '0', sdpMLineIndex: 0 }
     h.pcs[0].onicecandidate?.({ candidate: mDnsCandidate })
     h.pcs[1].onicecandidate?.({ candidate: mDnsCandidate })
     expect(h.candidates).toEqual([
       { pc: 'media', candidate: mDnsCandidate },
       { pc: 'mic', candidate: mDnsCandidate }
     ])
+  })
+
+  it('serializes an RTCIceCandidate-shaped candidate before the IPC relay (Phase15)', async () => {
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    // Chromium's RTCIceCandidate is not structured-cloneable — Electron's
+    // IPC delivered {} to the main process, so the mobile never saw our host
+    // candidates. toJSON() produces the RTCIceCandidateInit wire shape.
+    const init = { candidate: 'candidate:11 UDP192.168.1.13152341 typ host', sdpMid: '0', sdpMLineIndex: 0 }
+    const rtcCandidate = {
+      toJSON: () => init
+    }
+    h.pcs[0].onicecandidate?.({ candidate: rtcCandidate })
+    expect(h.candidates).toEqual([{ pc: 'media', candidate: init }])
+    // End-of-gathering (null) must stay null, not become a serialized object.
+    h.pcs[0].onicecandidate?.({ candidate: null })
+    expect(h.candidates).toHaveLength(2)
+    expect(h.candidates[1]).toEqual({ pc: 'media', candidate: null })
   })
 })
 
@@ -318,5 +335,24 @@ describe('ReceiverSession — rendering and teardown', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('statsSnapshot returns one normalized report per active pc (Phase15 debug hook)', async () => {
+    const h = makeHarness()
+    await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
+    const mediaPc = h.pcs[0]
+    mediaPc.statsAsTuples = true // production shape: RTCStatsReport is maplike
+    mediaPc.statsEntries = [{ type: 'inbound-rtp', kind: 'video', bytesReceived: 5000 }]
+    h.pcs[1].statsEntries = [{ type: 'inbound-rtp', kind: 'audio', bytesReceived: 500 }]
+
+    const snapshot = await h.session.statsSnapshot()
+    expect(Object.keys(snapshot).sort()).toEqual(['media', 'mic'])
+    expect(snapshot.media).toEqual([{ type: 'inbound-rtp', kind: 'video', bytesReceived: 5000 }])
+    expect(snapshot.mic).toEqual([{ type: 'inbound-rtp', kind: 'audio', bytesReceived: 500 }])
+
+    // Torn-down pcs disappear from the snapshot (mobile gone → empty).
+    h.session.handleMobileGone()
+    expect(await h.session.statsSnapshot()).toEqual({})
   })
 })

@@ -34,7 +34,8 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
                 │ Electron IPC (thin, typed events only)
 ┌───────────────▼─────────────────────────────────────────┐
 │  Renderer (Chromium)                                    │
-│  PairingView: QR hero (waiting); paired check card;     │
+│  PairingView: QR hero (no session); "No input video"   │
+│             stage (paired, no video — noInputView.ts);  │
 │             friendly session-error (pairingHero.ts)     │
 │  ReceiverSession: RTCPeerConnection ×2, ICE/SDP glue    │
 │  VideoView: <video> letterboxes into the user-shaped    │
@@ -49,6 +50,8 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
 ```
 
 Responsibility split: the main process owns **sockets, sessions, and the window** (including the on-demand "Match window to video" reshape — the geometry is pure and unit-tested in `windowGeometry.ts`; the window's default shape is the user's and the video letterboxes via CSS); the renderer owns **WebRTC and media**. IPC carries only typed session events (pairing-created, mobile-authenticated, signaling-message, cast-started/ended, stream-size, window-shape-on-demand, error) — no business logic on both sides.
+
+**Receiver stage states (Phase15):** the desktop behaves like a monitor. While a video stream flows, the video owns the window. While the *pairing session* is alive but no video flows — paired but not yet casting, a cast that ended with the session retained (e.g. the OS stopping the projection on screen lock), or the socket gap inside the reconnect window — the stage shows **"No input video"** with the device name (pure copy: `noInputView.ts`); a dropped-but-alive socket arrives as the `disconnected` mobile state and only says *"Waiting for \<device\> to reconnect…"*. The QR hero renders **only** when the session itself is gone (bye, expiry, regenerate, restart) — `waiting` is pushed exactly at those moments, because pairing.md's reconnect window means missing video is never a lost pairing. The same split applies to ICE candidates crossing the renderer→main IPC hop: `RTCIceCandidate` is not structured-cloneable, so candidates are serialized via `toJSON()` (the `RTCIceCandidateInit` wire shape) before relay — found live in Phase15 (the raw wrapper arrived at the socket relay as `{}`).
 
 ## Receiver session details
 

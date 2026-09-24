@@ -50,7 +50,7 @@ generated ──▶ pending ──(successful auth)──▶ authorized ──�
 - **One session at a time.** Generating a new QR invalidates any previous pending session.
 - **pending → authorized** happens exactly once per session (first successful `auth`). A second phone attempting auth gets error `busy`.
 - **Reconnect window:** once authorized, the same `s` may re-authenticate (Wi-Fi blip, app restart) until expiry or `bye`. This avoids forcing a re-scan for transient drops.
-- **Expiry is enforced authoritatively by the desktop** (its clock). The mobile treats `e` with ±120 s tolerance for its own UX countdown only.
+- **Expiry is enforced authoritatively by the desktop** (its clock). The mobile treats `e` with ±120 s tolerance for its own UX countdown only. **One exception (Phase15 live finding): an authorized session whose socket is still connected defers expiry** — the 1-second sweep skips regeneration while the authorized mobile is live, because the TTL governs the pending QR and the reconnect window, never a live cast (the sweep used to kill casts at exactly TTL; no cast could outlive 10 minutes). The moment the socket drops, the already-expired session regenerates — the reconnect window still ends at expiry, so a drop past TTL means a re-scan.
 - `bye` (graceful end from either side) invalidates the session immediately; the desktop returns to the QR screen with a fresh session.
 
 ## Authentication handshake

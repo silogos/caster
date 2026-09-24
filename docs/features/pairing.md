@@ -37,9 +37,9 @@ The Phase 3 machinery was correct but the screens were bare. Both sides now rend
 ### Desktop — the QR hero
 
 - The waiting screen leads with the QR (288 px, white card, soft shadow) under a small muted brand line; the heading **"Scan with your Android device"** and the "valid for 10 minutes / refreshes automatically" hint sit below it. The "New QR code" control stays (the one allowed desktop action).
-- **Paired** (auth-ok, not yet casting): a green check icon, **"Connected to \<phone\>"**, and **"Start casting from your phone."** — the desktop hands the stage to the phone (it exposes no cast controls). The regenerate control is hidden in this state: regenerating would invalidate the live session ([pairing.md](../architecture/pairing.md) — one session at a time), and the old UI left that trap armed.
+- **Paired** (auth-ok, session alive): **superseded in Phase15 by the receiver's "No input video" stage** — while a pairing session lives but no video flows (paired but not casting, a cast that ended with the session retained, the socket gap inside the reconnect window), the desktop behaves like a monitor without a signal: "No input video" + the device name + *"start casting from your phone."* (or *"Waiting for \<device\> to reconnect…"* while the socket is down). The QR hero returns only when the session itself is gone. The regenerate control never shows while a session is live: regenerating would invalidate it ([pairing.md](../architecture/pairing.md) — one session at a time).
 - **Session error** (no LAN IP / generation failed): warning icon plus the friendly message, with the button relabeled **"Try again"**.
-- All of this is one pure view model — `renderer/src/pairingHero.ts` (`heroView`) — applied to the DOM by `main.ts`; the strings never contain codes (AGENTS.md).
+- All of this is two pure view models — `renderer/src/pairingHero.ts` (`heroView`, no-session states) and `renderer/src/noInputView.ts` (paired states) — applied to the DOM by `main.ts`; the strings never contain codes (AGENTS.md).
 
 ### Mobile — scan → "Desktop found" → Connected → Start Cast
 

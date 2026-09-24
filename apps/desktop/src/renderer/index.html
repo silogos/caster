@@ -15,9 +15,6 @@
            subline swap per state (heroView in pairingHero.ts — pure and
            unit-tested). The brand line stays small so the QR dominates. -->
       <p class="title">Zero-Friction Local Cast</p>
-      <div class="hero-icon" id="icon-check" hidden aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M9 16.17 L4.83 12 l-1.42 1.41 L9 19 L21 7 l-1.41-1.41z" /></svg>
-      </div>
       <div class="hero-icon" id="icon-warning" hidden aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" /></svg>
       </div>
@@ -28,6 +25,15 @@
       <p class="status" id="status">Waiting for mobile device…</p>
       <p class="hint" id="hint">The code is valid for 10 minutes and refreshes automatically.</p>
       <button class="button" id="regenerate" type="button">New QR code</button>
+      <!-- Phase15 "no input" stage: while the pairing session is alive (a
+           device is paired; its socket may be down inside the reconnect
+           window) but no video flows, the desktop behaves like a monitor
+           without a signal (noInputView.ts) — never the QR hero, which is
+           only for a session that is truly gone (bye/expiry/regenerate). -->
+      <div class="no-input" id="no-input-stage" hidden>
+        <h2 class="no-input-heading" id="no-input-heading">No input video</h2>
+        <p class="no-input-subline" id="no-input-subline"></p>
+      </div>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
            Muted — since Phase9 the element renders video only; its audio

@@ -394,7 +394,15 @@ class MicCastSession(
             val currentPc = pc
             if (currentPc === null || !active) return
             currentPc.getStats { report ->
-                val sample = SenderStats.sampleAudioSend(report.statsMap.values.map { it.members })
+                // Same as MediaCastSession: `type` is an RTCStats getter, not a
+                // members key (Phase15 on-device finding) — merged in here.
+                val entries = report.statsMap.values.map { stats ->
+                    buildMap<String, Any> {
+                        put("type", stats.type)
+                        putAll(stats.members)
+                    }
+                }
+                val sample = SenderStats.sampleAudioSend(entries)
                 if (sample !== null) {
                     val nowMs = System.currentTimeMillis()
                     val bitrateBps = if (lastStatsAtMs > 0) {
