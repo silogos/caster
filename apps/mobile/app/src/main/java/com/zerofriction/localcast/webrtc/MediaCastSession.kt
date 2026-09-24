@@ -477,7 +477,12 @@ class MediaCastSession(
         parameters.encodings.first().apply {
             minBitrateBps = liveBitrateMinBps
             maxBitrateBps = liveBitrateMaxBps
-            config.encoderFpsLimit?.let { limit -> maxFramerate = limit }
+            // Phase16: the encoder cap makes the profile's (or an adaptive
+            // step's) fps real — screencast capture cannot throttle it (the
+            // capturer's fps argument is ignored on MediaProjection; measured
+            // live: a 30 fps target kept encoding 61 fps). The user's own
+            // Advanced limit still wins when tighter ([effectiveEncoderFpsCap]).
+            maxFramerate = effectiveEncoderFpsCap(liveFps, config.encoderFpsLimit)
         }
         parameters.degradationPreference = when (config.degradationPreference) {
             CastConfig.DEGRADATION_BALANCED -> RtpParameters.DegradationPreference.BALANCED
