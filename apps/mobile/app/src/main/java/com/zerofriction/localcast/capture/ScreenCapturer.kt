@@ -28,8 +28,10 @@ import org.webrtc.VideoSink
  * Everything else mirrors the stock class (libwebrtc 1.3.8, BSD-licensed):
  * frames flow through the injected `SurfaceTextureHelper` to the
  * `CapturerObserver`; the projection callback rides the helper's thread;
- * `stopCapture` tears the display and the projection down. Rotation and the
- * adaptive quality steps call [changeCaptureFormat]; both then survive on
+ * `stopCapture` tears the display and the projection down. Only rotation
+ * calls [changeCaptureFormat] (Phase17: quality steps adapt the video
+ * source instead of resizing the display — the format change is serialized
+ * on this thread and reallocates the surface buffer); rotation survives on
  * Android 14+ because the display is only ever created once.
  */
 class ScreenCapturer(
