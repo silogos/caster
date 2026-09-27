@@ -17,6 +17,7 @@ import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.capture.ScreenCapturer
+import com.zerofriction.localcast.capture.StepFormat
 import com.zerofriction.localcast.signaling.SignalingClient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -154,19 +155,29 @@ class MediaCastSession(
     private var liveBitrateMaxBps = config.bitrateMaxBps
 
     /**
-     * Live capture-format state (Phase14 rotation fix). The quality target
-     * moves with [changeQuality]; the actual size is recomputed from the
-     * DISPLAY's current bounds — never the cast-start snapshot, which goes
-     * stale the moment the device rotates. Thread-confined to the session
-     * thread, published via [currentCaptureFormat] for the service's
-     * `session-info`.
+     * Live format state. `liveLongEdgePx`/`liveFps` are the quality *rung*
+     * target (moved by [changeQuality]); `captureWidth`/`captureHeight` are
+     * the VirtualDisplay's size — the cast-start **ceiling**, never shrunk by
+     * a quality step (Phase17: steps adapt the source instead) and only
+     * resized by rotation. `adaptedWidth`/`adaptedHeight` are what
+     * `adaptOutputFormat` currently targets — what the encoder receives.
+     * All recomputed from the DISPLAY's current bounds — never the cast-start
+     * snapshot, which goes stale the moment the device rotates.
+     * Thread-confined to the session thread, published via
+     * [currentCaptureFormat] (the rung dims — what the desktop displays) for
+     * the service's `session-info`.
      */
     private var liveLongEdgePx = config.longEdgePx
     private var liveFps = config.fps
     private var captureWidth = 0
     private var captureHeight = 0
+    private var adaptedWidth = 0
+    private var adaptedHeight = 0
 
-    /** The format in force right now — read by the service from any thread. */
+    /**
+     * The format in force right now — the rung target (the encoder's output
+     * size), read by the service from any thread.
+     */
     data class CaptureFormat(val width: Int, val height: Int, val fps: Int)
 
     @Volatile
@@ -296,13 +307,19 @@ class MediaCastSession(
             newCapturer.startCapture(width, height, config.fps)
             captureWidth = width
             captureHeight = height
+            // The cast starts at the user's own rung (= the ceiling) — the
+            // source adapter begins with no scaling to do.
+            adaptedWidth = width
+            adaptedHeight = height
             currentCaptureFormat = CaptureFormat(width, height, config.fps)
             // Follow device rotation live (Phase14 fix): the stock capturer
             // does NOT resize on rotation (found live — a portrait-start cast
             // kept its portrait virtual display forever, and Android squeezed
             // the rotated screen into it). The default display's change
             // events arrive on the session thread via the session handler;
-            // [applyCaptureFormat] no-ops unless the size actually changed.
+            // [applyCaptureFormat] no-ops unless a target actually changed.
+            // Since Phase17 a quality step does NOT come through here — it
+            // adapts the source instead ([changeQuality]).
             val listener = object : DisplayManager.DisplayListener {
                 override fun onDisplayAdded(displayId: Int) = Unit
                 override fun onDisplayRemoved(displayId: Int) = Unit
@@ -496,37 +513,76 @@ class MediaCastSession(
     }
 
     /**
-     * Re-apply the capture format from the display's *current* bounds and the
-     * live quality target (rotation or a quality step). Runs on the session
-     * thread — the display listener arrives on it via the session handler.
-     * No-ops when nothing changed, so unrelated display events are free;
-     * `force` re-applies the (unchanged) format anyway — a quality step can
-     * change fps alone.
+     * Reconcile the live pipeline with the display's *current* bounds and
+     * the live quality target (rotation or a quality step — Phase17 unified
+     * the decision in [StepFormat]). Runs on the session thread — the
+     * display listener arrives on it via the session handler.
+     *
+     * A quality step lands as [StepFormat.Change.AdaptRung]:
+     * `adaptOutputFormat` downscales inside libwebrtc (GL scale before the
+     * encoder) and the VirtualDisplay is untouched — no capture-thread
+     * stall, no surface-buffer reallocation (Phase16 measured both on the
+     * old resize path, with freeze bursts and a jitter-buffer spike around
+     * the steps). Rotation lands as [StepFormat.Change.ResizeCapture]: an
+     * aspect flip cannot be downscaled, so the display resizes to the
+     * *ceiling* size for the new orientation (the rung is re-adapted after —
+     * it follows the new aspect). Unrelated display events resolve to
+     * [StepFormat.Change.None] and cost nothing.
      */
-    private fun applyCaptureFormat(force: Boolean = false) {
-        val newCapturer = capturer ?: return
+    private fun applyCaptureFormat() {
         val (displayWidth, displayHeight) = DisplaySize.physicalPx(context)
-        val target = CaptureSize.followDisplay(liveLongEdgePx, captureWidth, captureHeight, displayWidth, displayHeight)
-        if (target !== null) {
-            newCapturer.changeCaptureFormat(target.first, target.second, liveFps)
-            captureWidth = target.first
-            captureHeight = target.second
-            currentCaptureFormat = CaptureFormat(target.first, target.second, liveFps)
-            Log.i(TAG, "capture → ${target.first}x${target.second} @ ${liveFps} fps (display ${displayWidth}x${displayHeight})")
-            onCaptureFormat(target.first, target.second, liveFps)
-        } else if (force) {
-            newCapturer.changeCaptureFormat(captureWidth, captureHeight, liveFps)
-            currentCaptureFormat = CaptureFormat(captureWidth, captureHeight, liveFps)
-            Log.i(TAG, "capture format re-applied @ ${liveFps} fps")
-            onCaptureFormat(captureWidth, captureHeight, liveFps)
+        val change = StepFormat.resolve(
+            displayWidth = displayWidth,
+            displayHeight = displayHeight,
+            // The session's config is the cast-start snapshot — its
+            // long edge IS the ceiling auto quality may not exceed.
+            ceilingLongEdgePx = config.longEdgePx,
+            rungLongEdgePx = liveLongEdgePx,
+            currentCaptureWidth = captureWidth,
+            currentCaptureHeight = captureHeight,
+            currentRungWidth = adaptedWidth,
+            currentRungHeight = adaptedHeight,
+        )
+        val rungWidth: Int
+        val rungHeight: Int
+        when (change) {
+            StepFormat.Change.None -> return
+            is StepFormat.Change.ResizeCapture -> {
+                rungWidth = change.rungWidth
+                rungHeight = change.rungHeight
+                capturer?.changeCaptureFormat(change.captureWidth, change.captureHeight, liveFps)
+                captureWidth = change.captureWidth
+                captureHeight = change.captureHeight
+                Log.i(
+                    TAG,
+                    "capture → ${change.captureWidth}x${change.captureHeight} @ ${liveFps} fps" +
+                        " (display ${displayWidth}x${displayHeight})",
+                )
+            }
+            is StepFormat.Change.AdaptRung -> {
+                rungWidth = change.rungWidth
+                rungHeight = change.rungHeight
+                Log.i(TAG, "adaptive step → source ${change.rungWidth}x${change.rungHeight} (capture untouched)")
+            }
         }
+        // Both branches end at the same rung state — a resize re-applies the
+        // rung too (it follows the new aspect).
+        videoSource?.adaptOutputFormat(rungWidth, rungHeight, liveFps)
+        adaptedWidth = rungWidth
+        adaptedHeight = rungHeight
+        currentCaptureFormat = CaptureFormat(rungWidth, rungHeight, liveFps)
+        onCaptureFormat(rungWidth, rungHeight, liveFps)
     }
 
     /**
      * One auto-quality step, applied live (Phase12, thermal.md — no
-     * renegotiation): the capture pipeline reconfigures to the new
-     * resolution/fps and the video sender's bitrate window moves. Runs on the
-     * session thread; safe to call from any thread. The desktop's display-only
+     * renegotiation). Since Phase17 the step does NOT reconfigure the
+     * capture pipeline: [applyCaptureFormat] adapts the *source* to the new
+     * resolution (fps rides the sender parameters — the Phase16 encoder cap,
+     * now with the same target enforced at the source adapter), and the
+     * video sender's bitrate window moves. A step that changes nothing
+     * resolution-wise touches no capture state at all. Runs on the session
+     * thread; safe to call from any thread. The desktop's display-only
      * status line follows via the service's fresh `session-info`.
      */
     fun changeQuality(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int) {
@@ -538,7 +594,7 @@ class MediaCastSession(
             // on rotation, and a quality step after one would re-apply the
             // wrong orientation (found live, fixed together with the
             // rotation listener above).
-            applyCaptureFormat(force = true)
+            applyCaptureFormat()
             liveBitrateMinBps = bitrateMinBps
             liveBitrateMaxBps = bitrateMaxBps
             val currentPc = pc
