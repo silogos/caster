@@ -30,7 +30,9 @@ A step must never renegotiate: `MediaCastSession.changeQuality(longEdge, fps, mi
 | fps-only step (performance→balanced) | touched the capture format anyway (the old `force` re-apply) | **zero capture interaction** (`StepFormat` resolves to None; only the sender window moved) |
 | Sender drops | 0 | 0 across the whole session (~38 k encoded frames, 4 frame sizes incl. a mid-cast rotation) |
 
-Honest notes: one rig, one session; the biggest descent (1920→1280, right after a start-up orientation flap) carried a bump of +3 keyframes/+4 PLI/+13 NACK not attributable to the step alone — the two later, orientation-stable steps were surgically clean. The MAINTAIN_RESOLUTION (Sharp) pixel-cap check was not exercised live (this session's ceiling degraded with BALANCED) and stays an open Phase17 item with the documented fallback.
+Honest notes: one rig, one session; the biggest descent (1920→1280, right after a start-up orientation flap) carried a bump of +3 keyframes/+4 PLI/+13 NACK not attributable to the step alone — the two later, orientation-stable steps were surgically clean.
+
+**MAINTAIN_RESOLUTION check — closed (same day, second session, Sharp ceiling):** a ~15 min cast started at Sharp (1920×1200/30, degradation MAINTAIN_RESOLUTION) ran the full staircase through the same mechanism: sharp → performance logged live as `adaptive step → source 1280x800 (capture untouched)` with the receiver confirming the frame size actually dropped (1920×1200 → 1280×800 → 960×600), each resolution step costing exactly +1 keyframe with no PLI/drop growth, and the buffer flat-or-falling across the steps (p50 124 → 118 → 85 → 84 ms). **The `adaptOutputFormat` pixel cap is honored under MAINTAIN_RESOLUTION on the pinned libwebrtc 1.3.8 build — the resize fallback for MR configs is not needed.** All Phase 17 acceptance items are measured.
 
 Every transition is announced four ways (acceptance: "every transition logged and user-visible"):
 
