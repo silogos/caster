@@ -20,6 +20,18 @@ Named constants carry the tuning (`THERMAL_HOLD_MS`, `NET_HOLD_MS`, `HEALTHY_HOL
 
 A step must never renegotiate: `MediaCastSession.changeQuality(longEdge, fps, min, max)` applies the new resolution and moves the video sender's bitrate window (`setParameters`) live on the session thread. **Phase16:** the step's fps reaches the actual encode rate through the encoder cap (`encodings.maxFramerate`, [performance.md](performance.md)) — measured live, a 30 fps step previously left the encoder running at 61 fps. **Phase17:** the step's resolution no longer reconfigures the capture pipeline at all — the VirtualDisplay stays at the cast-start *ceiling* size and the step downscales inside libwebrtc (`VideoSource.adaptOutputFormat`, a GL scale before the encoder, plus the same fps target at the source adapter). The old resize path ran serialized on the capture thread and reallocated the surface buffer every step, which the Phase16 rig measured as freeze bursts and a jitter-buffer spike (913 ms) around resolution changes. Rotation is the one thing that still resizes the display (an aspect flip cannot be downscaled) — the pure decision between "adapt the source" and "resize the display" lives in the JVM-tested `capture/StepFormat` rule. The session's *live* window (not the frozen cast config) is what `applySenderParameters` applies, so re-auths keep the stepped values.
 
+**Phase17 on-device record (2026-09-27, rig TB321FU/Android 16 → macOS, ~21 min cast, SEVERE pre-warm so the full staircase fired):** four adaptive transitions measured through the new mechanism (three thermal step-downs 1920→1280→960 plus a user restore back up), sender logcat + receiver JSONL captured throughout (same rig method as Phase16).
+
+| At an adaptive resolution step | Old mechanism (Phase16 resize path) | New mechanism (this session) |
+|---|---|---|
+| Jitter buffer around the step | **913 ms spike** during a resolution step | **none** — p50 flat or falling across all three measured step windows (252→246→214, 168→164→158, 140→140→140 ms) |
+| Keyframe cost | part of a changeCaptureFormat reconfig | exactly **+1 keyframe** per clean step (the unavoidable encoder input-size reconfig); no PLI, no NACK, no extra dropped frames |
+| Capture pipeline per step | `VirtualDisplay.resize` + `setTextureSize`, serialized on the capture thread | **untouched** — logged live as `adaptive step → source 960x600 (capture untouched)`; only rotation produced `capture → …` lines |
+| fps-only step (performance→balanced) | touched the capture format anyway (the old `force` re-apply) | **zero capture interaction** (`StepFormat` resolves to None; only the sender window moved) |
+| Sender drops | 0 | 0 across the whole session (~38 k encoded frames, 4 frame sizes incl. a mid-cast rotation) |
+
+Honest notes: one rig, one session; the biggest descent (1920→1280, right after a start-up orientation flap) carried a bump of +3 keyframes/+4 PLI/+13 NACK not attributable to the step alone — the two later, orientation-stable steps were surgically clean. The MAINTAIN_RESOLUTION (Sharp) pixel-cap check was not exercised live (this session's ceiling degraded with BALANCED) and stays an open Phase17 item with the documented fallback.
+
 Every transition is announced four ways (acceptance: "every transition logged and user-visible"):
 
 1. one INFO log line (`CastService`: `adaptive quality: DOWN (THERMAL) — balanced → cool`),
@@ -52,6 +64,6 @@ Every transition is announced four ways (acceptance: "every transition logged an
 ## Known limitations
 
 - The holds/dwell are tuned for a 1 Hz stats cadence — the policy's clock *is* the caller's cadence (documented on the controller); a much slower feed would stretch the holds proportionally.
-- A step itself no longer touches the capture pipeline (Phase17) — but it still changes the encoder's input size (the GL-scaled frame), which reconfigures MediaCodec and costs a keyframe; the claim this phase makes is that the *capture-side* stall and buffer reallocation are gone, to be verified against the Phase16 numbers. If a device's encoder misbehaves on a live size change, the honest fallback is the next cast (the step is logged with the capture line either way) — that path is part of the on-device check above.
+- A step itself no longer touches the capture pipeline (Phase17) — but it still changes the encoder's input size (the GL-scaled frame), which reconfigures MediaCodec and costs a keyframe; the on-device record above measured that cost as exactly one keyframe per clean step, with the capture-side stall and buffer reallocation gone. If a device's encoder misbehaves on a live size change, the honest fallback is the next cast (the step is logged with the capture line either way).
 - Packet loss rides `remote-inbound-rtp`, which arrives only once the desktop's receiver is reporting — early-stream ticks may have `null` loss; RTT and drops cover the rest.
 - The adaptation is per-cast state: the ceiling is the user's settings *at cast start*; changing settings mid-cast applies to the next cast (unchanged Phase10 semantics).
