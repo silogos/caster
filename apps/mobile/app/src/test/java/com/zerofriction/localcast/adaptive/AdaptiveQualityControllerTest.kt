@@ -37,6 +37,7 @@ class AdaptiveQualityControllerTest {
         )
         private var encoded = 0L
         private var dropped = 0L
+        private var encodeSeconds: Double? = null
 
         fun tick(
             nowMs: Long,
@@ -46,6 +47,8 @@ class AdaptiveQualityControllerTest {
             rttMs: Long? = 5L,
             thermal: ThermalStatus = ThermalStatus.NONE,
             absolute: Pair<Long, Long>? = null,
+            encodeTimeDelta: Double? = null,
+            absoluteEncodeSeconds: Double? = null,
         ) {
             if (absolute != null) {
                 encoded = absolute.first
@@ -54,6 +57,11 @@ class AdaptiveQualityControllerTest {
                 encoded += encodedDelta
                 dropped += droppedDelta
             }
+            if (absoluteEncodeSeconds != null) {
+                encodeSeconds = absoluteEncodeSeconds
+            } else if (encodeTimeDelta != null) {
+                encodeSeconds = (encodeSeconds ?: 0.0) + encodeTimeDelta
+            }
             controller.onTick(
                 nowMs,
                 AdaptiveQualityController.StreamSample(
@@ -61,6 +69,7 @@ class AdaptiveQualityControllerTest {
                     framesDropped = dropped,
                     fractionLost = fractionLost,
                     rttMs = rttMs,
+                    totalEncodeTimeSeconds = encodeSeconds,
                 ),
                 thermal,
             )
@@ -226,6 +235,89 @@ class AdaptiveQualityControllerTest {
         val h = Harness(performance)
         for (second in 0..600) h.tick(second * 1_000L, droppedDelta = 30, thermal = ThermalStatus.MODERATE)
         assertEquals(cool, h.controller.current)
+    }
+
+    // ---- encoder utilization (Phase18): the leading encoder-stress signal ----
+
+    @Test
+    fun `sustained encoder overload steps down with zero drops and a perfect network`() {
+        val h = Harness(balanced)
+        // 0.9 s of encode work per 1 s tick — 90% utilization, nothing dropped,
+        // RTT/loss perfect: the utilization signal alone must carry the step.
+        // (Known from the second tick on — utilization needs a previous sample.)
+        for (second in 0..30) h.tick(second * 1_000L, encodeTimeDelta = 0.9)
+        assertTrue(h.changes.isEmpty())
+
+        h.tick(31_000L, encodeTimeDelta = 0.9)
+        assertEquals(cool, h.controller.current)
+        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
+    }
+
+    @Test
+    fun `expensive frames at content pacing are not overload`() {
+        val h = Harness(performance)
+        // A 30 fps game under the 60 fps rung: ~15 frames/s at 20 ms each —
+        // utilization 0.3. A per-frame-cost-vs-fps-budget threshold would
+        // misfire here (20 ms ≥ 12.5 ms budget); utilization must not.
+        for (second in 0..120) h.tick(second * 1_000L, encodedDelta = 15, encodeTimeDelta = 0.3)
+        assertEquals(performance, h.controller.current)
+        assertTrue(h.changes.isEmpty())
+    }
+
+    @Test
+    fun `the healthy rig's recorded utilization never fires`() {
+        val h = Harness(balanced)
+        // Phase17's measured healthy ceiling: encode p90 22.7 ms/f × 30 fps ≈ 0.68.
+        for (second in 0..600) h.tick(second * 1_000L, encodeTimeDelta = 0.68)
+        assertTrue(h.changes.isEmpty())
+    }
+
+    @Test
+    fun `the fps-placebo era's overload fires`() {
+        val h = Harness(balanced)
+        // Phase16's found-and-fixed bug: a 30 fps target encoding 61 frames/s
+        // at 30 ms/f — 1.83 s of encode work per wall second. This is the
+        // case the leading signal exists to catch before frames drop.
+        for (second in 0..31) h.tick(second * 1_000L, encodedDelta = 61, encodeTimeDelta = 1.83)
+        assertEquals(cool, h.controller.current)
+        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
+    }
+
+    @Test
+    fun `isolated overload ticks do not step down`() {
+        val h = Harness(balanced)
+        h.tick(5_000L, encodeTimeDelta = 0.95)
+        h.tick(6_000L, encodeTimeDelta = 0.95)
+        h.tick(7_000L, encodeTimeDelta = 0.95)
+        for (second in 8..600) h.tick(second * 1_000L, encodeTimeDelta = 0.5)
+        assertTrue(h.changes.isEmpty())
+    }
+
+    @Test
+    fun `a counter reset does not fake a utilization burst`() {
+        val h = Harness(balanced)
+        for (second in 0..29) h.tick(second * 1_000L, encodeTimeDelta = 0.9)
+        // A pc rebuild resets the cumulative encode time — the negative delta
+        // reads as unknown (never a burst), and the healthy stretch after it
+        // stays healthy.
+        h.tick(30_000L, absolute = 0L to 0L, absoluteEncodeSeconds = 0.0)
+        for (second in 31..211) h.tick(second * 1_000L, encodeTimeDelta = 0.5)
+        assertTrue(h.changes.isEmpty())
+    }
+
+    @Test
+    fun `an overload descent recovers once the encoder keeps up again`() {
+        val h = Harness(performance)
+        for (second in 0..31) h.tick(second * 1_000L, encodeTimeDelta = 0.9)
+        assertEquals(balanced, h.controller.current)
+        // At the 30 fps rung the same workload is ~0.45 utilization — healthy,
+        // so the stream-health recovery path climbs back after the hold.
+        for (second in 32..212) h.tick(second * 1_000L, encodeTimeDelta = 0.45)
+        assertEquals(
+            listOf(AdaptiveQualityController.Direction.DOWN, AdaptiveQualityController.Direction.UP),
+            h.changes.map { it.direction },
+        )
+        assertEquals(performance, h.controller.current)
     }
 
     // ---- oscillation guards ----

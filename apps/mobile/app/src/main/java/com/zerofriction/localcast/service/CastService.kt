@@ -467,6 +467,10 @@ class CastService : Service() {
                 framesDropped = sample.framesDropped,
                 fractionLost = sample.fractionLost,
                 rttMs = sample.rttMs,
+                // Phase18's leading encoder-stress signal — the cumulative
+                // encode time; its delta becomes the utilization in the
+                // (pure, tested) controller.
+                totalEncodeTimeSeconds = sample.totalEncodeTimeSeconds,
             ),
             _thermalState.value.status,
         )
