@@ -36,7 +36,12 @@ export function createMainWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       spellcheck: false,
-      sandbox: true
+      sandbox: true,
+      // The receiver must keep painting while unfocused, occluded, or
+      // backgrounded — Chromium's default throttling freezes the <video>
+      // presentation (decode keeps running, nothing is shown) the moment
+      // another app takes focus on macOS.
+      backgroundThrottling: false
     }
   })
 
@@ -111,7 +116,8 @@ export function createSessionInfoWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       spellcheck: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   })
   window.on('ready-to-show', () => {
