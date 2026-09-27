@@ -13,10 +13,10 @@ import com.zerofriction.localcast.thermal.ThermalStatus
  * reversible:
  *  - **Step down** one ladder rung only after a *sustained* bad stretch:
  *    thermal `MODERATE`+ ([THERMAL_HOLD_MS] — "minutes, not seconds") or a
- *    struggling stream ([NET_HOLD_MS]; inputs are dropped frames — the
- *    encoder-stress signal —, RTT and packet loss). Any step also respects
- *    [DWELL_MS] since the previous one, so bad conditions cause a slow
- *    staircase, never a collapse.
+ *    struggling stream ([NET_HOLD_MS]; inputs are dropped frames and
+ *    encoder utilization — the two encoder-stress signals —, RTT and packet
+ *    loss). Any step also respects [DWELL_MS] since the previous one, so
+ *    bad conditions cause a slow staircase, never a collapse.
  *  - **Step up** only after a long sustained healthy stretch
  *    ([HEALTHY_HOLD_MS] — deliberately much longer than the way down, the
  *    asymmetry that makes oscillation impossible), and never above the
@@ -24,11 +24,17 @@ import com.zerofriction.localcast.thermal.ThermalStatus
  *    thermal.md principle 2). Thermal step-downs do **not** recover
  *    automatically — the device got hot under these exact settings, so only
  *    the user decides to go back ([restore]); stream-health step-downs do.
+ *  - Encoder utilization (Phase18): the fraction of wall time the encoder
+ *    spends encoding, from the `totalEncodeTime` deltas — a *leading*
+ *    overload signal that rises before frames start dropping (the drop
+ *    signal never fired on the Phase16/17 rig). Deliberately NOT a
+ *    per-frame-cost-vs-fps-budget comparison: a 30 fps game under a 60 fps
+ *    profile encodes expensive frames with wall time to spare (utilization
+ *    ≈ 0.6) — that is content pacing, not overload, and it must not fire.
  *  - Notably *not* an input: measured fps below the target. Screen content
  *    frames follow the game's own pacing (thermal.md heat table) — a 30 fps
  *    game under a 60 fps profile is a quiet encoder, not a struggling one;
- *    acting on it would punish the wrong thing. Dropped frames is the
- *    encoder-stress signal instead.
+ *    acting on it would punish the wrong thing.
  */
 class AdaptiveQualityController(
     /** The user's own settings — auto quality never goes above this rung. */
@@ -59,6 +65,14 @@ class AdaptiveQualityController(
         val fractionLost: Double?,
         /** Nominated candidate pair RTT, ms; null while unknown. */
         val rttMs: Long?,
+        /**
+         * Cumulative seconds the encoder spent encoding (RTCStats
+         * `totalEncodeTime`); null while the prebuilt does not report it.
+         * Its delta over the tick interval is the encoder-utilization
+         * signal (Phase18) — computed here, so the pc-rebuild reset guard
+         * is JVM-tested like the frame counters'.
+         */
+        val totalEncodeTimeSeconds: Double? = null,
     )
 
     var current: QualityLevel = ceiling
@@ -81,6 +95,8 @@ class AdaptiveQualityController(
     private var healthySinceMs: Long? = null
     private var lastFramesEncoded = 0L
     private var lastFramesDropped = 0L
+    private var lastEncodeTimeSeconds: Double? = null
+    private var lastTickMs: Long? = null
 
     /**
      * One stats tick at [nowMs]. [thermalStatus] is the latest ladder reading;
@@ -101,9 +117,28 @@ class AdaptiveQualityController(
         } else {
             0.0
         }
+
+        // Encoder utilization (Phase18): encode-time delta over wall time —
+        // the leading overload signal. Null until two ticks with encode time
+        // exist, or while a counter reset made the delta negative (a pc
+        // rebuild must not fake a utilization burst, same rule as above).
+        val utilization = sample.totalEncodeTimeSeconds?.let { now ->
+            lastEncodeTimeSeconds?.let { before ->
+                val dWallSeconds = lastTickMs?.let { (nowMs - it) / 1000.0 }
+                val dEncodeSeconds = now - before
+                if (dWallSeconds != null && dWallSeconds > 0 && dEncodeSeconds >= 0) {
+                    dEncodeSeconds / dWallSeconds
+                } else {
+                    null
+                }
+            }
+        }
+        lastEncodeTimeSeconds = sample.totalEncodeTimeSeconds
+
         val netBad = droppedFraction >= DROPPED_FRACTION_BAD ||
             (sample.fractionLost != null && sample.fractionLost >= PACKET_LOSS_FRACTION_BAD) ||
-            (sample.rttMs != null && sample.rttMs >= RTT_BAD_MS)
+            (sample.rttMs != null && sample.rttMs >= RTT_BAD_MS) ||
+            (utilization != null && utilization >= ENCODER_UTILIZATION_BAD)
         val thermalBad = thermalStatus >= THERMAL_TRIGGER_STATUS
 
         thermalBadSinceMs = markSince(thermalBadSinceMs, thermalBad, nowMs)
@@ -125,6 +160,7 @@ class AdaptiveQualityController(
                 lastDownReason == Reason.STREAM_HEALTH ->
                 stepUp(nowMs, Reason.STREAM_HEALTH)
         }
+        lastTickMs = nowMs
     }
 
     /**
@@ -217,6 +253,16 @@ class AdaptiveQualityController(
 
         /** Per-tick dropped-frame fraction considered encoder stress (Phase5's ≈0.3% healthy baseline). */
         const val DROPPED_FRACTION_BAD = 0.05
+
+        /**
+         * Fraction of wall time the encoder may sustain before it counts as
+         * overloaded (Phase18) — the leading encoder-stress signal. Shipped
+         * as a re-tunable hypothesis; the recorded evidence it must separate:
+         * the healthy rig ran 0.42–0.68 utilization (encode p50 19.5 ms/f ×
+         * 30 fps), the Phase16 fps-placebo era ran ~1.83 (61 fps × 30 ms/f —
+         * the case this signal exists to catch before frames drop).
+         */
+        const val ENCODER_UTILIZATION_BAD = 0.85
 
         /** Remote receiver loss fraction considered a struggling link. */
         const val PACKET_LOSS_FRACTION_BAD = 0.05
