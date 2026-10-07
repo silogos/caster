@@ -198,7 +198,20 @@ class MicCastSession(
                 .createPeerConnectionFactory()
             factory = newFactory
 
-            val newAudioSource = newFactory.createAudioSource(MediaConstraints())
+            // The APM's automatic gain control stays OFF for the mic (found
+            // live, user-reported): with default constraints the AGC drove
+            // the input toward its loudness target, raising the gain whenever
+            // the source was quiet — distant voices and room noise came out
+            // of the desktop amplified. The game-audio path already refuses
+            // this class of processing (MediaCastSession: playback capture is
+            // finished audio); the mic records at its natural level instead.
+            // NS/AEC keep their defaults — suppression removes stationary
+            // noise without gain adaptation, and the AEC has no far-end
+            // reference in this topology anyway (audio.md known limitations).
+            val micConstraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
+            }
+            val newAudioSource = newFactory.createAudioSource(micConstraints)
             audioSource = newAudioSource
             val newAudioTrack = newFactory.createAudioTrack(AUDIO_TRACK_ID, newAudioSource)
             audioTrack = newAudioTrack
