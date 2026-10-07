@@ -24,7 +24,7 @@
 | `architecture/` | How the system is built: boundaries, protocols, constraints, limitations |
 | `features/` | Feature-level behavior docs, added as features land (Phase 3+) |
 | `decisions/` | Architecture Decision Records (ADRs) — *why* choices were made |
-| `development/` | Setup, per-app dev guides, roadmap, risk register |
+| `development/` | Setup, per-app dev guides, roadmap, risk register, release process |
 
 ## Rules
 
