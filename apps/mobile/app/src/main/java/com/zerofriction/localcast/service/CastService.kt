@@ -23,6 +23,7 @@ import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.config.CastConfig
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.PROFILE_CUSTOM
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
@@ -372,6 +373,7 @@ class CastService : Service() {
         val newMic = MicCastSession(
             context = applicationContext,
             signaling = currentSignaling,
+            micDevice = config?.micDevice ?: MicDeviceSource.BUILTIN,
             onState = { micState -> _micState.value = micState },
         )
         micSession = newMic

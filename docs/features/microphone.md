@@ -88,3 +88,9 @@ RECORD_AUDIO was already requested non-fatally before every cast (Phase7 needs i
 **Tests:** mobile JVM **138/138** (6 new: `MicSilenceMonitorTest` — another app's loss doesn't touch us, our source silenced → `Silenced` with the metadata log line, automatic recovery, the playback-capture record excluded from the decision, idempotent config repeats). `assembleDebug` green.
 
 **Device matrix:** the main item verified on device 2026-09-23 (user-confirmed after round 3 — see the device verification note above); the explicit reverse-direction silence case and the echo speaker-vs-headset sanity remain, tracked for Phase 15.
+
+## Microphone device selection (2026-10-08)
+
+The mic now records from a **user-chosen kind of microphone** (settings screen, "Microphone" section): the built-in mic (default), a wired headset's mic, a USB mic, or a Bluetooth headset's mic — `MicDeviceSource` (config) → `MicDeviceResolver` (resolution rules, JVM-tested) → `MicRecordSubstituter` routes the privacy-insensitive twin via `setPreferredDevice` (ADR-004 addendum). The built-in mic stays the default and the fallback: a chosen kind that isn't connected at mic start degrades to it, logged, never a failed session. The choice applies at the next mic start (a mic toggle rebuilds the session) and survives preset picks; the settings document moved to v5 — older documents decode with the built-in default.
+
+**Verification status:** JVM tests added for the resolution rules, the v5 codec round-trip/migration ladder, and the settings flow; **no device verification yet** — for each offered kind (wired/USB/Bluetooth), confirm on device with a concurrent game voice chat that `setPreferredDevice` is honored and the capture stays clean (the ADR-004 history shows the platform can override routing). Bluetooth additionally records at phone-call quality over SCO; the settings hint states the caveat.

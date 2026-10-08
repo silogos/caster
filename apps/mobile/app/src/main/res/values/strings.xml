@@ -97,6 +97,16 @@
     <string name="settings_auto_quality">Automatic quality</string>
     <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
 
+    <!-- Microphone device (settings) — which mic the cast records from. The
+         offered chips follow what is connected; an unconnected choice falls
+         back to the built-in mic at capture time (audio.md). -->
+    <string name="settings_mic_device">Microphone</string>
+    <string name="mic_device_builtin">Phone mic</string>
+    <string name="mic_device_wired">Headset mic</string>
+    <string name="mic_device_usb">USB mic</string>
+    <string name="mic_device_bluetooth">Bluetooth mic</string>
+    <string name="settings_mic_device_hint">Which microphone the cast records from. If the chosen one is not plugged in when the mic starts, the phone\'s built-in mic is used. Bluetooth headsets record at phone-call quality.</string>
+
     <!-- Home hub (designs/mobile-app.html): the connected home — the share
          trigger with the gear beside it, then the audio rows. "Stop share
          screen" stops the video only; the pairing session stays connected. -->

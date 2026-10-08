@@ -5,6 +5,7 @@ import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderBitrateMode
 import com.zerofriction.localcast.config.EncoderImplementation
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.QualityProfile
 import org.junit.Assert.assertEquals
@@ -97,6 +98,17 @@ class SettingsViewModelTest {
         vm.setMic(true)
         assertEquals(false, vm.settings.value.gameAudio)
         assertEquals(true, vm.settings.value.mic)
+    }
+
+    @Test
+    fun `the mic device choice reaches the config and survives preset picks`() {
+        val vm = viewModel()
+        vm.setMicDevice(MicDeviceSource.USB)
+        assertEquals(MicDeviceSource.USB, vm.settings.value.micDevice)
+        assertEquals(MicDeviceSource.USB, vm.settings.value.toConfig().micDevice)
+        // Not a preset-owned value — the user's mic choice survives.
+        vm.selectProfile(QualityProfile.SHARP)
+        assertEquals(MicDeviceSource.USB, vm.settings.value.micDevice)
     }
 
     @Test
