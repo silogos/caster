@@ -7,6 +7,7 @@ import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_B
 import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_FRACTION
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.EncoderBitrateMode
 import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.PreferredVideoCodec
@@ -106,6 +107,11 @@ class SettingsViewModel(
 
     fun setMic(on: Boolean) {
         update { it.copy(mic = on) }
+    }
+
+    /** Which microphone the cast records from — takes effect at the next mic start. */
+    fun setMicDevice(device: MicDeviceSource) {
+        update { it.copy(micDevice = device) }
     }
 
     /** Phase12 (thermal.md): the auto-quality switch — off means the cast runs exactly at the user's settings. */

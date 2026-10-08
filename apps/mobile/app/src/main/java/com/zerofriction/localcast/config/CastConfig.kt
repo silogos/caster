@@ -31,6 +31,13 @@ data class CastConfig(
     /** Start the cast with the microphone on (audio.md: off by default). */
     val mic: Boolean,
     /**
+     * Which microphone the cast records from (MicDeviceSource): the built-in
+     * mic by default, else a wired/USB/Bluetooth mic resolved at mic-session
+     * start — a kind that isn't connected falls back to the built-in mic
+     * (MicDeviceResolver), never a failed session.
+     */
+    val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
+    /**
      * Stats/thermal-driven auto quality (Phase12, [thermal.md]):
      * conservative one-level step-downs with hysteresis, announced and
      * reversible — off leaves the cast exactly at the user's settings.

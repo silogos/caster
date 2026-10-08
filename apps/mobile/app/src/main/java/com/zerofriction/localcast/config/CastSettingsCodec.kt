@@ -14,17 +14,19 @@ import kotlinx.serialization.json.Json
  * the caller — a cast must never run on guessed values. Older documents are
  * still accepted through the migration ladder: v1 → v2 was the Phase11 preset
  * relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added `autoQuality` (Phase12)
- * with the on default — every other shape stays fully valid.
+ * with the on default, v3 → v4 added the Advanced knobs, v4 → v5 added
+ * `micDevice` with the built-in default — every other shape stays fully valid.
  */
 object CastSettingsCodec {
 
     /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 4
+    const val VERSION = 5
 
     /** The Phase10/11 formats — accepted through [LEGACY_PROFILE_LABELS]/[LEGACY_DEFAULT_AUTO_QUALITY]. */
     const val LEGACY_VERSION = 1
     const val LEGACY_VERSION_2 = 2
     const val LEGACY_VERSION_3 = 3
+    const val LEGACY_VERSION_4 = 4
 
     /** Older documents predate the auto-quality switch — the shipped default applies. */
     private const val LEGACY_DEFAULT_AUTO_QUALITY = CastConfig.DEFAULT_AUTO_QUALITY
@@ -61,6 +63,8 @@ object CastSettingsCodec {
         val bitrateMaxBps: Int,
         val gameAudio: Boolean,
         val mic: Boolean,
+        /** Absent in pre-v5 documents — the built-in mic default applies. */
+        val micDevice: String = MicDeviceSource.BUILTIN.label,
         /** Absent in v1/v2 documents — the default applies (kotlinx fills defaults). */
         val autoQuality: Boolean = LEGACY_DEFAULT_AUTO_QUALITY,
         /** Absent in pre-v4 documents — today's-behavior defaults apply (AdvancedCastSettings.kt). */
@@ -83,6 +87,7 @@ object CastSettingsCodec {
             bitrateMaxBps = settings.bitrateMaxBps,
             gameAudio = settings.gameAudio,
             mic = settings.mic,
+            micDevice = settings.micDevice.label,
             autoQuality = settings.autoQuality,
             encoderImpl = settings.encoderImpl.label,
             h264HighProfile = settings.h264HighProfile,
@@ -102,7 +107,9 @@ object CastSettingsCodec {
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2 && stored.v != LEGACY_VERSION_3) return null
+        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2 &&
+            stored.v != LEGACY_VERSION_3 && stored.v != LEGACY_VERSION_4
+        ) return null
         // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
         val label = if (stored.v == LEGACY_VERSION) {
             LEGACY_PROFILE_LABELS[stored.profile] ?: stored.profile
@@ -119,6 +126,7 @@ object CastSettingsCodec {
         val preferredCodec = PreferredVideoCodec.fromLabel(stored.preferredCodec) ?: return null
         val degradationStrategy = DegradationStrategy.fromLabel(stored.degradationStrategy) ?: return null
         val bitrateMode = EncoderBitrateMode.fromLabel(stored.bitrateMode) ?: return null
+        val micDevice = MicDeviceSource.fromLabel(stored.micDevice) ?: return null
         val encoderFpsLimit = stored.encoderFpsLimit
         if (encoderFpsLimit !== null && encoderFpsLimit !in AdvancedSettingChoices.ENCODER_FPS_LIMIT_CHOICES) return null
         return CastSettings(
@@ -130,6 +138,7 @@ object CastSettingsCodec {
             bitrateMaxBps = stored.bitrateMaxBps,
             gameAudio = stored.gameAudio,
             mic = stored.mic,
+            micDevice = micDevice,
             autoQuality = stored.autoQuality,
             encoderImpl = encoderImpl,
             h264HighProfile = stored.h264HighProfile,

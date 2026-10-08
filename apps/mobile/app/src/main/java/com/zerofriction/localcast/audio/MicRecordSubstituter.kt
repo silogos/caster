@@ -1,7 +1,6 @@
 package com.zerofriction.localcast.audio
 
 import android.content.Context
-import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -9,6 +8,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
+import com.zerofriction.localcast.config.MicDeviceSource
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.lang.reflect.Field
 import java.nio.ByteBuffer
@@ -42,7 +42,12 @@ import java.nio.ByteBuffer
  * the mic works exactly as before this fix — with the documented
  * coexistence cost — logged, never surfaced as a mic failure.
  */
-class MicRecordSubstituter(private val context: Context, private val adm: JavaAudioDeviceModule) {
+class MicRecordSubstituter(
+    private val context: Context,
+    private val adm: JavaAudioDeviceModule,
+    /** The user's selected mic kind (settings); the built-in mic is the default and the fallback. */
+    private val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
+) {
 
     /** Called from the ADM's `onWebRtcAudioRecordStart` — its recording thread. */
     fun onRecordStart() {
@@ -65,7 +70,7 @@ class MicRecordSubstituter(private val context: Context, private val adm: JavaAu
                 logDegrade("the twin record could not be initialized")
                 return
             }
-            routeToBuiltinMic(twin)
+            routeToSelectedMic(twin)
             twin.startRecording()
             if (twin.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 twin.release()
@@ -110,30 +115,33 @@ class MicRecordSubstituter(private val context: Context, private val adm: JavaAu
     }
 
     /**
-     * Route the twin to the built-in microphone explicitly. The default
-     * routing is not ours to choose: when another app's voice chat captures
+     * Route the twin to the selected microphone explicitly (settings:
+     * MicDeviceSource, resolved against the connected inputs by
+     * [MicDeviceResolver]). Naming the device is not optional: the default
+     * routing is not ours to choose — when another app's voice chat captures
      * concurrently, the platform split our record onto
-     * `AUDIO_DEVICE_IN_BACK_MIC` while the game kept `AUDIO_DEVICE_IN_BUILTIN_
-     * MIC` (found live via dumpsys) — a different processing path that fed the
-     * 48 kHz record raw 16 kHz data (the desktop heard chipmunk) and, at
-     * best, a mic the user isn't speaking into. Naming the device ties the
-     * cast mic to the mic the user actually speaks into, and with the
-     * session's input rate matching the voice-chat rate
-     * (SHARED_VOICE_INPUT_RATE_HZ, MicCastSession) the twin shares the same
-     * device+rate configuration the game's capture already runs.
+     * `AUDIO_DEVICE_IN_BACK_MIC` while the game kept `AUDIO_DEVICE_IN_BUILTIN
+     * _MIC` (found live via dumpsys) — a different processing path that fed
+     * the 48 kHz record raw 16 kHz data (the desktop heard chipmunk) and, at
+     * best, a mic the user isn't speaking into. The built-in mic stays the
+     * default and the fallback (ADR-004): a selected kind that isn't
+     * connected degrades to it, logged, never a failed mic session.
      */
-    private fun routeToBuiltinMic(record: AudioRecord) {
+    private fun routeToSelectedMic(record: AudioRecord) {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        val builtinMic = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
-            it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
-        } ?: run {
-            Log.w(TAG, "no built-in mic device found — default routing stays")
+        val devices = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val targetType = MicDeviceResolver.resolveType(micDevice, devices.map { it.type })
+        if (micDevice != MicDeviceSource.BUILTIN && targetType == MicDeviceResolver.FALLBACK_TYPE) {
+            Log.i(TAG, "selected mic (${micDevice.label}) is not connected — routing to the built-in mic")
+        }
+        val target = devices.firstOrNull { it.type == targetType } ?: run {
+            Log.w(TAG, "no input device of type $targetType found — default routing stays")
             return
         }
-        if (record.setPreferredDevice(builtinMic)) {
-            Log.i(TAG, "cast mic routed to the built-in microphone")
+        if (record.setPreferredDevice(target)) {
+            Log.i(TAG, "cast mic routed to input device type $targetType")
         } else {
-            logDegrade("the built-in mic was not accepted as preferred device")
+            logDegrade("the preferred mic device (type $targetType) was not accepted")
         }
     }
 
