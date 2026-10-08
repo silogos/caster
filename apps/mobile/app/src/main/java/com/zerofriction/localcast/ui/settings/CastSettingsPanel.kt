@@ -34,6 +34,7 @@ import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderBitrateMode
 import com.zerofriction.localcast.config.EncoderImplementation
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.QualityProfile
 import kotlin.math.roundToInt
@@ -139,6 +140,40 @@ fun ShareScreenSettingsSection(
             onCheckedChange = onSetAutoQuality,
         )
         HintText(R.string.settings_auto_quality_hint)
+    }
+}
+
+/**
+ * One selectable entry of the mic device section: the mic kind (config) plus
+ * its user-facing label. The list is built from the currently connected
+ * input devices (CastSettingsScreen) — a kind that isn't plugged in isn't
+ * offered.
+ */
+data class MicDeviceOption(val source: MicDeviceSource, val labelRes: Int)
+
+/**
+ * The microphone device section: which mic the cast records from — the
+ * built-in mic (always offered), plus wired/USB/Bluetooth when connected.
+ * Applied when the mic session is built (mic toggle); a saved kind that
+ * isn't connected falls back to the built-in mic at capture time
+ * (MicDeviceResolver) — the same fact as its chip being gone from this list.
+ */
+@Composable
+fun MicDeviceSection(
+    selected: MicDeviceSource,
+    options: List<MicDeviceOption>,
+    onSelectMicDevice: (MicDeviceSource) -> Unit,
+) {
+    Column {
+        SectionLabel(R.string.settings_mic_device)
+        ChipRow(options) { option ->
+            FilterChip(
+                selected = option.source == selected,
+                onClick = { onSelectMicDevice(option.source) },
+                label = { Text(stringResource(option.labelRes)) },
+            )
+        }
+        HintText(R.string.settings_mic_device_hint)
     }
 }
 

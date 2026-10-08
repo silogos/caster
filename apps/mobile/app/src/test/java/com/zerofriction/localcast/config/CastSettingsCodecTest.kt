@@ -51,7 +51,7 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a future version decodes to null`() {
-        val future = CastSettingsCodec.encode(custom).replace(""""v":4""", """"v":5""")
+        val future = CastSettingsCodec.encode(custom).replace(""""v":5""", """"v":6""")
         assertNull(CastSettingsCodec.decode(future))
     }
 
@@ -66,7 +66,7 @@ class CastSettingsCodecTest {
 
     /** A v1 document: downgraded version field, pre-rename label, same values. */
     private fun v1Document(v3Document: String, legacyLabel: String): String = v3Document
-        .replace(""""v":4""", """"v":1""")
+        .replace(""""v":5""", """"v":1""")
         .replace(""""profile":"${custom.profile.label}"""", """"profile":"$legacyLabel"""")
 
     @Test
@@ -91,7 +91,7 @@ class CastSettingsCodecTest {
 
     /** A v2 document: only the version field downgraded — no `autoQuality` key at all. */
     private fun v2Document(v3Document: String): String = v3Document
-        .replace(""""v":4""", """"v":2""")
+        .replace(""""v":5""", """"v":2""")
         .replace(""",""autoQuality":true""", "")
 
     @Test
@@ -107,8 +107,8 @@ class CastSettingsCodecTest {
     }
 
     @Test
-    fun `the round-trip document carries the v4 version`() {
-        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":4"""))
+    fun `the round-trip document carries the v5 version`() {
+        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":5"""))
     }
 
     // ---- v3 legacy documents (pre-Advanced) decode with today's-behavior defaults ----
@@ -118,9 +118,9 @@ class CastSettingsCodecTest {
      * (leading-comma form — the Advanced fields all follow earlier fields, so
      * the object's closing brace is never touched).
      */
-    private fun v3Document(v4Document: String): String =
+    private fun v3Document(v5Document: String): String =
         Regex(""","(encoderImpl|h264HighProfile|preferredCodec|degradationStrategy|encoderFpsLimit|bitrateMode)":[^,}]*""")
-            .replace(v4Document.replace(""""v":4""", """"v":3"""), "")
+            .replace(v5Document.replace(""""v":5""", """"v":3"""), "")
 
     @Test
     fun `a v3 document decodes with the Advanced defaults`() {
@@ -194,5 +194,29 @@ class CastSettingsCodecTest {
     fun `a missing field decodes to null`() {
         val encoded = CastSettingsCodec.encode(custom)
         assertNull(CastSettingsCodec.decode(encoded.substringBefore(""""gameAudio""")))
+    }
+
+    // ---- mic device (v5): round-trip, validation, and the v4 ladder ----
+
+    @Test
+    fun `the mic device choice round-trips`() {
+        val bluetooth = custom.copy(micDevice = MicDeviceSource.BLUETOOTH)
+        assertEquals(bluetooth, CastSettingsCodec.decode(CastSettingsCodec.encode(bluetooth)))
+    }
+
+    @Test
+    fun `an unknown mic device label decodes to null`() {
+        val bad = CastSettingsCodec.encode(custom).replace(""""micDevice":"builtin"""", """"micDevice":"telephony"""")
+        assertNull(CastSettingsCodec.decode(bad))
+    }
+
+    /** A v4 document: the version downgraded and the `micDevice` key stripped. */
+    private fun v4Document(v5Document: String): String = v5Document
+        .replace(""""v":5""", """"v":4""")
+        .replace(""",""micDevice":"builtin""", "")
+
+    @Test
+    fun `a v4 document decodes with the built-in mic default`() {
+        assertEquals(custom, CastSettingsCodec.decode(v4Document(CastSettingsCodec.encode(custom))))
     }
 }

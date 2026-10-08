@@ -30,6 +30,8 @@ data class CastSettings(
     val gameAudio: Boolean,
     /** Start the cast with the microphone on (audio.md: off by default). */
     val mic: Boolean,
+    /** Which microphone the cast records from (MicDeviceSource, audio.md). */
+    val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
     /** Stats/thermal-driven auto quality (Phase12, thermal.md) — on by default. */
     val autoQuality: Boolean,
     // ---- Advanced (designs/mobile-app.html; defaults reproduce today's cast) ----
@@ -53,6 +55,7 @@ data class CastSettings(
         },
         gameAudio = gameAudio,
         mic = mic,
+        micDevice = micDevice,
         autoQuality = autoQuality,
         encoderImpl = encoderImpl,
         h264HighProfile = h264HighProfile,
