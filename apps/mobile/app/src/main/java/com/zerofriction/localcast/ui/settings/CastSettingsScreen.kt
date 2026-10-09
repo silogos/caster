@@ -1,7 +1,12 @@
 package com.zerofriction.localcast.ui.settings
 
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,8 +17,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -133,24 +141,43 @@ fun CastSettingsContent(
     }
 }
 
+/** Connected input device types as AudioManager reports them right now. */
+private fun connectedInputTypes(context: Context): Set<Int> =
+    (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+        ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        ?.map { it.type }
+        ?.toSet()
+        ?: emptySet()
+
 /**
  * The mic device section's options from the currently connected inputs: the
  * built-in mic always, plus a kind only while one of its input devices is
  * connected (MicDeviceResolver resolves the same way at capture time, so the
- * offered chips and the actual fallback can't drift apart). Not reactive to
- * plug/unplug while the screen is open — recomposed on re-entry, and the
- * capture-side fallback covers a device that leaves between selection and
- * the mic start.
+ * offered chips and the actual fallback can't drift apart). The list follows
+ * plug/unplug **live** (`registerAudioDeviceCallback`) — a headset connected
+ * while the screen is open appears without re-entering it; the capture-side
+ * fallback covers a device that leaves between selection and the mic start.
  */
 @Composable
 private fun rememberMicOptions(): List<MicDeviceOption> {
     val context = LocalContext.current
-    return remember {
+    var connectedTypes by remember { mutableStateOf(connectedInputTypes(context)) }
+    DisposableEffect(context) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        val connectedTypes = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            ?.map { it.type }
-            ?.toSet()
-            ?: emptySet()
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                connectedTypes = connectedInputTypes(context)
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                connectedTypes = connectedInputTypes(context)
+            }
+        }
+        audioManager?.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+        onDispose { audioManager?.unregisterAudioDeviceCallback(callback) }
+    }
+    return remember(connectedTypes) {
+        Log.d(TAG, "mic options from connected input types: $connectedTypes")
         listOf(
             MicDeviceOption(MicDeviceSource.BUILTIN, R.string.mic_device_builtin),
             MicDeviceOption(MicDeviceSource.WIRED_HEADSET, R.string.mic_device_wired),
@@ -177,6 +204,8 @@ private fun settingsFactory(): ViewModelProvider.Factory {
         }
     }
 }
+
+private const val TAG = "CastSettingsScreen"
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
