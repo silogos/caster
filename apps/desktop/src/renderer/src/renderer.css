@@ -379,3 +379,74 @@ body.receiving:hover .cast-overlay {
 .mixer-button:hover {
   border-color: var(--fg);
 }
+
+/* Device home (ADR-005 addendum): the two-condition start screen's stage —
+   the list of known devices with Forget buttons and the Add-new-device
+   trigger, replacing the QR hero while devices are known. */
+.devices-home {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: min(420px, 92%);
+}
+
+.devices-home .devices-list {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.devices-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--fg-muted);
+  border-radius: 6px;
+}
+
+.devices-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.button.subtle {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  padding: 6px 10px;
+}
+
+.button.subtle:hover {
+  color: var(--fg);
+}
+
+.devices-row.is-online .devices-name {
+  color: var(--fg);
+}
+
+.devices-row.is-offline .devices-name {
+  color: var(--fg-muted);
+}
+
+.devices-name {
+  font-weight: 500;
+}
+
+.devices-detail {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}

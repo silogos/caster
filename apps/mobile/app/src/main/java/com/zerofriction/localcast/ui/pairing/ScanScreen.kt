@@ -45,12 +45,17 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.pairing.DeviceIdentity
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
+import com.zerofriction.localcast.pairing.defaultSignalingScheduler
+import com.zerofriction.localcast.pairing.defaultTransportFactory
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
@@ -65,7 +70,7 @@ import com.zerofriction.localcast.ui.theme.LocalCastTheme
 @Composable
 fun ScanScreen(
     onPaired: () -> Unit,
-    viewModel: ScanViewModel = viewModel(),
+    viewModel: ScanViewModel = viewModel(factory = scanViewModelFactory()),
 ) {
     val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
 
@@ -88,6 +93,30 @@ fun ScanScreen(
         onQrScanned = viewModel::onQrScanned,
         onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
     )
+}
+
+/**
+ * The scan VM's pairing machine needs the app context for the persistent
+ * device identity (ADR-005, `hello.deviceId`) — injected here like the
+ * settings screen injects its store; the VM itself stays JVM-testable.
+ */
+@Composable
+private fun scanViewModelFactory(): ViewModelProvider.Factory {
+    val context = LocalContext.current
+    return remember(context) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val pairing = PairingClient(
+                    ::defaultTransportFactory,
+                    ::defaultSignalingScheduler,
+                    ::defaultUserAgent,
+                    deviceIdProvider = { DeviceIdentity.id(context.applicationContext) },
+                )
+                return ScanViewModel(pairing) as T
+            }
+        }
+    }
 }
 
 @Composable

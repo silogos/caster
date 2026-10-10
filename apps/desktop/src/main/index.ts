@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import { join } from 'node:path'
 import { hostname } from 'node:os'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, RegisteredDevice } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -14,6 +15,8 @@ import {
   stopCastKeepAwake
 } from './window'
 import { PairingServer } from './pairing/pairingServer'
+import { DeviceRegistry } from './devices/deviceRegistry'
+import { DEVICES_FILE_NAME, loadDevices, saveDevices } from './devices/deviceRegistryStore'
 import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { logger } from './log'
 
@@ -43,10 +46,39 @@ let lastStreamSize: { width: number; height: number } | null = null
 // mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
 // name after the socket is gone, and only a real session replacement clears it.
 let pairedMobileName: string | null = null
+// The adb-devices-style registry (ADR-005), persisted across restarts (the
+// two-condition start screen reads it at launch); written on every change.
+let deviceRegistry = new DeviceRegistry()
+
+/** Persist + push the registry after any change. */
+function publishDevices(): void {
+  try {
+    saveDevices(devicesFilePath(), deviceRegistry.toJSON())
+  } catch (error) {
+    logger.warn(LOG_SCOPE, 'saving the device registry failed', { error: String(error) })
+  }
+  pushDevices()
+}
+
+/** The registry file inside this app's userData dir (needs the app ready). */
+function devicesFilePath(): string {
+  return join(app.getPath('userData'), DEVICES_FILE_NAME)
+}
+
+/** Push the full registry to the receiver window's device list. */
+function pushDevices(): void {
+  pushToRenderer(IPC.pairing.devicesChanged, deviceRegistry.list())
+}
 
 function pushToRenderer(
   channel: string,
-  payload: PairingSessionView | null | MobileStateEvent | { pc: PcId; sdp: string } | { pc: PcId; candidate: unknown }
+  payload:
+    | PairingSessionView
+    | null
+    | MobileStateEvent
+    | { pc: PcId; sdp: string }
+    | { pc: PcId; candidate: unknown }
+    | RegisteredDevice[]
 ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -94,6 +126,20 @@ function asIceMessage(raw: unknown): { pc: PcId; candidate: unknown } | null {
   return { pc, candidate }
 }
 
+/**
+ * Renderer input is untrusted at the process boundary — same rule as the
+ * SDP/ICE relays above: validate the forget request's key fields before it
+ * reaches the registry.
+ */
+function asForgetDevice(raw: unknown): { deviceId: string | null; remote: string } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { deviceId, remote } = raw as Record<string, unknown>
+  if ((deviceId !== null && typeof deviceId !== 'string') || typeof remote !== 'string' || remote.length === 0) {
+    return null
+  }
+  return { deviceId, remote }
+}
+
 /** Renderer input is untrusted at the process boundary — same rule as the SDP/ICE relays above. */
 function asStreamSize(raw: unknown): { width: number; height: number } | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -123,15 +169,29 @@ app.whenReady().then(async () => {
   // A duplicate copy: quit was already requested — never bind sockets or
   // compete for the pairing port.
   if (!gotInstanceLock) return
+  // The persisted registry feeds the two-condition start screen (ADR-005
+  // addendum): known devices -> the devices stage; none -> straight to the
+  // QR. Load before any socket can exist so the first handshake lands in a
+  // seeded registry.
+  deviceRegistry = new DeviceRegistry(loadDevices(devicesFilePath()))
   // Order matters: bind the signaling port first (the QR must carry the actual
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({
     desktopName: hostname(),
-    onMobileConnected: ({ name }) => pushMobileState({ state: 'connected', name }),
+    // Device registry (ADR-005): every completed handshake registers the
+    // device online; every disconnect marks it offline — pushed to the
+    // pairing window as the adb-devices-style list.
+    onMobileConnected: ({ name, deviceId, ua, remote }) => {
+      deviceRegistry.markConnected({ deviceId, name, ua, remote }, Date.now())
+      publishDevices()
+      pushMobileState({ state: 'connected', name })
+    },
     // Phase15: the authorized socket dropped — the pairing session is still
     // live (reconnect window open until expiry), so the receiver keeps
     // showing the device instead of falling back to the QR hero.
-    onMobileDisconnected: () => {
+    onMobileDisconnected: ({ deviceId, remote }) => {
+      deviceRegistry.markOffline({ deviceId, remote }, Date.now())
+      publishDevices()
       if (pairedMobileName !== null) {
         pushMobileState({ state: 'disconnected', name: pairedMobileName })
       } else {
@@ -177,6 +237,17 @@ app.whenReady().then(async () => {
   }, EXPIRY_SWEEP_INTERVAL_MS)
 
   ipcMain.handle(IPC.pairing.getSession, () => pairing!.currentView())
+  ipcMain.handle(IPC.pairing.getDevices, () => deviceRegistry.list())
+  ipcMain.handle(IPC.pairing.forgetDevice, (_event, raw) => {
+    const device = asForgetDevice(raw)
+    if (device === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed forget-device — dropping')
+      return
+    }
+    // Display-only (ADR-005): the entry leaves the list, nothing is revoked.
+    deviceRegistry.remove(device)
+    publishDevices()
+  })
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
     return pairing!

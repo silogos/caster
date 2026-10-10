@@ -1,6 +1,8 @@
 import type {
+  ForgetDeviceMessage,
   MobileStateEvent,
   PairingSessionView,
+  RegisteredDevice,
   SignalingIceMessage,
   SignalingSdpMessage
 } from './types'
@@ -19,7 +21,13 @@ export const IPC = {
     /** Push: the pairing session changed (fresh QR), or null when creation failed. */
     sessionUpdated: 'pairing:session-updated',
     /** Push: the paired mobile's connection state changed. */
-    mobileState: 'pairing:mobile-state'
+    mobileState: 'pairing:mobile-state',
+    /** Renderer asks the main process for the device registry (ADR-005). */
+    getDevices: 'pairing:get-devices',
+    /** Push: the device registry changed (a device came online or went offline). */
+    devicesChanged: 'pairing:devices-changed',
+    /** Renderer → main: forget one registry entry (display-only, ADR-005). */
+    forgetDevice: 'pairing:forget-device'
   },
   signaling: {
     /** Push: the mobile's SDP offer arrived — the renderer answers it (desktop.md). */
@@ -59,6 +67,12 @@ export interface DesktopApi {
   onPairingSessionUpdated(listener: (session: PairingSessionView | null) => void): () => void
   /** Subscribes to mobile connection state changes; returns an unsubscribe function. */
   onMobileStateChanged(listener: (state: MobileStateEvent) => void): () => void
+  /** The device registry (ADR-005): every device seen this desktop session. */
+  getDevices(): Promise<RegisteredDevice[]>
+  /** Subscribes to device-registry changes; returns an unsubscribe function. */
+  onDevicesChanged(listener: (devices: RegisteredDevice[]) => void): () => void
+  /** Forgets one registry entry (the list's delete button) — display-only. */
+  forgetDevice(device: ForgetDeviceMessage): void
   /** Subscribes to inbound SDP offers (mobile is always the offerer — webrtc.md). */
   onSignalingSdpOffer(listener: (message: SignalingSdpMessage) => void): () => void
   /** Subscribes to inbound ICE candidates from the mobile. */

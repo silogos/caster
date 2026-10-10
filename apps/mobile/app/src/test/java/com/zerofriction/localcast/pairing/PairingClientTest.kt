@@ -48,7 +48,7 @@ class PairingClientTest {
     }
 
     private fun newClient(fake: FakeTransport): PairingClient =
-        PairingClient({ fake }, { IdleScheduler() }) { TEST_UA }
+        PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }) { TEST_DEVICE_ID }
 
     @org.junit.Test
     fun `completes the handshake and reaches Connected`() {
@@ -64,6 +64,7 @@ class PairingClientTest {
         assertEquals(1, hello.seq)
         assertEquals(VECTOR_SID, hello.sid)
         assertEquals(TEST_UA, Payloads.helloUa(hello))
+        assertEquals(TEST_DEVICE_ID, Payloads.helloDeviceId(hello))
         assertEquals(1, Payloads.helloProtoMin(hello))
         assertEquals(PairingClient.State.Authenticating, client.state.value)
 
@@ -78,6 +79,21 @@ class PairingClientTest {
         // auth-ok → Connected with the desktop name
         fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME))
         assertEquals(PairingClient.State.Connected(TEST_DESKTOP_NAME), client.state.value)
+    }
+
+    @org.junit.Test
+    fun `an unidentified client omits the optional deviceId from hello`() {
+        val fake = FakeTransport()
+        // No deviceId provider — the default pairing machine (older-client shape).
+        val client = PairingClient({ fake }, { IdleScheduler() }, { TEST_UA })
+
+        client.startFromQrText(VALID_PAYLOAD)
+        fake.listener?.onTransportOpen()
+
+        val hello = parseFrame(fake.sentFrames.removeAt(0))
+        assertEquals(TEST_UA, Payloads.helloUa(hello))
+        assertEquals(null, Payloads.helloDeviceId(hello))
+        org.junit.Assert.assertNull(hello.payload["deviceId"])
     }
 
     @org.junit.Test
@@ -197,6 +213,7 @@ class PairingClientTest {
 
     private companion object {
         const val TEST_UA = "ZeroFrictionCast/0.1.0 (Android 15; Pixel8)"
+        const val TEST_DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
         const val TEST_DESKTOP_NAME = "test-desktop"
         const val VECTOR_SID = "Jm1LIOO4mWm0lRSSl2fClw"
         const val VECTOR_NONCE = "EBESExQVFhcYGRobHB0eHw"

@@ -25,6 +25,20 @@
       <p class="status" id="status">Waiting for mobile device…</p>
       <p class="hint" id="hint">The code is valid for 10 minutes and refreshes automatically.</p>
       <button class="button" id="regenerate" type="button">New QR code</button>
+      <!-- Two-condition start screen (ADR-005 addendum): with known devices
+           (and no live device), this stage replaces the QR hero — the list of
+           devices seen by this desktop, each forgettable; the QR returns via
+           "Add new device" (on demand) or automatically when the last known
+           device is forgotten. -->
+      <div class="devices-home" id="devices-home" hidden>
+        <h2 class="hero-heading">Devices</h2>
+        <p class="status">Devices that have connected to this desktop.</p>
+        <ul class="devices-list" id="devices-home-list"></ul>
+        <button class="button" id="add-device" type="button">Add new device</button>
+        <p class="hint">Forgetting only removes a device from this list — it can pair again anytime with a fresh QR code.</p>
+      </div>
+      <!-- The QR stage's way back to the devices list (only when devices are known). -->
+      <button class="button subtle" id="back-to-devices" type="button" hidden>‹ Devices</button>
       <!-- Phase15 "no input" stage: while the pairing session is alive (a
            device is paired; its socket may be down inside the reconnect
            window) but no video flows, the desktop behaves like a monitor
