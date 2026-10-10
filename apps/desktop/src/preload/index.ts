@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { DesktopApi } from '../shared/ipc'
 import type {
+  ForgetDeviceMessage,
   MobileStateEvent,
   PairingSessionView,
   RegisteredDevice,
@@ -22,6 +23,9 @@ const desktopApi: DesktopApi = {
   onMobileStateChanged: (listener) => subscribe<MobileStateEvent>(IPC.pairing.mobileState, listener),
   getDevices: () => ipcRenderer.invoke(IPC.pairing.getDevices),
   onDevicesChanged: (listener) => subscribe<RegisteredDevice[]>(IPC.pairing.devicesChanged, listener),
+  forgetDevice: (device) => {
+    ipcRenderer.invoke(IPC.pairing.forgetDevice, device satisfies ForgetDeviceMessage)
+  },
   onSignalingSdpOffer: (listener) => subscribe<SignalingSdpMessage>(IPC.signaling.sdpOffer, listener),
   onSignalingIceCandidate: (listener) => subscribe<SignalingIceMessage>(IPC.signaling.iceCandidate, listener),
   sendSdpAnswer: (pc, sdp) => {

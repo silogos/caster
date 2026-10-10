@@ -37,3 +37,12 @@ Constraints that shape this:
 | Device model string as identity | **Rejected** — two identical phones would be indistinguishable; the registry would lie. |
 | Protocol version bump (proto 2) for the field | **Rejected as unnecessary** — the versioning rules explicitly allow documented optional additive fields; a bump would force pointless bad-version failures between lockstep-shipped apps. |
 | Persisting the registry to disk now | **Deferred** — part of the announced next phase (registry across restarts), not needed for the adb-like *list*; keeps this phase protocol-and-UI only. |
+
+## Addendum (2026-10-10): Phase B — persistence, forget, and the two-condition start screen
+
+The user's follow-up sketch gives the start screen two conditions: **never connected → straight to the QR; devices known → the list (deletable) with an "Add new device" button**. That requires the registry to outlive the process, so the "in-memory, restart clears it" cost above is revised:
+
+- **Persistence:** one JSON document in the Electron userData dir (`devices.json`, `devices/deviceRegistryStore`) — read once at startup (before any socket can exist), rewritten on every registry change. Same storage convention as the mobile's `CastSettingsStore`: anything unreadable or wrong-shaped degrades to an empty registry, logged — the list is convenience, never trusted state (it grants nothing, so losing it costs nothing but a rescanned pairing's history line).
+- **Forget:** the list's delete button removes the entry (`registry.remove`) — display-only, nothing is revoked; the device pairs again anytime with a fresh QR and would re-register on its next handshake. (If a forgotten device is still connected, its later disconnect re-registers it as offline — accepted, honest.)
+- **Start screen:** the renderer decides by `deviceHomeStage(knownCount, qrRequested)` — `0 known → qr`; `>0 known → devices`; the "Add new device" button forces the QR (and regenerates the session for a fresh full TTL); a "‹ Devices" way back exists only while devices are known. The signaling lifecycle is untouched — a session still exists from startup (a phone must always be able to pair); the screen only decides whether the QR *leads*.
+- **Session-creation timing deliberately unchanged:** creating the session lazily (only on "Add new device") would save an unused QR but complicate the expiry sweep and the reconnect window for zero user-visible gain — the QR being ready-but-hidden is invisible to the user.

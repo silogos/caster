@@ -88,6 +88,17 @@ export interface CastSessionInfo {
  * plumbing only; pairing authorization is untouched. `deviceId` is null for
  * unidentified clients (older mobiles omit `hello.deviceId`, pairing.md).
  */
+/**
+ * Renderer → main: forget one registry entry (the list's delete button,
+ * ADR-005 addendum). Display-only — nothing is revoked; the device can pair
+ * again anytime with a fresh QR. The key fields mirror the registry's:
+ * identified clients key on deviceId, older ones on their address.
+ */
+export interface ForgetDeviceMessage {
+  deviceId: string | null
+  remote: string
+}
+
 export interface RegisteredDevice {
   deviceId: string | null
   /** Human label parsed from the hello user-agent (ua.ts). */
