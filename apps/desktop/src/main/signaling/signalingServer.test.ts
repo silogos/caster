@@ -29,8 +29,8 @@ interface Harness {
   payload: QrPayloadV1
   pairing: PairingServer
   signaling: SignalingServer
-  connectedEvents: Array<{ sid: string; ua: string; name: string }>
-  disconnectedEvents: Array<{ sid: string }>
+  connectedEvents: Array<{ sid: string; ua: string; name: string; deviceId?: string; remote: string }>
+  disconnectedEvents: Array<{ sid: string; deviceId?: string; remote: string }>
   getByeEvents: () => number
   sessionViews: Array<unknown>
   setNow: (ms: number) => void
@@ -41,8 +41,8 @@ let harness: Harness | null = null
 /** Mirror the production wiring from src/main/index.ts, minus Electron. */
 async function startHarness(): Promise<Harness> {
   let nowMs = FIXED_NOW_MS
-  const connectedEvents: Array<{ sid: string; ua: string; name: string }> = []
-  const disconnectedEvents: Array<{ sid: string }> = []
+  const connectedEvents: Array<{ sid: string; ua: string; name: string; deviceId?: string; remote: string }> = []
+  const disconnectedEvents: Array<{ sid: string; deviceId?: string; remote: string }> = []
   const sessionViews: Array<unknown> = []
   let byeEvents = 0
   let pairing!: PairingServer
@@ -125,8 +125,8 @@ class PhoneClient {
   }
 
   /** Run hello → challenge → auth; returns the reply to the auth. */
-  async handshake(protoMin = 1, protoMax = 1): Promise<Envelope> {
-    this.send('hello', { ua: this.ua, protoMin, protoMax })
+  async handshake(protoMin = 1, protoMax = 1, deviceId?: string): Promise<Envelope> {
+    this.send('hello', { ua: this.ua, protoMin, protoMax, ...(deviceId !== undefined ? { deviceId } : {}) })
     const challenge = await this.nextReply(1_000)
     if (challenge.type !== 'challenge') return challenge
     const mac = computeMac(this.secret, this.sid, (challenge.payload as { n: string }).n)
@@ -191,8 +191,36 @@ describe('signaling loopback (webrtc.md envelope + pairing.md handshake)', () =>
     // Per-sender seq starts at 1: challenge=1, auth-ok=2.
     expect(authOk.seq).toBe(2)
 
-    expect(h.connectedEvents).toEqual([{ sid: h.payload.s, ua: UA, name: 'Pixel 8' }])
+    // deviceId/remote (ADR-005) ride along; this client sent neither.
+    expect(h.connectedEvents).toHaveLength(1)
+    const last = h.connectedEvents[h.connectedEvents.length - 1]
+    expect(last).toMatchObject({ sid: h.payload.s, ua: UA, name: 'Pixel 8' })
+    expect(last.deviceId).toBeUndefined()
     phone.close()
+  })
+
+  it('passes an identified deviceId through to the coordinator (ADR-005)', async () => {
+    const h = harness as Harness
+    const phone = await new PhoneClient(h.port, h.payload.s, Buffer.from(h.payload.k, 'base64url')).connect()
+
+    expect((await phone.handshake(1, 1, '0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e')).type).toBe('auth-ok')
+
+    const last = h.connectedEvents[h.connectedEvents.length - 1]
+    expect(last.deviceId).toBe('0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e')
+    expect(last.remote.length).toBeGreaterThan(0)
+    phone.close()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  })
+
+  it('rejects a malformed deviceId with bad-message', async () => {
+    const h = harness as Harness
+    const phone = await new PhoneClient(h.port, h.payload.s, Buffer.from(h.payload.k, 'base64url')).connect()
+
+    phone.send('hello', { ua: UA, deviceId: 12345, protoMin: 1, protoMax: 1 })
+    const reply = await phone.nextReply(1_000)
+    expect(reply.type).toBe('error')
+    expect((reply.payload as { code: string }).code).toBe('bad-message')
+    await phone.waitClosed()
   })
 
   it('answers busy for a second phone while the first is connected, and allows reconnect after a drop', async () => {

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, RegisteredDevice } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -14,6 +14,7 @@ import {
   stopCastKeepAwake
 } from './window'
 import { PairingServer } from './pairing/pairingServer'
+import { DeviceRegistry } from './devices/deviceRegistry'
 import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { logger } from './log'
 
@@ -43,10 +44,23 @@ let lastStreamSize: { width: number; height: number } | null = null
 // mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
 // name after the socket is gone, and only a real session replacement clears it.
 let pairedMobileName: string | null = null
+// The adb-devices-style registry (ADR-005) — in memory for this desktop run.
+const deviceRegistry = new DeviceRegistry()
+
+/** Push the full registry to the receiver window's device list. */
+function pushDevices(): void {
+  pushToRenderer(IPC.pairing.devicesChanged, deviceRegistry.list())
+}
 
 function pushToRenderer(
   channel: string,
-  payload: PairingSessionView | null | MobileStateEvent | { pc: PcId; sdp: string } | { pc: PcId; candidate: unknown }
+  payload:
+    | PairingSessionView
+    | null
+    | MobileStateEvent
+    | { pc: PcId; sdp: string }
+    | { pc: PcId; candidate: unknown }
+    | RegisteredDevice[]
 ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -127,11 +141,20 @@ app.whenReady().then(async () => {
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({
     desktopName: hostname(),
-    onMobileConnected: ({ name }) => pushMobileState({ state: 'connected', name }),
+    // Device registry (ADR-005): every completed handshake registers the
+    // device online; every disconnect marks it offline — pushed to the
+    // pairing window as the adb-devices-style list.
+    onMobileConnected: ({ name, deviceId, ua, remote }) => {
+      deviceRegistry.markConnected({ deviceId, name, ua, remote }, Date.now())
+      pushDevices()
+      pushMobileState({ state: 'connected', name })
+    },
     // Phase15: the authorized socket dropped — the pairing session is still
     // live (reconnect window open until expiry), so the receiver keeps
     // showing the device instead of falling back to the QR hero.
-    onMobileDisconnected: () => {
+    onMobileDisconnected: ({ deviceId, remote }) => {
+      deviceRegistry.markOffline({ deviceId, remote }, Date.now())
+      pushDevices()
       if (pairedMobileName !== null) {
         pushMobileState({ state: 'disconnected', name: pairedMobileName })
       } else {
@@ -177,6 +200,7 @@ app.whenReady().then(async () => {
   }, EXPIRY_SWEEP_INTERVAL_MS)
 
   ipcMain.handle(IPC.pairing.getSession, () => pairing!.currentView())
+  ipcMain.handle(IPC.pairing.getDevices, () => deviceRegistry.list())
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
     return pairing!

@@ -1,8 +1,9 @@
-import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
+import type { CastSessionInfo, MobileStateEvent, PairingSessionView, RegisteredDevice } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
+import { deviceListView } from './deviceListView'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
 
@@ -33,6 +34,9 @@ const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
+// Device registry (ADR-005): the adb-devices-style list under the pairing stage.
+const devicesSectionEl = document.getElementById('devices-section') as HTMLElement
+const devicesListEl = document.getElementById('devices-list') as HTMLUListElement
 
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
@@ -385,6 +389,30 @@ const unsubscribeSession = window.desktopApi.onPairingSessionUpdated((session) =
   session === null ? showSessionError() : showSession(session)
 )
 const unsubscribeMobile = window.desktopApi.onMobileStateChanged(showMobileState)
+
+// Device registry (ADR-005): apply the view model; hidden while empty so the
+// stage's own states (QR hero / no-input) stay the visual lead.
+function showDevices(devices: RegisteredDevice[]): void {
+  const view = deviceListView(devices)
+  devicesSectionEl.hidden = view.rows.length === 0
+  devicesListEl.replaceChildren(
+    ...view.rows.map((row) => {
+      const item = document.createElement('li')
+      item.className = `devices-row is-${row.state}`
+      const name = document.createElement('span')
+      name.className = 'devices-name'
+      name.textContent = row.label
+      const detail = document.createElement('span')
+      detail.className = 'devices-detail'
+      detail.textContent = row.detail
+      item.append(name, detail)
+      return item
+    }),
+  )
+}
+void window.desktopApi.getDevices().then(showDevices)
+const unsubscribeDevices = window.desktopApi.onDevicesChanged(showDevices)
+
 const unsubscribeOffers = window.desktopApi.onSignalingSdpOffer((offer) => {
   void receiver.handleSdpOffer(offer)
 })
@@ -396,6 +424,7 @@ window.addEventListener('beforeunload', () => {
   receiver.close()
   unsubscribeSession()
   unsubscribeMobile()
+  unsubscribeDevices()
   unsubscribeOffers()
   unsubscribeIce()
   unsubscribeOverlay()

@@ -4,6 +4,7 @@ import type { DesktopApi } from '../shared/ipc'
 import type {
   MobileStateEvent,
   PairingSessionView,
+  RegisteredDevice,
   SignalingIceMessage,
   SignalingSdpMessage
 } from '../shared/types'
@@ -19,6 +20,8 @@ const desktopApi: DesktopApi = {
   regeneratePairingSession: () => ipcRenderer.invoke(IPC.pairing.regenerate),
   onPairingSessionUpdated: (listener) => subscribe<PairingSessionView | null>(IPC.pairing.sessionUpdated, listener),
   onMobileStateChanged: (listener) => subscribe<MobileStateEvent>(IPC.pairing.mobileState, listener),
+  getDevices: () => ipcRenderer.invoke(IPC.pairing.getDevices),
+  onDevicesChanged: (listener) => subscribe<RegisteredDevice[]>(IPC.pairing.devicesChanged, listener),
   onSignalingSdpOffer: (listener) => subscribe<SignalingSdpMessage>(IPC.signaling.sdpOffer, listener),
   onSignalingIceCandidate: (listener) => subscribe<SignalingIceMessage>(IPC.signaling.iceCandidate, listener),
   sendSdpAnswer: (pc, sdp) => {

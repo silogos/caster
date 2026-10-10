@@ -379,3 +379,56 @@ body.receiving:hover .cast-overlay {
 .mixer-button:hover {
   border-color: var(--fg);
 }
+
+/* Device registry (ADR-005): the adb-devices-style list under the pairing
+   stage. Muted styling — the stage's own state (QR hero / no-input) stays
+   the visual lead; the list is a read-only diagnostic surface. */
+.devices {
+  margin-top: 24px;
+  width: min(360px, 90%);
+  text-align: left;
+}
+
+.devices-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  margin: 0 0 8px;
+}
+
+.devices-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--fg-muted);
+  border-radius: 6px;
+}
+
+.devices-row.is-online .devices-name {
+  color: var(--fg);
+}
+
+.devices-row.is-offline .devices-name {
+  color: var(--fg-muted);
+}
+
+.devices-name {
+  font-weight: 500;
+}
+
+.devices-detail {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}

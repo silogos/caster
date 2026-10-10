@@ -26,6 +26,12 @@ class PairingClient(
     private val transportFactory: () -> SignalingTransport,
     private val schedulerFactory: () -> SignalingScheduler,
     private val userAgentProvider: () -> String,
+    /**
+     * Persistent install-scoped identity sent as hello's `deviceId` (ADR-005).
+     * Null (the default) omits the field — the unidentified shape the desktop
+     * accepts; the real app always injects it (ScanScreen's VM factory).
+     */
+    private val deviceIdProvider: (() -> String)? = null,
 ) {
     sealed interface State {
         data object Idle : State
@@ -102,6 +108,7 @@ class PairingClient(
             sessionId = payload.s,
             secret = Handshake.decodeSecret(payload.k),
             userAgent = userAgentProvider(),
+            deviceId = deviceIdProvider?.invoke(),
             expiresAtUnixSeconds = payload.e,
             transport = transportFactory(),
             scheduler = schedulerFactory(),

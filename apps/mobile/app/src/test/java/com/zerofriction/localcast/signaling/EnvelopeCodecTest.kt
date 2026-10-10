@@ -15,7 +15,7 @@ class EnvelopeCodecTest {
             Envelope.TYPE_HELLO,
             seq = 1,
             sid = "session-id",
-            payload = Payloads.hello(TEST_UA, 1, 1),
+            payload = Payloads.hello(TEST_UA, TEST_DEVICE_ID, 1, 1),
         )
 
         val parsed = EnvelopeCodec.parse(encoded)
@@ -32,6 +32,7 @@ class EnvelopeCodecTest {
 
     private companion object {
         const val TEST_UA = "ZeroFrictionCast/0.1.0 (Android 15; Pixel8)"
+        const val TEST_DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
         const val SESSION_ID = "session-id"
         const val SDP_BLOB = "v=0\r\no=-4611731400430051336 2 IN IP4 127.0.0.1\r\n"
     }
