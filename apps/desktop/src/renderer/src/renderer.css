@@ -380,21 +380,20 @@ body.receiving:hover .cast-overlay {
   border-color: var(--fg);
 }
 
-/* Device registry (ADR-005): the adb-devices-style list under the pairing
-   stage. Muted styling — the stage's own state (QR hero / no-input) stays
-   the visual lead; the list is a read-only diagnostic surface. */
-.devices {
-  margin-top: 24px;
-  width: min(360px, 90%);
-  text-align: left;
+/* Device home (ADR-005 addendum): the two-condition start screen's stage —
+   the list of known devices with Forget buttons and the Add-new-device
+   trigger, replacing the QR hero while devices are known. */
+.devices-home {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: min(420px, 92%);
 }
 
-.devices-title {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-muted);
-  margin: 0 0 8px;
+.devices-home .devices-list {
+  width: 100%;
+  margin-top: 12px;
 }
 
 .devices-list {
@@ -409,11 +408,30 @@ body.receiving:hover .cast-overlay {
 .devices-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   font-size: 13px;
   padding: 6px 10px;
   border: 1px solid var(--fg-muted);
   border-radius: 6px;
+}
+
+.devices-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.button.subtle {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  padding: 6px 10px;
+}
+
+.button.subtle:hover {
+  color: var(--fg);
 }
 
 .devices-row.is-online .devices-name {

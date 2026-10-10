@@ -1,12 +1,26 @@
 import type { RegisteredDevice } from '../../shared/types'
 
 /**
- * The device registry's view model (ADR-005) — pure and clock-injected, so
- * the `adb devices`-style list is unit-testable without a DOM, matching
- * pairingHero.ts's pattern. One row per device: name, state, short identity.
- * Identity display is deliberately short — the full UUID stays in logs.
+ * The device home's view models (ADR-005 addendum) — pure and clock-injected
+ * so both the stage decision and the `adb devices`-style rows are
+ * unit-testable without a DOM, matching pairingHero.ts's pattern.
  */
+
+/** Which initial screen applies: the QR (never connected / explicitly requested) or the device list. */
+export type DeviceHomeStage = 'qr' | 'devices'
+
+/**
+ * Two conditions, exactly the product sketch: no device has ever connected →
+ * straight to the QR; known devices → the list, with the QR one
+ * "Add new device" tap away (qrRequested).
+ */
+export function deviceHomeStage(knownDeviceCount: number, qrRequested: boolean): DeviceHomeStage {
+  return knownDeviceCount === 0 || qrRequested ? 'qr' : 'devices'
+}
+
 export interface DeviceRow {
+  /** The registry key for the row's Forget button (deviceId, else the address). */
+  key: string
   /** Rendered as the row's state marker; both states are always shown. */
   state: RegisteredDevice['state']
   label: string
@@ -22,10 +36,11 @@ export function deviceListView(devices: RegisteredDevice[], nowMs: number = Date
   return {
     heading: 'Devices',
     rows: devices.map((device) => {
+      const key = device.deviceId ?? `ip:${device.remote}`
       const id = shortId(device.deviceId)
       return device.state === 'online'
-        ? { state: 'online', label: device.name, detail: `${id} · connected` }
-        : { state: 'offline', label: device.name, detail: `${id} · last seen ${seenAgo(device.lastSeenAtMs, nowMs)} ago` }
+        ? { key, state: 'online', label: device.name, detail: `${id} · connected` }
+        : { key, state: 'offline', label: device.name, detail: `${id} · last seen ${seenAgo(device.lastSeenAtMs, nowMs)} ago` }
     }),
   }
 }

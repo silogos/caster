@@ -3,7 +3,7 @@ import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
-import { deviceListView } from './deviceListView'
+import { deviceHomeStage, deviceListView } from './deviceListView'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
 
@@ -34,9 +34,13 @@ const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
-// Device registry (ADR-005): the adb-devices-style list under the pairing stage.
-const devicesSectionEl = document.getElementById('devices-section') as HTMLElement
-const devicesListEl = document.getElementById('devices-list') as HTMLUListElement
+// Device home (ADR-005 addendum): the two-condition start screen's stage —
+// the adb-devices-style list with Forget buttons and the Add-new-device
+// trigger, shown instead of the QR hero while devices are known.
+const devicesHomeEl = document.getElementById('devices-home') as HTMLDivElement
+const devicesHomeListEl = document.getElementById('devices-home-list') as HTMLUListElement
+const addDeviceEl = document.getElementById('add-device') as HTMLButtonElement
+const backToDevicesEl = document.getElementById('back-to-devices') as HTMLButtonElement
 
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
@@ -205,8 +209,9 @@ let pairingSessionError = false
 
 // The receiver's stage split (Phase15): a live pairing session shows the
 // monitor-style "No input video" view — the desktop is a receiver, not a
-// pairing screen, while a device is paired. The QR hero (below) renders only
-// when no session exists: un-paired waiting or a creation error.
+// pairing screen, while a device is paired. Without a paired device the
+// two-condition start screen applies (ADR-005 addendum): known devices → the
+// devices stage; none (or the user asked for the QR) → the QR hero.
 function renderHero(): void {
   if (connectedName !== null) {
     const view = noInputView(connectedName, reconnecting)
@@ -218,9 +223,17 @@ function renderHero(): void {
     qrCardEl.hidden = true
     hintEl.hidden = true
     regenerateEl.hidden = true
+    backToDevicesEl.hidden = true
+    devicesHomeEl.hidden = true
     return
   }
   noInputStageEl.hidden = true
+  if (deviceHomeStage(knownDevices.length, qrRequested) === 'devices') {
+    hideHero()
+    renderDevicesHome()
+    return
+  }
+  devicesHomeEl.hidden = true
   // The pairing stage's waiting/error screens (Phase13): one pure view model
   // (pairingHero.ts) decides what the user sees; this applies it.
   const view = heroView(pairingSessionError)
@@ -234,6 +247,50 @@ function renderHero(): void {
   hintEl.hidden = !view.showHint
   regenerateEl.hidden = !view.showRegenerate
   regenerateEl.textContent = view.regenerateLabel
+  // The way back to the device list exists only while there is one to go back to.
+  backToDevicesEl.hidden = knownDevices.length === 0
+}
+
+function hideHero(): void {
+  qrCardEl.hidden = true
+  iconWarningEl.hidden = true
+  heroHeadingEl.hidden = true
+  statusEl.hidden = true
+  hintEl.hidden = true
+  regenerateEl.hidden = true
+  backToDevicesEl.hidden = true
+}
+
+/** Apply the pure view model to the devices stage (rows + Forget buttons). */
+function renderDevicesHome(): void {
+  devicesHomeEl.hidden = false
+  const view = deviceListView(knownDevices)
+  const byKey = new Map(knownDevices.map((device) => [device.deviceId ?? `ip:${device.remote}`, device]))
+  devicesHomeListEl.replaceChildren(
+    ...view.rows.map((row) => {
+      const item = document.createElement('li')
+      item.className = `devices-row is-${row.state}`
+      const text = document.createElement('span')
+      text.className = 'devices-text'
+      const name = document.createElement('span')
+      name.className = 'devices-name'
+      name.textContent = row.label
+      const detail = document.createElement('span')
+      detail.className = 'devices-detail'
+      detail.textContent = row.detail
+      const forget = document.createElement('button')
+      forget.className = 'mixer-button'
+      forget.type = 'button'
+      forget.textContent = 'Forget'
+      forget.addEventListener('click', () => {
+        const device = byKey.get(row.key)
+        if (device !== undefined) window.desktopApi.forgetDevice({ deviceId: device.deviceId, remote: device.remote })
+      })
+      text.append(name, detail)
+      item.append(text, forget)
+      return item
+    }),
+  )
 }
 
 function showSession(session: PairingSessionView): void {
@@ -252,6 +309,7 @@ function showMobileState(state: MobileStateEvent): void {
     connectedName = state.name
     reconnecting = false
     sessionInfo = null
+    qrRequested = false
     renderHero()
     renderStatus()
   } else if (state.state === 'disconnected') {
@@ -270,11 +328,13 @@ function showMobileState(state: MobileStateEvent): void {
     sessionInfo = state.info
     renderStatus()
   } else {
-    // 'waiting': the session itself is gone (bye/expiry/regenerate) — the QR
-    // hero is the honest screen now; rescan is the only way back.
+    // 'waiting': the session itself is gone (bye/expiry/regenerate) — back to
+    // the two-condition start screen: known devices → the devices stage
+    // (the QR returns via "Add new device"); none → the QR hero.
     connectedName = null
     reconnecting = false
     sessionInfo = null
+    qrRequested = false
     receiver.handleMobileGone()
     renderHero()
     renderStatus()
@@ -390,28 +450,31 @@ const unsubscribeSession = window.desktopApi.onPairingSessionUpdated((session) =
 )
 const unsubscribeMobile = window.desktopApi.onMobileStateChanged(showMobileState)
 
-// Device registry (ADR-005): apply the view model; hidden while empty so the
-// stage's own states (QR hero / no-input) stay the visual lead.
+// Device registry (ADR-005 addendum): the start screen reads it — known
+// devices → the devices stage, none → the QR hero. `qrRequested` is the
+// user's explicit "Add new device": the QR then leads until a device pairs,
+// the session is replaced, or the user goes back.
+let knownDevices: RegisteredDevice[] = []
+let qrRequested = false
+
 function showDevices(devices: RegisteredDevice[]): void {
-  const view = deviceListView(devices)
-  devicesSectionEl.hidden = view.rows.length === 0
-  devicesListEl.replaceChildren(
-    ...view.rows.map((row) => {
-      const item = document.createElement('li')
-      item.className = `devices-row is-${row.state}`
-      const name = document.createElement('span')
-      name.className = 'devices-name'
-      name.textContent = row.label
-      const detail = document.createElement('span')
-      detail.className = 'devices-detail'
-      detail.textContent = row.detail
-      item.append(name, detail)
-      return item
-    }),
-  )
+  knownDevices = devices
+  renderHero()
 }
 void window.desktopApi.getDevices().then(showDevices)
 const unsubscribeDevices = window.desktopApi.onDevicesChanged(showDevices)
+
+addDeviceEl.addEventListener('click', () => {
+  // A fresh QR every time — an old session may be near expiry or already
+  // scanned-and-replaced; the honest affordance is a new code with a full TTL.
+  qrRequested = true
+  void window.desktopApi.regeneratePairingSession()
+  renderHero()
+})
+backToDevicesEl.addEventListener('click', () => {
+  qrRequested = false
+  renderHero()
+})
 
 const unsubscribeOffers = window.desktopApi.onSignalingSdpOffer((offer) => {
   void receiver.handleSdpOffer(offer)

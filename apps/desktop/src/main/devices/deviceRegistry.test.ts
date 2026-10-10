@@ -67,4 +67,35 @@ describe('device registry (ADR-005)', () => {
     registry.markOffline({ deviceId: 'cccc3333-2222-3333-4444-555566667777', remote: '192.168.1.7' }, 1_000)
     expect(registry.list()).toHaveLength(0)
   })
+
+  it('forgets a device on remove — display-only, others kept', () => {
+    const registry = new DeviceRegistry()
+    registry.markConnected({ deviceId: 'aaaa1111-2222-3333-4444-555566667777', name: 'First', ua: 'ua', remote: '192.168.1.5' }, 1_000)
+    registry.markConnected({ deviceId: 'bbbb2222-2222-3333-4444-555566667777', name: 'Second', ua: 'ua', remote: '192.168.1.6' }, 2_000)
+
+    expect(registry.remove({ deviceId: 'aaaa1111-2222-3333-4444-555566667777', remote: '192.168.1.5' })).toBe(true)
+    expect(registry.list().map((entry) => entry.name)).toEqual(['Second'])
+    // Removing again is a no-op, not a crash.
+    expect(registry.remove({ deviceId: 'aaaa1111-2222-3333-4444-555566667777', remote: '192.168.1.5' })).toBe(false)
+  })
+
+  it('seeds from the persisted store and keys the entries correctly', () => {
+    const registry = new DeviceRegistry([
+      {
+        deviceId: 'aaaa1111-2222-3333-4444-555566667777',
+        name: 'Pixel 8',
+        ua: 'ua',
+        remote: '192.168.1.5',
+        state: 'offline',
+        connectedAtMs: 1_000,
+        lastSeenAtMs: 1_000,
+      },
+    ])
+    // The seeded device is reachable through its key: an offline mark lands.
+    registry.markOffline({ deviceId: 'aaaa1111-2222-3333-4444-555566667777', remote: '192.168.1.5' }, 3_000)
+    const [entry] = registry.list()
+    expect(entry.name).toBe('Pixel 8')
+    expect(entry.lastSeenAtMs).toBe(3_000)
+    expect(registry.toJSON()).toHaveLength(1)
+  })
 })

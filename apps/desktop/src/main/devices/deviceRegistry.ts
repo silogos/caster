@@ -8,12 +8,20 @@ import type { RegisteredDevice } from '../../shared/types'
  *
  * Deliberately display plumbing, never security: entries grant nothing and
  * remember nothing about authorization — pairing still requires a fresh QR
- * and the HMAC handshake (ADR-002). The registry lives in the main process
- * only; Phase A keeps it in memory (a restart clears it — disk persistence
- * is the announced next phase).
+ * and the HMAC handshake (ADR-002). Since the two-condition start screen
+ * (ADR-005 addendum) the registry persists across desktop restarts via the
+ * device registry store; forgetting a device (remove) is also display-only —
+ * a forgotten device can pair again anytime with a fresh QR.
  */
 export class DeviceRegistry {
   private readonly entries = new Map<string, RegisteredDevice>()
+
+  /** Seed from the persisted store (deviceRegistryStore) — unknown keys are fine. */
+  constructor(initial: RegisteredDevice[] = []) {
+    for (const entry of initial) {
+      this.entries.set(registryKey(entry.deviceId ?? undefined, entry.remote), entry)
+    }
+  }
 
   /**
    * A device completed the handshake — bring its entry online (or create
@@ -32,8 +40,8 @@ export class DeviceRegistry {
       lastSeenAtMs: nowMs,
     }
     // The fresh visit replaces the stored entry wholesale — name/UA may have
-    // changed between app versions (Phase A keeps the registry in memory;
-    // visit history arrives with disk persistence, the next phase).
+    // changed between app versions, and persisted entries carry state
+    // snapshots that the live handshake supersedes.
     this.entries.set(key, entry)
     return entry
   }
@@ -46,10 +54,29 @@ export class DeviceRegistry {
     entry.lastSeenAtMs = nowMs
   }
 
+  /**
+   * Forget a device (the list's delete button): display-only — the entry
+   * leaves the registry, but nothing is revoked; the device pairs again
+   * anytime with a fresh QR (and would re-register on its next handshake).
+   * True when an entry was removed.
+   */
+  remove(event: { deviceId?: string | null; remote: string }): boolean {
+    return this.entries.delete(registryKey(event.deviceId ?? undefined, event.remote))
+  }
+
   /** All known devices — most recently seen first (the adb-devices surface). */
   list(): RegisteredDevice[] {
     return [...this.entries.values()].sort((a, b) => b.lastSeenAtMs - a.lastSeenAtMs)
   }
+
+  /** A persistence-ready snapshot (deviceRegistryStore writes it verbatim). */
+  toJSON(): RegisteredDevice[] {
+    return this.list()
+  }
+}
+
+export function registryKeyFor(deviceId: string | null, remote: string): string {
+  return registryKey(deviceId ?? undefined, remote)
 }
 
 function registryKey(deviceId: string | undefined, remote: string): string {
