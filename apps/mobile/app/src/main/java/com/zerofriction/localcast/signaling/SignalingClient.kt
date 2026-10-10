@@ -27,6 +27,13 @@ class SignalingClient(
     private val sessionId: String,
     private val secret: ByteArray,
     private val userAgent: String,
+    /**
+     * hello's optional `deviceId` (pairing.md, ADR-005): the persistent
+     * install-scoped UUID the desktop's device registry keys on — never an
+     * auth secret; null omits the field (the unidentified-client shape the
+     * desktop must accept).
+     */
+    private val deviceId: String?,
     /** Expiry `e` from the QR payload, Unix seconds — reconnects stop at it (webrtc.md). */
     private val expiresAtUnixSeconds: Long,
     private val transport: SignalingTransport,
@@ -98,7 +105,7 @@ class SignalingClient(
             _state.value = State.AUTHENTICATING
             Log.i(TAG, "connected, sending hello")
             emit(Event.Authenticating)
-            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX))
+            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX))
         }
 
         override fun onTransportText(message: String) {

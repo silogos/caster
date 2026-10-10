@@ -106,8 +106,14 @@ object Payloads {
 
     // ---- pairing (Phase3) ----
 
-    fun hello(userAgent: String, protoMin: Int, protoMax: Int): JsonObject = buildJsonObject {
+    /**
+     * `deviceId` is hello's optional registry field (pairing.md, ADR-005) —
+     * never an auth secret; the desktop must accept handshakes without it,
+     * so null simply omits the key.
+     */
+    fun hello(userAgent: String, deviceId: String?, protoMin: Int, protoMax: Int): JsonObject = buildJsonObject {
         put("ua", userAgent)
+        if (deviceId !== null) put("deviceId", deviceId)
         put("protoMin", protoMin)
         put("protoMax", protoMax)
     }
@@ -121,6 +127,9 @@ object Payloads {
 
     fun helloUa(envelope: Envelope): String? =
         envelope.payload["ua"]?.jsonPrimitive?.content
+
+    fun helloDeviceId(envelope: Envelope): String? =
+        envelope.payload["deviceId"]?.jsonPrimitive?.content
 
     fun helloProtoMin(envelope: Envelope): Int? =
         envelope.payload["protoMin"]?.jsonPrimitive?.content?.toIntOrNull()

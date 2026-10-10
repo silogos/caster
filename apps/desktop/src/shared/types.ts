@@ -81,3 +81,20 @@ export interface CastSessionInfo {
   gameAudio: boolean
   mic: boolean
 }
+
+/**
+ * One entry of the desktop's device registry (ADR-005) — an `adb devices`-
+ * style line: which mobiles this desktop has seen and their state. Display
+ * plumbing only; pairing authorization is untouched. `deviceId` is null for
+ * unidentified clients (older mobiles omit `hello.deviceId`, pairing.md).
+ */
+export interface RegisteredDevice {
+  deviceId: string | null
+  /** Human label parsed from the hello user-agent (ua.ts). */
+  name: string
+  ua: string
+  remote: string
+  state: 'online' | 'offline'
+  connectedAtMs: number
+  lastSeenAtMs: number
+}
