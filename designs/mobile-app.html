@@ -252,6 +252,9 @@
   }
   .pick-spec { font-size: 11px; color: var(--cast-on-variant); margin-top: 3px; letter-spacing: 0.02em; }
 
+  /* ---- Mic device card body (chips + hint inside the card) ---- */
+  .mic-body { padding: 12px 16px 14px; }
+
   /* ---- Advanced card body (below its header row) ---- */
   .adv-body {
     padding: 4px 16px 14px;
@@ -412,6 +415,13 @@ const PAIRING_ERRORS = {
   bad_version: "The desktop app is newer or older than this app. Please update.",
 };
 
+const MIC_DEVICE_OPTIONS = [
+  { id: "builtin", name: "Phone mic" },
+  { id: "wired",   name: "Headset mic" },
+  { id: "usb",     name: "USB mic" },
+  { id: "bt",      name: "Bluetooth mic" },
+];
+
 const THERMAL = {
   normal: "Phone temperature: normal.",
   light: "Phone is getting warm.",
@@ -444,6 +454,11 @@ const state = {
   gameAudio: true, mic: false,
   // live-cast simulation ("This cast")
   thermal: "normal", adaptive: null, belowCeiling: false,
+  // Mic device selection (#59, strings.xml mic_device_*): a KIND, not a
+  // concrete device — offered only while one of its inputs is connected
+  // (the app resolves the same way at capture time, MicDeviceResolver).
+  micDevice: "builtin",
+  micInputs: ["builtin"], // connected kinds: builtin | wired | usb | bt
   // capture settings
   profile: "balanced", longEdge: 1280, fps: 30,
   bitrateAuto: true, bitrateMin: 4, bitrateMax: 6,
@@ -923,6 +938,22 @@ function renderSettings(parent) {
   q.appendChild(foot);
   root.appendChild(q);
 
+  // Microphone device (#59): which mic the cast records from — the built-in
+  // mic always offered, a kind only while connected; a chosen-but-unplugged
+  // kind highlights nothing (capture falls back to the phone mic, per hint).
+  root.appendChild(silkscreen("Microphone"));
+  const mic = card();
+  mic.setAttribute("data-od-id", "settings-mic-device");
+  const micBody = el('<div class="mic-body"></div>');
+  micBody.appendChild(chipRow(
+    MIC_DEVICE_OPTIONS.filter((o) => state.micInputs.includes(o.id)),
+    state.micDevice,
+    (id) => { state.micDevice = id; renderAll(); },
+  ));
+  micBody.appendChild(hint("Which microphone the cast records from. If the chosen one is not plugged in when the mic starts, the phone's built-in mic is used. Bluetooth headsets record at phone-call quality."));
+  mic.appendChild(micBody);
+  root.appendChild(mic);
+
   // Advanced card — collapsed by default; the header row is the toggle
   root.appendChild(silkscreen("Advanced"));
   const adv = card();
@@ -1060,6 +1091,21 @@ function renderControls() {
       for (const k of Object.keys(PAIRING_ERRORS)) {
         c.appendChild(pbtn(k, state.scanFail === k, () => { state.scanFail = k; renderAll(); }));
       }
+    }
+  } else if (state.screen === "settings") {
+    c.appendChild(protoLabel("Mic inputs:"));
+    const combos = [
+      ["phone", ["builtin"]],
+      ["phone+wired", ["builtin", "wired"]],
+      ["phone+usb", ["builtin", "usb"]],
+      ["phone+bt", ["builtin", "bt"]],
+      ["all", ["builtin", "wired", "usb", "bt"]],
+    ];
+    for (const [label, inputs] of combos) {
+      c.appendChild(pbtn(label, state.micInputs.join(",") === inputs.join(","), () => {
+        state.micInputs = inputs;
+        renderAll();
+      }));
     }
   } else if (state.screen === "home") {
     c.appendChild(protoLabel("Home state:"));
