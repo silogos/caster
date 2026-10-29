@@ -202,4 +202,10 @@
     <string name="pairing_error_bad_auth">Couldn\'t pair with this desktop. Scan the QR code shown on the desktop.</string>
     <string name="pairing_error_busy">The desktop is already connected to another device.</string>
     <string name="pairing_error_bad_version">The desktop app is newer or older than this app. Please update.</string>
+    <string name="pairing_error_desktop_forgotten">This desktop no longer remembers this phone. Scan the QR code to pair again.</string>
+    <!-- Persistent session (ADR-006): the Home hub's one-tap reconnect. -->
+    <string name="home_connect">Connect</string>
+    <string name="home_connecting">Connecting…</string>
+    <string name="home_scan_qr">Scan QR code</string>
+    <string name="home_forget_desktop">Forget this desktop</string>
 </resources>

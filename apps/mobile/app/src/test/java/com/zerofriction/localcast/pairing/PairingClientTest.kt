@@ -5,9 +5,13 @@ import com.zerofriction.localcast.signaling.EnvelopeCodec
 import com.zerofriction.localcast.signaling.EnvelopeParseResult
 import com.zerofriction.localcast.signaling.Handshake
 import com.zerofriction.localcast.signaling.Payloads
+import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.signaling.SignalingScheduler
 import com.zerofriction.localcast.signaling.SignalingTransport
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -48,7 +52,7 @@ class PairingClientTest {
     }
 
     private fun newClient(fake: FakeTransport): PairingClient =
-        PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }) { TEST_DEVICE_ID }
+        PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }, deviceIdProvider = { TEST_DEVICE_ID })
 
     @org.junit.Test
     fun `completes the handshake and reaches Connected`() {
@@ -186,27 +190,134 @@ class PairingClientTest {
         assertEquals(null, client.releaseSignaling())
     }
 
+    // ---- Persistent session: the QR-less resume (ADR-006) ----
+
+    @org.junit.Test
+    fun `startSaved resumes with the deviceId as sid, the resume flag and the trust-key mac`() {
+        val fake = FakeTransport()
+        val grants = mutableListOf<SignalingClient.Event.TrustGrant>()
+        val client = PairingClient(
+            { fake }, { IdleScheduler() }, { TEST_UA },
+            deviceIdProvider = { TEST_DEVICE_ID },
+            onDesktopIdentity = { _, grant -> grants.add(grant) },
+        )
+        val trustKey = Handshake.deriveTrustKey(Handshake.decodeSecret(VALID_SECRET_B64URL), VECTOR_SID)
+        val saved = SavedDesktop("desktop-uuid-1", TEST_DESKTOP_NAME, listOf("192.168.1.42"), 52341, "v1.sealed", 1L, 1L)
+
+        client.startSaved(saved, trustKey)
+        fake.listener?.onTransportOpen()
+
+        val hello = parseFrame(fake.sentFrames.removeAt(0))
+        assertEquals(Envelope.TYPE_HELLO, hello.type)
+        // Resume shape (pairing.md §Persistent sessions): sid = the deviceId.
+        assertEquals(TEST_DEVICE_ID, hello.sid)
+        assertEquals(TEST_DEVICE_ID, Payloads.helloDeviceId(hello))
+        assertEquals(true, hello.payload["resume"]?.jsonPrimitive?.booleanOrNull)
+
+        // The auth mac is keyed by the stored trustKey, not a QR secret.
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE, TEST_DEVICE_ID))
+        val auth = parseFrame(fake.sentFrames.removeAt(0))
+        assertEquals(Handshake.computeMac(trustKey, TEST_DEVICE_ID, VECTOR_NONCE), auth.payload["mac"]?.jsonPrimitive?.content)
+
+        // auth-ok identifies the desktop — a resume re-auth refreshes hosts,
+        // it carries no derived key.
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME, TEST_DEVICE_ID, desktopId = "desktop-uuid-1", hosts = listOf("192.168.1.50")))
+        assertEquals(PairingClient.State.Connected(TEST_DESKTOP_NAME), client.state.value)
+        assertEquals(1, grants.size)
+        assertEquals("desktop-uuid-1", grants[0].desktopId)
+        assertEquals(listOf("192.168.1.50"), grants[0].hosts)
+        org.junit.Assert.assertNull(grants[0].trustKey)
+    }
+
+    @org.junit.Test
+    fun `an unknown-device answer fails the resume with DESKTOP_FORGOT`() {
+        val fake = FakeTransport()
+        val client = PairingClient(
+            { fake }, { IdleScheduler() }, { TEST_UA },
+            deviceIdProvider = { TEST_DEVICE_ID },
+        )
+        client.startSaved(SavedDesktop("d", "n", listOf("192.168.1.42"), 52341, "s", 1L, 1L), ByteArray(32))
+
+        fake.listener?.onTransportOpen()
+        fake.listener?.onTransportText(errorFrame("unknown-device", TEST_DEVICE_ID))
+
+        assertEquals(PairingClient.State.Failed(PairingError.DESKTOP_FORGOT), client.state.value)
+    }
+
+    @org.junit.Test
+    fun `a QR pairing with an identified desktop grants the derived trust key`() {
+        val fake = FakeTransport()
+        val grants = mutableListOf<SignalingClient.Event.TrustGrant>()
+        val client = PairingClient(
+            { fake }, { IdleScheduler() }, { TEST_UA },
+            deviceIdProvider = { TEST_DEVICE_ID },
+            onDesktopIdentity = { _, grant -> grants.add(grant) },
+        )
+        client.startFromQrText(VALID_PAYLOAD)
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeAt(0) // hello
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE))
+        fake.sentFrames.removeAt(0) // auth
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME, VECTOR_SID, desktopId = "desktop-uuid-1", hosts = listOf("192.168.1.42")))
+
+        assertEquals(PairingClient.State.Connected(TEST_DESKTOP_NAME), client.state.value)
+        assertEquals(1, grants.size)
+        // The key both sides derive from this QR session (ADR-006).
+        org.junit.Assert.assertArrayEquals(
+            Handshake.deriveTrustKey(Handshake.decodeSecret(VALID_SECRET_B64URL), VECTOR_SID),
+            grants[0].trustKey,
+        )
+    }
+
+    @org.junit.Test
+    fun `disconnect sends the reserved bye forget`() {
+        val fake = FakeTransport()
+        val client = PairingClient(
+            { fake }, { IdleScheduler() }, { TEST_UA },
+            deviceIdProvider = { TEST_DEVICE_ID },
+        )
+        client.startFromQrText(VALID_PAYLOAD)
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeAt(0) // hello
+        fake.listener?.onTransportText(challengeFrame(VECTOR_NONCE))
+        fake.sentFrames.removeAt(0) // auth
+        fake.listener?.onTransportText(authOkFrame(TEST_DESKTOP_NAME))
+
+        client.disconnect()
+
+        val bye = parseFrame(fake.sentFrames.removeLast())
+        assertEquals(Envelope.TYPE_BYE, bye.type)
+        assertEquals("forget", bye.payload["reason"]?.jsonPrimitive?.content)
+    }
+
     private fun parseFrame(raw: String): Envelope {
         val parsed = EnvelopeCodec.parse(raw)
         assertTrue(parsed is EnvelopeParseResult.Valid)
         return (parsed as EnvelopeParseResult.Valid).envelope
     }
 
-    private fun challengeFrame(nonce: String): String =
-        EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, VECTOR_SID, buildJsonObject { put("n", nonce) })
+    private fun challengeFrame(nonce: String, sid: String = VECTOR_SID): String =
+        EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, sid, buildJsonObject { put("n", nonce) })
 
-    private fun authOkFrame(desktopName: String): String = EnvelopeCodec.encode(
+    private fun authOkFrame(
+        desktopName: String,
+        sid: String = VECTOR_SID,
+        desktopId: String? = null,
+        hosts: List<String>? = null,
+    ): String = EnvelopeCodec.encode(
         Envelope.TYPE_AUTH_OK,
         2,
-        VECTOR_SID,
+        sid,
         buildJsonObject {
             put("name", desktopName)
             put("proto", 1)
+            if (desktopId != null) put("desktopId", desktopId)
+            if (hosts != null) put("hosts", JsonArray(hosts.map { JsonPrimitive(it) }))
         },
     )
 
-    private fun errorFrame(code: String): String =
-        EnvelopeCodec.encode(Envelope.TYPE_ERROR, 1, VECTOR_SID, buildJsonObject { put("code", code) })
+    private fun errorFrame(code: String, sid: String = VECTOR_SID): String =
+        EnvelopeCodec.encode(Envelope.TYPE_ERROR, 1, sid, buildJsonObject { put("code", code) })
 
     private fun byeFrame(reason: String): String =
         EnvelopeCodec.encode(Envelope.TYPE_BYE, 1, VECTOR_SID, buildJsonObject { put("reason", reason) })
@@ -225,6 +336,7 @@ class PairingClientTest {
         )
         const val VALID_PAYLOAD =
             """{"v":1,"t":"zfc","h":["192.168.1.42","192.168.137.1"],"p":52341,"s":"Jm1LIOO4mWm0lRSSl2fClw","k":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","e":1758300000}"""
+        const val VALID_SECRET_B64URL = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     }
 }
 

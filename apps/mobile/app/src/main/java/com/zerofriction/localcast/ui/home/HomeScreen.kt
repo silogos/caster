@@ -85,6 +85,15 @@ import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.debug.DebugTestTone
+import com.zerofriction.localcast.pairing.DeviceIdentity
+import com.zerofriction.localcast.pairing.PairingClient
+import com.zerofriction.localcast.pairing.PairingError
+import com.zerofriction.localcast.pairing.SavedDesktops
+import com.zerofriction.localcast.pairing.KeystoreTrustVault
+import com.zerofriction.localcast.pairing.defaultSignalingScheduler
+import com.zerofriction.localcast.pairing.defaultTransportFactory
+import com.zerofriction.localcast.ui.pairing.defaultUserAgent
+import com.zerofriction.localcast.pairing.applyGrant
 import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
@@ -123,11 +132,12 @@ import kotlinx.coroutines.delay
 fun HomeScreen(
     onOpenSettings: () -> Unit,
     onDisconnected: () -> Unit,
-    viewModel: HomeViewModel = viewModel(),
+    viewModel: HomeViewModel = viewModel(factory = homeFactory()),
     settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory()),
 ) {
     val context = LocalContext.current
     val castState by viewModel.castState.collectAsStateWithLifecycle()
+    val pairingState by viewModel.pairingState.collectAsStateWithLifecycle()
     val connection by ConnectedDesktop.state.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
@@ -140,6 +150,21 @@ fun HomeScreen(
     // No pairing session → nothing to show here: back to the scan screen.
     LaunchedEffect(connection) {
         if (connection is ConnectedDesktop.State.None) onDisconnected()
+    }
+
+    // The resume machine's outcomes (ADR-006): a reconnected session is
+    // adopted into the hub exactly like a scan pairing; a forgotten session
+    // (desktop `bye forget` / unknown-device) drops the saved entry and the
+    // None-effect above leads back to the scanner.
+    LaunchedEffect(pairingState) {
+        when (val ps = pairingState) {
+            is PairingClient.State.Connected ->
+                viewModel.releaseSignalingClient()?.let { ConnectedDesktop.adopt(it, ps.desktopName) }
+
+            is PairingClient.State.Failed -> if (ps.error == PairingError.DESKTOP_FORGOT) viewModel.forgetSaved()
+            PairingClient.State.Ended -> viewModel.forgetSaved()
+            else -> {}
+        }
     }
 
     // ---- The share consent ladder (mobile.md): every grant is non-fatal —
@@ -190,6 +215,7 @@ fun HomeScreen(
     HomeContent(
         castState = castState,
         connection = connection,
+        pairingState = pairingState,
         gameAudioState = gameAudioState,
         micState = micState,
         thermalState = thermalState,
@@ -241,6 +267,15 @@ fun HomeScreen(
         },
         onStopShareScreen = { CastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
+        onConnectSaved = { viewModel.connectSaved() },
+        onScanQr = {
+            viewModel.prepareForScan()
+            onDisconnected()
+        },
+        onForgetSaved = {
+            viewModel.forgetSaved()
+            onDisconnected()
+        },
         onOpenSettings = onOpenSettings,
     )
 }
@@ -249,6 +284,7 @@ fun HomeScreen(
 fun HomeContent(
     castState: CastState,
     connection: ConnectedDesktop.State = ConnectedDesktop.State.Connected("Gaming PC"),
+    pairingState: PairingClient.State = PairingClient.State.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
     thermalState: ThermalState = ThermalState(),
@@ -267,10 +303,19 @@ fun HomeContent(
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
+    onConnectSaved: () -> Unit = {},
+    onScanQr: () -> Unit = {},
+    onForgetSaved: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val casting = castState is CastState.Casting
     val annunc = annunciatorFor(castState)
+    val connected = connection is ConnectedDesktop.State.Connected
+    val saved = connection as? ConnectedDesktop.State.Saved
+    val reconnecting = pairingState is PairingClient.State.Connecting ||
+        pairingState is PairingClient.State.Authenticating ||
+        pairingState is PairingClient.State.Reconnecting
+    val resumeFailure = pairingState as? PairingClient.State.Failed
 
     // Surface (like the scan screen's Scaffold): paints the theme
     // background and provides contentColor — plain Columns default to
@@ -350,7 +395,9 @@ fun HomeContent(
         }
 
         // ---- Hero: the destination plate — name only, both states; the
-        // live timecode and quality readout live in the STATUS header. ----
+        // live timecode and quality readout live in the STATUS header. Saved
+        // but offline (ADR-006): the Disconnect slot becomes Connect — the
+        // one-tap QR-less reconnect. ----
         if (castState is CastState.Failed) {
             Spacer(Modifier.height(12.dp))
             CastCard {
@@ -358,14 +405,34 @@ fun HomeContent(
             }
         } else {
             OnAirHero(
-                desktopName = if (casting) {
-                    (castState as CastState.Casting).desktopName
-                } else {
-                    (connection as? ConnectedDesktop.State.Connected)?.desktopName
-                        ?: stringResource(R.string.home_not_connected)
+                desktopName = when {
+                    casting -> (castState as CastState.Casting).desktopName
+                    connected -> (connection as ConnectedDesktop.State.Connected).desktopName
+                    saved != null -> saved.desktopName
+                    else -> stringResource(R.string.home_not_connected)
                 },
+                saved = saved,
+                connecting = reconnecting,
+                onConnect = onConnectSaved,
                 onDisconnect = onDisconnect,
             )
+        }
+
+        // ---- A failed reconnect (ADR-06): why it failed, plus the two
+        // escapes — scan a QR instead, or forget this desktop entirely (the
+        // saved entry is kept on plain failures: the desktop may just be off).
+        if (resumeFailure != null && !connected) {
+            Spacer(Modifier.height(8.dp))
+            CastCard {
+                IconListRow(iconRes = R.drawable.ic_warning, title = resumeFailureMessage(resumeFailure.error), err = true)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
+                ) {
+                    CastTextButton(text = stringResource(R.string.home_scan_qr), onClick = onScanQr)
+                    CastTextButton(text = stringResource(R.string.home_forget_desktop), onClick = onForgetSaved)
+                }
+            }
         }
 
         // ---- The transport control: amber to go, outlined to stop ----
@@ -382,6 +449,9 @@ fun HomeContent(
             // mobile.md consent affordance (Android 14+): the dialog shown
             // during this window defaults to the cast-killing choice.
             HintText(stringResource(R.string.share_full_screen_hint))
+        } else if (!connected && !casting) {
+            // Saved/offline (ADR-006): no Share button — the hero's Connect
+            // leads; casting needs a live pairing first.
         } else {
             val goShape = RoundedCornerShape(16.dp)
             if (casting) {
@@ -518,12 +588,16 @@ fun HomeContent(
 
 /**
  * The hero (the prototype's .hero) — the destination plate: desktop name +
- * Disconnect, wordless state-wise in both states. The app-bar annunciator
- * owns the state words; the STATUS header owns the timecode/readout.
+ * its one action. Connected: Disconnect (as before). Saved/offline (ADR-006):
+ * the same slot becomes Connect — one tap resumes without a QR; while a
+ * reconnect is in flight it reads Connecting… and is disabled.
  */
 @Composable
 private fun OnAirHero(
     desktopName: String,
+    saved: ConnectedDesktop.State.Saved?,
+    connecting: Boolean,
+    onConnect: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     Row(
@@ -542,9 +616,28 @@ private fun OnAirHero(
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(12.dp))
-        CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
+        if (saved != null) {
+            CastTextButton(
+                text = stringResource(if (connecting) R.string.home_connecting else R.string.home_connect),
+                onClick = onConnect,
+                quiet = true,
+            )
+        } else {
+            CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
+        }
     }
 }
+
+/** A failed reconnect's plain-words reason (pairing.md failure table). */
+@Composable
+private fun resumeFailureMessage(error: PairingError): String = stringResource(
+    when (error) {
+        PairingError.CONNECT_UNREACHABLE -> R.string.pairing_error_connect_unreachable
+        PairingError.BUSY -> R.string.pairing_error_busy
+        PairingError.DESKTOP_FORGOT -> R.string.pairing_error_desktop_forgotten
+        else -> R.string.pairing_error_bad_auth
+    }
+)
 
 /** The bar's annunciator states — machine words (designs/mobile-app.html). */
 internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) {
@@ -814,6 +907,35 @@ private fun DebugToneButton(topDivider: Boolean) {
 }
 
 private const val TAG = "HomeScreen"
+
+/**
+ * The Home's ViewModels, injected once (ADR-006): the saved-desktop store
+ * (Keystore-sealed) and the resume pairing machine — the machine writes every
+ * granted/refreshed desktop identity straight into the store.
+ */
+@Composable
+private fun homeFactory(): ViewModelProvider.Factory {
+    val context = LocalContext.current
+    return remember(context) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val appContext = context.applicationContext
+                val store = SavedDesktops(appContext, KeystoreTrustVault())
+                return HomeViewModel(
+                    savedDesktops = store,
+                    pairingClient = PairingClient(
+                        ::defaultTransportFactory,
+                        ::defaultSignalingScheduler,
+                        ::defaultUserAgent,
+                        deviceIdProvider = { DeviceIdentity.id(appContext) },
+                        onDesktopIdentity = { name, grant -> store.applyGrant(grant, name) },
+                    ),
+                ) as T
+            }
+        }
+    }
+}
 
 /** The settings store, injected once — the Home's audio rows persist through it. */
 @Composable

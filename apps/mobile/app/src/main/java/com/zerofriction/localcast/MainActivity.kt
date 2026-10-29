@@ -28,16 +28,21 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
+        // Persistent session (ADR-006): a saved desktop means the hub leads —
+        // Home with its one-tap Connect. No store (or an unusable one) keeps
+        // the scan-first flow.
+        ConnectedDesktop.hydrateSaved(this)
         setContent {
             LocalCastTheme {
                 // Scan-first (designs/mobile-app.html): a fresh launch opens on
-                // the scanner — unless a pairing session is already live: the
-                // session/cast live in the process (ConnectedDesktop /
-                // CastService statics), so reopening the app (notification,
-                // launcher, back-then-again) lands on the Home hub, never on
-                // the scanner. Plain state-based navigation, no nav library
-                // (docs/development/mobile.md: add libraries when the need is
-                // real).
+                // the scanner — unless a pairing session is already live or
+                // saved: the session/cast live in the process
+                // (ConnectedDesktop / CastService statics), and the saved
+                // desktop lives in the trust store — so reopening the app
+                // (notification, launcher, back-then-again) lands on the Home
+                // hub, never on the scanner. Plain state-based navigation, no
+                // nav library (docs/development/mobile.md: add libraries when
+                // the need is real).
                 var screen by rememberSaveable { mutableStateOf(initialScreen()) }
                 when (screen) {
                     SCREEN_SCAN -> ScanScreen(onPaired = { screen = SCREEN_HOME })
@@ -61,8 +66,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun initialScreen(): String {
         val connected = ConnectedDesktop.state.value is ConnectedDesktop.State.Connected
+        val saved = ConnectedDesktop.state.value is ConnectedDesktop.State.Saved
         val casting = CastService.state.value is CastState.Starting || CastService.state.value is CastState.Casting
-        return if (connected || casting) SCREEN_HOME else SCREEN_SCAN
+        return if (connected || saved || casting) SCREEN_HOME else SCREEN_SCAN
     }
 
     companion object {

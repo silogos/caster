@@ -1,9 +1,14 @@
 package com.zerofriction.localcast.signaling
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -285,6 +290,147 @@ class SignalingClientTest {
 }
 
 /** Scripts the desktop's side of the transport; records everything the phone sends. */
+/**
+ * Persistent-session tests (pairing.md §Persistent sessions, ADR-006): the
+ * resume client sends hello {resume} keyed by the stored trustKey, has no
+ * expiry — its reconnect ladder is bounded — and understands unknown-device.
+ */
+class SignalingClientResumeTest {
+
+    private lateinit var fake: FakeTransport
+    private lateinit var scheduler: FakeScheduler
+    private lateinit var client: SignalingClient
+    private val events = mutableListOf<SignalingClient.Event>()
+    private val trustKey = Handshake.deriveTrustKey(Handshake.decodeSecret(VECTOR_SECRET_B64URL), VECTOR_SID)
+
+    private fun setUp() {
+        fake = FakeTransport()
+        scheduler = FakeScheduler()
+        events.clear()
+        client = SignalingClient(
+            hosts = listOf("192.168.1.42"),
+            port = 52341,
+            sessionId = DEVICE_ID,
+            secret = trustKey,
+            userAgent = "ZeroFrictionCast/0.1.0 (Android 16; TB321FU)",
+            deviceId = DEVICE_ID,
+            expiresAtUnixSeconds = null, // trusted: no expiry (ADR-006)
+            transport = fake,
+            scheduler = scheduler,
+            resume = true,
+        )
+        client.connect { events += it }
+    }
+
+    private fun authorizeResume() {
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, DEVICE_ID, buildJsonObject { put("n", VECTOR_NONCE) })
+        )
+        fake.sentFrames.removeFirstOrNull() // auth
+        fake.listener?.onTransportText(authOkResumeFrame())
+    }
+
+    private fun authOkResumeFrame(): String = EnvelopeCodec.encode(
+        Envelope.TYPE_AUTH_OK,
+        2,
+        DEVICE_ID,
+        buildJsonObject {
+            put("name", "test-desktop")
+            put("proto", 1)
+            put("desktopId", "desktop-uuid-1")
+            put("hosts", JsonArray(listOf(JsonPrimitive("192.168.1.50"))))
+        },
+    )
+
+    @Test
+    fun `hello carries resume with the deviceId as sid, and auth is keyed by the trustKey`() {
+        setUp()
+        fake.listener?.onTransportOpen()
+
+        val hello = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_HELLO, hello.type)
+        assertEquals(DEVICE_ID, hello.sid)
+        assertEquals(true, hello.payload["resume"]?.jsonPrimitive?.booleanOrNull)
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, DEVICE_ID, buildJsonObject { put("n", VECTOR_NONCE) })
+        )
+        val auth = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Handshake.computeMac(trustKey, DEVICE_ID, VECTOR_NONCE), auth.payload["mac"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `auth-ok on the resume path grants the identity without a derived key`() {
+        setUp()
+        authorizeResume()
+
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+        val authorized = events.filterIsInstance<SignalingClient.Event.Authorized>().single()
+        assertEquals("test-desktop", authorized.desktopName)
+        val grant = authorized.trust
+        assertEquals("desktop-uuid-1", grant?.desktopId)
+        assertEquals(listOf("192.168.1.50"), grant?.hosts)
+        assertEquals(52341, grant?.port)
+        assertNull(grant?.trustKey) // the key is already stored — nothing to derive
+    }
+
+    @Test
+    fun `unknown-device is a terminal failure mapped to UNKNOWN_DEVICE`() {
+        setUp()
+        fake.listener?.onTransportOpen()
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_ERROR, 1, DEVICE_ID, buildJsonObject { put("code", "unknown-device") })
+        )
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.UNKNOWN_DEVICE),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+    }
+
+    @Test
+    fun `a trusted reconnect ladder is bounded — it ends in unreachable, not forever`() {
+        setUp()
+        authorizeResume()
+
+        // Drive every ladder step to a failed attempt; the 10th (per the
+        // named constant) gives up instead of scheduling another retry.
+        fake.listener?.onTransportClosed(1000, "desktop off")
+        repeat(SignalingClient.TRUSTED_RECONNECT_MAX_ATTEMPTS - 1) {
+            assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+            scheduler.advance(scheduler.nextDelayMs()!!)
+            fake.listener?.onTransportFailure(RuntimeException("still off"))
+        }
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+
+        // The final scheduled attempt fails too — no further retry is posted.
+        scheduler.advance(scheduler.nextDelayMs()!!)
+        fake.listener?.onTransportFailure(RuntimeException("still off"))
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.CONNECT_UNREACHABLE),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    private fun parseFrame(raw: String?): Envelope {
+        assertTrue(raw != null)
+        return (EnvelopeCodec.parse(raw!!) as EnvelopeParseResult.Valid).envelope
+    }
+
+    private companion object {
+        const val DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
+        const val VECTOR_SID = "Jm1LIOO4mWm0lRSSl2fClw"
+        const val VECTOR_NONCE = "EBESExQVFhcYGRobHB0eHw"
+        const val VECTOR_SECRET_B64URL = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    }
+}
+
 private class FakeTransport : SignalingTransport {
 
     val sentFrames = ArrayDeque<String>()

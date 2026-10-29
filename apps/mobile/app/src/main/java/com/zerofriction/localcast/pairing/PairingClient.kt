@@ -4,6 +4,7 @@ import android.util.Log
 import com.zerofriction.localcast.signaling.Handshake
 import com.zerofriction.localcast.signaling.HandlerSignalingScheduler
 import com.zerofriction.localcast.signaling.OkHttpSignalingTransport
+import com.zerofriction.localcast.signaling.ByeReasons
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.signaling.SignalingError
 import com.zerofriction.localcast.signaling.SignalingScheduler
@@ -32,6 +33,14 @@ class PairingClient(
      * accepts; the real app always injects it (ScanScreen's VM factory).
      */
     private val deviceIdProvider: (() -> String)? = null,
+    /**
+     * Persistent session (ADR-006): invoked after every successful auth that
+     * the desktop identified itself in — first pairings carry the derived
+     * trustKey (a full save), resume re-auths carry refreshed hosts/port only.
+     * The UI factories wire this to [SavedDesktops]; keeping it a callback
+     * leaves this machine Context-free and JVM-testable.
+     */
+    private val onDesktopIdentity: ((desktopName: String, grant: SignalingClient.Event.TrustGrant) -> Unit)? = null,
 ) {
     sealed interface State {
         data object Idle : State
@@ -119,6 +128,7 @@ class PairingClient(
                 SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
                 is SignalingClient.Event.Authorized -> {
                     lastDesktopName = event.desktopName
+                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, grant) }
                     _state.value = State.Connected(event.desktopName)
                 }
                 is SignalingClient.Event.Reconnecting ->
@@ -137,9 +147,62 @@ class PairingClient(
         client.connect(handler)
     }
 
-    /** User-initiated end: sends `bye`; the desktop returns to a fresh QR. */
+    /**
+     * Reconnect to the saved desktop without a QR (ADR-006): hello carries
+     * `resume: true`, the envelope sid is this install's deviceId and the
+     * stored trustKey answers the challenge. No expiry — [SignalingClient]
+     * bounds the reconnect ladder instead.
+     */
+    fun startSaved(saved: SavedDesktop, trustKey: ByteArray) {
+        reset()
+        val deviceId = deviceIdProvider?.invoke()
+        if (deviceId == null) {
+            Log.w(TAG, "resume needs an install deviceId — falling back to re-scan")
+            _state.value = State.Failed(PairingError.DESKTOP_FORGOT)
+            return
+        }
+        _state.value = State.Connecting
+
+        val client = SignalingClient(
+            hosts = saved.hosts,
+            port = saved.port,
+            sessionId = deviceId,
+            secret = trustKey,
+            userAgent = userAgentProvider(),
+            deviceId = deviceId,
+            expiresAtUnixSeconds = null,
+            transport = transportFactory(),
+            scheduler = schedulerFactory(),
+            resume = true,
+        )
+        signaling = client
+        val handler: (SignalingClient.Event) -> Unit = { event ->
+            when (event) {
+                SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
+                is SignalingClient.Event.Authorized -> {
+                    lastDesktopName = event.desktopName
+                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, grant) }
+                    _state.value = State.Connected(event.desktopName)
+                }
+                is SignalingClient.Event.Reconnecting ->
+                    _state.value = State.Reconnecting(lastDesktopName)
+                is SignalingClient.Event.SdpAnswer,
+                is SignalingClient.Event.IceCandidate,
+                -> Unit // media plumbing — consumed by the webrtc module
+                is SignalingClient.Event.SessionEnded -> {
+                    lastDesktopName = null
+                    _state.value = State.Ended
+                }
+                is SignalingClient.Event.Failed -> _state.value = State.Failed(PairingError.fromSignaling(event.error))
+            }
+        }
+        eventHandler = handler
+        client.connect(handler)
+    }
+
+    /** User-initiated end: sends `bye forget` — the desktop revokes the saved session too (ADR-006). */
     fun disconnect() {
-        signaling?.disconnect()
+        signaling?.disconnect(ByeReasons.FORGET)
         eventHandler = null
         signaling = null
         _state.value = State.Idle
@@ -179,6 +242,9 @@ enum class PairingError {
 
     /** "Desktop app is newer/older — please update." (negotiation-level mismatch) */
     BAD_VERSION,
+
+    /** "This desktop no longer remembers this phone. Scan the QR code to pair again." (ADR-006) */
+    DESKTOP_FORGOT,
     ;
 
     companion object {
@@ -193,6 +259,7 @@ enum class PairingError {
             SignalingError.BAD_AUTH -> BAD_AUTH
             SignalingError.BUSY -> BUSY
             SignalingError.BAD_VERSION -> BAD_VERSION
+            SignalingError.UNKNOWN_DEVICE -> DESKTOP_FORGOT
         }
     }
 }

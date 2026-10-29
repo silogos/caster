@@ -5,9 +5,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonArray
 
 /**
  * Message envelope for the signaling WebSocket — docs/architecture/webrtc.md.
@@ -69,8 +71,20 @@ object ErrorCodes {
     const val BUSY = "busy"
     const val BAD_VERSION = "bad-version"
 
+    /** The desktop no longer trusts this phone (pairing.md §Persistent sessions) — re-scan. */
+    const val UNKNOWN_DEVICE = "unknown-device"
+
     /** Recoverable (webrtc.md): the connection stays open after it. */
     const val BAD_MESSAGE = "bad-message"
+}
+
+/** Reserved `bye` reasons (pairing.md §Persistent sessions, ADR-006). */
+object ByeReasons {
+    /** End the cast/session AND revoke the persistent trust — what Disconnect sends. */
+    const val FORGET = "forget"
+
+    /** End the session but keep the trust (e.g. a stopping cast) — one-tap reconnect stays. */
+    const val USER_ENDED = "user-ended"
 }
 
 object EnvelopeCodec {
@@ -111,9 +125,10 @@ object Payloads {
      * never an auth secret; the desktop must accept handshakes without it,
      * so null simply omits the key.
      */
-    fun hello(userAgent: String, deviceId: String?, protoMin: Int, protoMax: Int): JsonObject = buildJsonObject {
+    fun hello(userAgent: String, deviceId: String?, protoMin: Int, protoMax: Int, resume: Boolean = false): JsonObject = buildJsonObject {
         put("ua", userAgent)
         if (deviceId !== null) put("deviceId", deviceId)
+        if (resume) put("resume", true)
         put("protoMin", protoMin)
         put("protoMax", protoMax)
     }
@@ -139,6 +154,16 @@ object Payloads {
 
     fun authOkProto(envelope: Envelope): Int? =
         envelope.payload["proto"]?.jsonPrimitive?.content?.toIntOrNull()
+
+    /** The desktop's persistent UUID (pairing.md §Persistent sessions) — null on older desktops. */
+    fun authOkDesktopId(envelope: Envelope): String? =
+        envelope.payload["desktopId"]?.jsonPrimitive?.content
+
+    /** The desktop's current LAN candidates from auth-ok — empty when absent. */
+    fun authOkHosts(envelope: Envelope): List<String> =
+        (envelope.payload["hosts"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.content }
+            .orEmpty()
 
     fun errorCode(envelope: Envelope): String? =
         envelope.payload["code"]?.jsonPrimitive?.content

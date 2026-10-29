@@ -57,9 +57,27 @@ The Phase 3 machinery was correct but the screens were bare. Both sides now rend
 - **Mobile**: JVM tests 126/126 — 4 new `ScanViewModelTest` behaviors (instant `Connecting` after a scan, in-flight/connected scans ignored, failed pairing accepts a fresh scan, handover releases the live connection, disconnect returns to the scanner); `assembleDebug` green.
 - **Remaining (needs the phone in hand)**: the live rescan paths — scan → "Desktop found" → Connected → Start Cast on the real device, and each failure mode seen for itself (expired QR after 10 min, wrong Wi-Fi, busy desktop). The strings are the already-verified Phase3 mapping; only the presentation changed.
 
+## Persistent pairing session: reconnect without a QR (ADR-006, 2026-10-30)
+
+Shipped 2026-10-30. One QR pairing now establishes a **persistent session** remembered by both sides until either Disconnect is pressed. Full decision record, protocol, and threat-model trade: [ADR-006](../decisions/ADR-006-persistent-trust-sessions.md), [pairing.md](../architecture/pairing.md) §Persistent sessions.
+
+### What shipped
+
+- **Trust without transmission**: both sides derive `trustKey = HKDF-SHA256(k, s, "zfc-trust-v1")` locally after the first successful handshake; the key never crosses the wire. Re-pairing rotates it.
+- **Resume handshake**: `hello {resume:true}` with `sid = deviceId`; the desktop verifies against its trust store (`signalingServer.ts`), answers the new `unknown-device` error when it no longer knows the phone, and closes the bypassed QR session (a photographed old code can't piggyback). `auth-ok` now carries `desktopId` + current `hosts` so the phone's entry stays fresh.
+- **Desktop**: `TrustStore` (`trust.json`, userData, 0600, corrupt→empty) + persistent `desktopId`; startup goes straight to the **"No input video"** receiver stage (with its new **Disconnect** button — the only way trust ends, `bye forget`) whenever a phone is trusted; the QR hero remains the un-trusted screen. `bye forget`/Disconnect return to the QR hero; a plain bye with trust keeps the no-input stage.
+- **Mobile**: `SavedDesktops` (one desktop, versioned JSON in SharedPreferences) + `TrustVault` (Android Keystore AES-GCM sealing — backups carry no usable key); the Home hero's Disconnect morphs into **Connect** when offline (`PairingClient.startSaved`); reconnects run a bounded 10-step ladder (~3 min) then fail unreachable **keeping the entry**, with "Scan QR code" / "Forget this desktop" escapes on the failure card; Disconnect sends `bye forget` and clears the store both sides; `unknown-device` auto-drops the entry back to the scan flow; notification Stop and cast failures keep the session (`ConnectedDesktop` lands in `Saved`).
+- **Protocol**: QR payload `v` and `proto` stay 1 — everything is documented optional fields (`hello.resume`, `auth-ok.desktopId`/`hosts`, error `unknown-device`, reserved `bye` reason `forget`), per the ADR-005 additive precedent. An older desktop answers `unknown-session` to a resume hello and the phone falls back to scanning.
+
+### Verification
+
+- **Desktop**: typecheck green; vitest **136/136** (new: `trustStore.test.ts` — round-trip/corrupt-degrade/0600/rotation; `signalingResume.test.ts` — 8 loopback tests over real sockets: trust written on QR pair + auth-ok fields, resume after the QR session is gone, `unknown-device`, `busy` while authorized, wrong-key `bad-auth` + rate-limit, `bye forget` revoke, plain-bye keep, re-pair rotation, malformed `resume` flag; HKDF cross-platform vectors in `handshake.test.ts`); production build green.
+- **Mobile**: JVM **207/207** (new: `HandshakeTest` HKDF mirror vectors, `SavedDesktopCodecTest` round-trip/degrade, `PairingClientTest` — resume hello shape/trust-key mac/grant with derived key on QR and identity-only grant on resume/`unknown-device`→`DESKTOP_FORGOT`/`bye forget` on disconnect, `SignalingClientResumeTest` — resume wire shape, grant without key, `unknown-device` mapping, bounded ladder ending unreachable); `assembleDebug` green.
+- **Remaining (needs both devices in hand)**: the on-device matrix — pair once → kill & relaunch the desktop (opens on No-input + Disconnect) → phone Home **Connect** → cast without any QR; mobile Disconnect → desktop QR hero; desktop Disconnect → phone Connect falls back to scan automatically; notification Stop keeps the session; Wi-Fi blip mid-cast auto-reconnects; unreachable desktop → bounded failure card with the escapes.
+
 ## Known limitations (by design in this phase)
 
-- The mobile session lives with the scan screen until a cast starts — the connection is then handed to the cast service (Phase 6, [cast-session.md](cast-session.md)).
+- ~~The mobile session lives with the scan screen~~ — since Phase 6 the cast service owns it, and since the persistent-pairing feature (ADR-006) the saved session outlives everything but Disconnect ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)).
 - Heartbeat, backoff reconnect and mDNS/host-candidate plumbing landed in **Phase 4** — see [signaling.md](signaling.md).
 - On a Wi-Fi drop after auth, the mobile now auto-reconnects with backoff (Phase 4); the desktop's reconnect window had existed server-side since this phase.
 - Desktop status for "connection lost while authorized" is just "Waiting for mobile device…" (the reconnect window stays open until expiry, but the desktop does not yet visualize it distinctly).

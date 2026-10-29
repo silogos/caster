@@ -2,7 +2,8 @@ import type {
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
-  SignalingSdpMessage
+  SignalingSdpMessage,
+  TrustedDeviceView
 } from './types'
 
 /**
@@ -14,6 +15,10 @@ export const IPC = {
   pairing: {
     /** Renderer asks the main process for the current pairing session. */
     getSession: 'pairing:get-session',
+    /** Renderer asks whether a phone is trusted (startup stage, ADR-006). */
+    getTrustedDevice: 'pairing:get-trusted-device',
+    /** Renderer → main: revoke the trust and return to the QR hero (Disconnect). */
+    disconnect: 'pairing:disconnect',
     /** Renderer asks the main process to regenerate the session (new QR). */
     regenerate: 'pairing:regenerate',
     /** Push: the pairing session changed (fresh QR), or null when creation failed. */
@@ -54,6 +59,10 @@ export const IPC = {
 
 export interface DesktopApi {
   getPairingSession(): Promise<PairingSessionView>
+  /** The trusted phone, if any — the startup stage keys on it (ADR-006). */
+  getTrustedDevice(): Promise<TrustedDeviceView | null>
+  /** Revoke the trusted phone and return to the QR hero (Disconnect button). */
+  disconnectDesktop(): void
   regeneratePairingSession(): Promise<PairingSessionView>
   /** Subscribes to session changes; returns an unsubscribe function. */
   onPairingSessionUpdated(listener: (session: PairingSessionView | null) => void): () => void

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createNonce, computeMac, verifyMac, negotiateProtocol, NONCE_BYTES } from './handshake'
+import { createNonce, computeMac, deriveTrustKey, negotiateProtocol, verifyMac, NONCE_BYTES } from './handshake'
 import type { HelloPayload } from './envelope'
 
 // Cross-platform interop vector: the identical values and expected mac are
@@ -9,6 +9,16 @@ const VECTOR_SECRET_B64URL = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
 const VECTOR_SID = 'Jm1LIOO4mWm0lRSSl2fClw'
 const VECTOR_NONCE = 'EBESExQVFhcYGRobHB0eHw'
 const VECTOR_MAC = 'cPTgkuJCjSp2z9MZyxVs-QtHs8fCYrMN7s-k0YfyXZQ'
+
+// Cross-platform HKDF vector for the persistent trust key (ADR-006): the same
+// inputs and expected trustKey are mirrored in the mobile's HandshakeTest —
+// both derivations must agree or a saved session could never resume.
+const TRUST_VECTOR_SECRET_B64URL = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY'
+const TRUST_VECTOR_SID = 'sess'
+const TRUST_VECTOR_KEY_B64URL = 'Hng10A_e7L4UF8QKc5Tf_Lv-Ut2wijkNvFFuqWaKfhU'
+const TRUST_VECTOR2_SECRET_HEX = '9f2c7be14ad83a05c6f1b29e4d7a83c0b5e1962d483fc7abe1d05f92c38b7a41'
+const TRUST_VECTOR2_SID = 'c2Vzc2lvbi1pZA'
+const TRUST_VECTOR2_KEY_B64URL = 'GsBUjq7GFfivYpQyGAa4pYNgbBkFiFDfjK8KpCFRoF4'
 
 describe('handshake crypto (pairing.md / ADR-002)', () => {
   it('matches the cross-platform HMAC-SHA256 vector', () => {
@@ -33,6 +43,21 @@ describe('handshake crypto (pairing.md / ADR-002)', () => {
     expect(Buffer.from(first, 'base64url')).toHaveLength(NONCE_BYTES)
     expect(first).toMatch(/^[A-Za-z0-9_-]+$/)
     expect(first).not.toBe(second)
+  })
+
+  it('matches the cross-platform HKDF trust-key vectors (ADR-006)', () => {
+    expect(deriveTrustKey(Buffer.from(TRUST_VECTOR_SECRET_B64URL, 'base64url'), TRUST_VECTOR_SID).toString('base64url'))
+      .toBe(TRUST_VECTOR_KEY_B64URL)
+    expect(deriveTrustKey(Buffer.from(TRUST_VECTOR2_SECRET_HEX, 'hex'), TRUST_VECTOR2_SID).toString('base64url'))
+      .toBe(TRUST_VECTOR2_KEY_B64URL)
+  })
+
+  it('derives 32 bytes that depend on both the secret and the session id', () => {
+    const secret = Buffer.from(TRUST_VECTOR_SECRET_B64URL, 'base64url')
+    const key = deriveTrustKey(secret, TRUST_VECTOR_SID)
+    expect(key).toHaveLength(32)
+    expect(deriveTrustKey(secret, 'other-sid').equals(key)).toBe(false)
+    expect(deriveTrustKey(Buffer.alloc(32, 7), TRUST_VECTOR_SID).equals(key)).toBe(false)
   })
 
   it('negotiates the highest mutually supported protocol version', () => {

@@ -142,6 +142,12 @@ body {
   color: var(--fg-muted);
 }
 
+/* Phase19 (ADR-006): the trusted session's only exit — revoke and return to
+   the QR hero. Same quiet button language as "New QR code". */
+.no-input-disconnect {
+  margin-top: 4px;
+}
+
 /* Receiver/environment control only (overview.md) — the desktop exposes no
    cast settings; regenerating the pairing QR is the one allowed action. */
 .button {

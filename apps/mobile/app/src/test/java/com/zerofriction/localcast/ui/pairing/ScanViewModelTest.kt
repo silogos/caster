@@ -23,7 +23,7 @@ import org.junit.Test
 class ScanViewModelTest {
 
     private fun newViewModel(fake: FakeTransport): ScanViewModel {
-        val pairing = PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }) { TEST_DEVICE_ID }
+        val pairing = PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }, deviceIdProvider = { TEST_DEVICE_ID })
         return ScanViewModel(pairing, MutableStateFlow(CastState.Idle))
     }
 

@@ -30,6 +30,7 @@ import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.config.PROFILE_CUSTOM
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
+import com.zerofriction.localcast.signaling.ByeReasons
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.thermal.ThermalMonitor
 import com.zerofriction.localcast.thermal.ThermalSource
@@ -334,7 +335,9 @@ class CastService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_DISCONNECT -> {
-                endCast(keepSession = false)
+                // "Disconnect" revokes the persistent session too (ADR-006):
+                // `bye forget` + the saved desktop cleared on both sides.
+                endCast(keepSession = false, forget = true)
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE_GAME_AUDIO -> {
@@ -748,8 +751,10 @@ class CastService : Service() {
         _state.value = CastState.Failed(shown)
         // The pairing session survives a cast-only failure (projection
         // revoked, a pipeline error — the desktop is fine, a retry needs no
-        // new scan); it is dead when the desktop ended it or the connection
-        // was lost — the user must rescan.
+        // new scan). The socket is dead when the desktop ended it or the
+        // connection was lost — but since ADR-006 the *saved session* survives
+        // those too (unless the desktop's bye was `forget`, which the holder
+        // clears itself): Home offers a one-tap Connect instead of a rescan.
         endCast(keepSession = failure !== MediaCastSession.Failure.DesktopEnded && failure !== MediaCastSession.Failure.ConnectionLost)
     }
 
@@ -765,7 +770,7 @@ class CastService : Service() {
      * a dead session, a system kill) sends `bye`/closes the socket and the
      * user rescans.
      */
-    private fun endCast(keepSession: Boolean) {
+    private fun endCast(keepSession: Boolean, forget: Boolean = false) {
         session?.stop()
         session = null
         micSession?.stop()
@@ -779,14 +784,18 @@ class CastService : Service() {
         signaling = null
         if (keepSession && currentSignaling !== null) {
             ConnectedDesktop.adopt(currentSignaling, currentDesktopName)
-        } else {
-            // "Disconnect" (or a dead session): end the pairing too — `bye`
-            // invalidates it on the desktop (fresh QR there) and the mobile
-            // rescans. The socket may be held by this cast OR still by
-            // [ConnectedDesktop] (a disconnect with no cast running) —
-            // [ConnectedDesktop.disconnect] byes whichever side owns it.
-            currentSignaling?.disconnect()
+        } else if (forget) {
+            // "Disconnect" (ADR-006): revoke the persistent session — `bye
+            // forget` on the cast's socket, and [ConnectedDesktop.disconnect]
+            // handles a socket it still owns plus the store clear on both sides.
+            currentSignaling?.disconnect(ByeReasons.FORGET)
             ConnectedDesktop.disconnect()
+        } else {
+            // A dead session (desktop ended it, connection lost, system kill):
+            // close the socket, but the saved session stays — Home shows a
+            // one-tap Connect instead of forcing a rescan.
+            currentSignaling?.disconnect()
+            ConnectedDesktop.transitionOffline()
         }
         config = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -815,7 +824,9 @@ class CastService : Service() {
         signaling?.let { current ->
             signaling = null
             current.disconnect()
-            ConnectedDesktop.clear()
+            // The process is dying; the saved session (ADR-006) survives it —
+            // a relaunch offers the one-tap Connect.
+            ConnectedDesktop.transitionOffline()
         }
         super.onDestroy()
     }
