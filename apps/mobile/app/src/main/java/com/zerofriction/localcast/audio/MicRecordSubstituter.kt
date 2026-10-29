@@ -47,7 +47,20 @@ class MicRecordSubstituter(
     private val adm: JavaAudioDeviceModule,
     /** The user's selected mic kind (settings); the built-in mic is the default and the fallback. */
     private val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
+    /**
+     * The effective routing after every (re)route — display plumbing for the
+     * Home screen's "Recording from …" line: the kind actually capturing and,
+     * when a selected kind wasn't connected, which kind fell back (null
+     * otherwise). Never audio state; the record itself is already routed.
+     */
+    private val onRouted: (effective: MicDeviceSource, fallbackFrom: MicDeviceSource?) -> Unit = { _, _ -> },
 ) {
+
+    /** The substituted record while it records — the live-reroute target. */
+    @Volatile private var activeTwin: AudioRecord? = null
+
+    /** The kind the user last selected (start or [reroute]) — the routing intent. */
+    @Volatile private var selected: MicDeviceSource = micDevice
 
     /** Called from the ADM's `onWebRtcAudioRecordStart` — its recording thread. */
     fun onRecordStart() {
@@ -70,6 +83,7 @@ class MicRecordSubstituter(
                 logDegrade("the twin record could not be initialized")
                 return
             }
+            selected = micDevice
             routeToSelectedMic(twin)
             twin.startRecording()
             if (twin.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -79,10 +93,31 @@ class MicRecordSubstituter(
             }
             recordField.set(audioInput, twin)
             stopAndRelease(stock)
+            activeTwin = twin
             Log.i(TAG, "privacy-insensitive mic record active (${twin.sampleRate} Hz, ${twin.channelCount} ch)")
         } catch (t: Throwable) {
             logDegrade("substitution failed: ${t.message}")
         }
+    }
+
+    /** The ADM's record stopped — the twin is gone; nothing to reroute anymore. */
+    fun onRecordStop() {
+        activeTwin = null
+    }
+
+    /**
+     * Reroute the **live** record to [source] — `setPreferredDevice` works on
+     * a running AudioRecord, so the input switches mid-cast with no session
+     * rebuild (the realtime half of the Home picker; the design doc is
+     * designs/mobile-app.html). False (a plain no-op) when no substituted
+     * record is live — below API30, a degraded substitution, or a stopped
+     * record — the caller then just keeps the setting for the next start.
+     */
+    fun reroute(source: MicDeviceSource): Boolean {
+        val twin = activeTwin ?: return false
+        selected = source
+        routeToSelectedMic(twin)
+        return true
     }
 
     /**
@@ -130,9 +165,13 @@ class MicRecordSubstituter(
     private fun routeToSelectedMic(record: AudioRecord) {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val devices = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        val targetType = MicDeviceResolver.resolveType(micDevice, devices.map { it.type })
-        if (micDevice != MicDeviceSource.BUILTIN && targetType == MicDeviceResolver.FALLBACK_TYPE) {
-            Log.i(TAG, "selected mic (${micDevice.label}) is not connected — routing to the built-in mic")
+        val targetType = MicDeviceResolver.resolveType(selected, devices.map { it.type })
+        val effective = MicDeviceResolver.kindForType(targetType)
+        val fallbackFrom = if (selected != MicDeviceSource.BUILTIN && effective == MicDeviceSource.BUILTIN) {
+            Log.i(TAG, "selected mic (${selected.label}) is not connected — routing to the built-in mic")
+            selected
+        } else {
+            null
         }
         val target = devices.firstOrNull { it.type == targetType } ?: run {
             Log.w(TAG, "no input device of type $targetType found — default routing stays")
@@ -140,6 +179,7 @@ class MicRecordSubstituter(
         }
         if (record.setPreferredDevice(target)) {
             Log.i(TAG, "cast mic routed to input device type $targetType")
+            onRouted(effective, fallbackFrom)
         } else {
             logDegrade("the preferred mic device (type $targetType) was not accepted")
         }

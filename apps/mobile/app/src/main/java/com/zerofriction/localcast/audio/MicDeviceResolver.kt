@@ -51,4 +51,12 @@ object MicDeviceResolver {
         if (selected == MicDeviceSource.BUILTIN) return FALLBACK_TYPE
         return acceptedTypes(selected).firstOrNull { it in connectedTypes } ?: FALLBACK_TYPE
     }
+
+    /**
+     * The kind a routed device type belongs to — the reverse half the UI's
+     * "Recording from …" line needs (a wired type renders as the wired kind).
+     * Unknown types are the fallback kind, never a crash.
+     */
+    fun kindForType(type: Int): MicDeviceSource =
+        TYPES_BY_SOURCE.entries.firstOrNull { (_, types) -> type in types }?.key ?: MicDeviceSource.BUILTIN
 }

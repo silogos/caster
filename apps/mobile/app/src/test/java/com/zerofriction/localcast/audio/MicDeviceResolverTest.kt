@@ -70,4 +70,32 @@ class MicDeviceResolverTest {
         assertEquals(MicDeviceResolver.FALLBACK_TYPE, MicDeviceResolver.resolveType(MicDeviceSource.USB, connected))
         assertEquals(MicDeviceResolver.FALLBACK_TYPE, MicDeviceResolver.resolveType(MicDeviceSource.BLUETOOTH, connected))
     }
+
+    // ---- kindForType: the reverse half (the UI's "Recording from …" line) ----
+
+    @Test
+    fun `each accepted type maps back to its kind`() {
+        for (source in MicDeviceSource.entries) {
+            for (type in MicDeviceResolver.acceptedTypes(source)) {
+                assertEquals(source, MicDeviceResolver.kindForType(type))
+            }
+        }
+    }
+
+    @Test
+    fun `usb device types all render as the usb kind`() {
+        assertEquals(MicDeviceSource.USB, MicDeviceResolver.kindForType(AudioDeviceInfo.TYPE_USB_HEADSET))
+        assertEquals(MicDeviceSource.USB, MicDeviceResolver.kindForType(AudioDeviceInfo.TYPE_USB_DEVICE))
+    }
+
+    @Test
+    fun `the builtin type is the builtin kind`() {
+        assertEquals(MicDeviceSource.BUILTIN, MicDeviceResolver.kindForType(MicDeviceResolver.FALLBACK_TYPE))
+    }
+
+    @Test
+    fun `an unknown type degrades to the builtin kind`() {
+        // e.g. TYPE_TELEPHONY — an input type no kind accepts; never a crash.
+        assertEquals(MicDeviceSource.BUILTIN, MicDeviceResolver.kindForType(AudioDeviceInfo.TYPE_TELEPHONY))
+    }
 }

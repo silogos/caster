@@ -40,3 +40,6 @@ Thumbs.db
 
 # --- Local agent tooling ---
 .zcode/
+
+# signing secrets — never in the repo
+apps/mobile/keystore/

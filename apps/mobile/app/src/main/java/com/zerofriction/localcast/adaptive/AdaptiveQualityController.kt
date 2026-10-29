@@ -239,35 +239,61 @@ class AdaptiveQualityController(
         /** thermal.md Phase12: step down only on MODERATE and worse, never on LIGHT. */
         val THERMAL_TRIGGER_STATUS = ThermalStatus.MODERATE
 
-        /** thermal.md: "minutes, not seconds" of sustained heat before acting. */
-        const val THERMAL_HOLD_MS = 120_000L
+        /**
+         * thermal.md: "minutes, not seconds" of sustained heat before acting.
+         * Relaxed 120 → 180 s (second user-review pass): a gaming tablet
+         * lingers at MODERATE for long stretches while the cast looks fine —
+         * heat alone must not move the rung quickly.
+         */
+        const val THERMAL_HOLD_MS = 180_000L
 
-        /** Sustained stream trouble (drops/loss/RTT) before a step down. */
-        const val NET_HOLD_MS = 30_000L
+        /**
+         * Sustained stream trouble (drops/loss/RTT) before a step down.
+         * Relaxed twice on user review — 30 → 60 s with the v3 port, then
+         * 60 → 120 s after the first real gaming session: the policy moves
+         * only on a *bad two minutes*, never a bad minute.
+         */
+        const val NET_HOLD_MS = 120_000L
 
         /** Recovery needs a long clean stretch — the asymmetry that beats oscillation. */
         const val HEALTHY_HOLD_MS = 180_000L
 
-        /** Minimum spacing between any two steps, either direction. */
-        const val DWELL_MS = 90_000L
+        /**
+         * Minimum spacing between any two steps, either direction — the
+         * user's "give every step a pause of minutes": 90 → 180 s with the
+         * v3 port, then 180 → 300 s after the first real gaming session.
+         */
+        const val DWELL_MS = 300_000L
 
-        /** Per-tick dropped-frame fraction considered encoder stress (Phase5's ≈0.3% healthy baseline). */
-        const val DROPPED_FRACTION_BAD = 0.05
+        /**
+         * Per-tick dropped-frame fraction considered encoder stress (Phase5's
+         * ≈0.3% healthy baseline; relaxed 0.05 → 0.08 → 0.10 across the two
+         * user-review passes — brief drop bursts are common on real games).
+         */
+        const val DROPPED_FRACTION_BAD = 0.10
 
         /**
          * Fraction of wall time the encoder may sustain before it counts as
-         * overloaded (Phase18) — the leading encoder-stress signal. Shipped
-         * as a re-tunable hypothesis; the recorded evidence it must separate:
-         * the healthy rig ran 0.42–0.68 utilization (encode p50 19.5 ms/f ×
-         * 30 fps), the Phase16 fps-placebo era ran ~1.83 (61 fps × 30 ms/f —
-         * the case this signal exists to catch before frames drop).
+         * overloaded (Phase18) — the leading encoder-stress signal, still a
+         * re-tunable hypothesis. The recorded evidence it must separate: the
+         * healthy rig ran 0.42–0.68 utilization, the Phase16 fps-placebo era
+         * ~1.83 (the case this signal exists to catch before frames drop).
+         * Relaxed 0.85 → 0.90 → 0.95 across two user-review passes: demanding
+         * games sit high for long stretches while the stream looks fine —
+         * only a truly saturated encoder moves the rung.
          */
-        const val ENCODER_UTILIZATION_BAD = 0.85
+        const val ENCODER_UTILIZATION_BAD = 0.95
 
-        /** Remote receiver loss fraction considered a struggling link. */
-        const val PACKET_LOSS_FRACTION_BAD = 0.05
+        /**
+         * Remote receiver loss fraction considered a struggling link
+         * (relaxed 0.05 → 0.08 with the second user-review pass).
+         */
+        const val PACKET_LOSS_FRACTION_BAD = 0.08
 
-        /** RTT (ms) considered a struggling link — Phase5 measured 5–10 ms on a healthy LAN. */
-        const val RTT_BAD_MS = 100L
+        /**
+         * RTT (ms) considered a struggling link — Phase5 measured 5–10 ms on
+         * a healthy LAN (relaxed 100 → 150 ms: busy Wi-Fi breathes higher).
+         */
+        const val RTT_BAD_MS = 150L
     }
 }
