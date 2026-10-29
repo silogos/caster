@@ -48,10 +48,10 @@ import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderBitrateMode
 import com.zerofriction.localcast.config.EncoderImplementation
-import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.ui.components.CastCard
+import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.CastSwitch
 import com.zerofriction.localcast.ui.components.IconListRow
 import com.zerofriction.localcast.ui.components.SilkscreenLabel
@@ -165,41 +165,6 @@ fun ShareScreenSettingsSection(
         )
 
         CardFoot(R.string.settings_preset_sets_advanced_hint)
-    }
-}
-
-/**
- * One selectable entry of the mic device section: the mic kind (config) plus
- * its user-facing label. The list is built from the currently connected
- * input devices (CastSettingsScreen) — a kind that isn't plugged in isn't
- * offered.
- */
-data class MicDeviceOption(val source: MicDeviceSource, val labelRes: Int)
-
-/**
- * The microphone device section: which mic the cast records from — the
- * built-in mic (always offered), plus wired/USB/Bluetooth when connected.
- * Applied when the mic session is built (mic toggle); a saved kind that
- * isn't connected falls back to the built-in mic at capture time
- * (MicDeviceResolver) — the same fact as its chip being gone from this list.
- */
-@Composable
-fun MicDeviceSection(
-    selected: MicDeviceSource,
-    options: List<MicDeviceOption>,
-    onSelectMicDevice: (MicDeviceSource) -> Unit,
-) {
-    SilkscreenLabel(stringResource(R.string.settings_mic_device))
-    CastCard {
-        Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 14.dp)) {
-            ChipRow(
-                options = options.map { option ->
-                    stringResource(option.labelRes) to (option.source == selected)
-                },
-                onSelect = { index -> onSelectMicDevice(options[index].source) },
-            )
-            HintText(R.string.settings_mic_device_hint)
-        }
     }
 }
 
@@ -525,52 +490,10 @@ private fun SegRow(options: List<Pair<String, Boolean>>, onSelect: (Int) -> Unit
     }
 }
 
-/** The prototype's .chip: a pill selector (amber when selected). */
+/** The advanced knobs' chip rows — the shared vocabulary (CastChipRow). */
 @Composable
 private fun ChipRow(options: List<Pair<String, Boolean>>, enabled: Boolean = true, onSelect: (Int) -> Unit) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
-            .horizontalScroll(rememberScrollState()),
-    ) {
-        options.forEachIndexed { index, (label, selected) ->
-            Surface(
-                onClick = { onSelect(index) },
-                enabled = enabled,
-                shape = RoundedCornerShape(50),
-                color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                } else {
-                    Color.Transparent
-                },
-                contentColor = if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                border = BorderStroke(
-                    1.dp,
-                    if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                ),
-                modifier = Modifier.then(
-                    if (enabled) Modifier else Modifier.alpha(0.45f),
-                ),
-            ) {
-                Text(
-                    text = label,
-                    fontSize = 14.sp,
-                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                )
-            }
-        }
-    }
+    CastChipRow(options = options, enabled = enabled, onSelect = onSelect)
 }
 
 /** The prototype's .card-foot: muted note under the card's last row. */

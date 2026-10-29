@@ -51,6 +51,8 @@ class MicCastSession(
     private val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
     /** State changes, delivered from the session thread. */
     private val onState: (MicState) -> Unit = {},
+    /** The effective mic routing after every (re)route — display plumbing (Home). */
+    private val onMicRouted: (effective: MicDeviceSource, fallbackFrom: MicDeviceSource?) -> Unit = { _, _ -> },
     statsIntervalMs: Long = STATS_INTERVAL_MS,
 ) {
 
@@ -144,6 +146,16 @@ class MicCastSession(
         post { stopLocal(MicState.Off) }
     }
 
+    /**
+     * Switch the **live** mic input to [source] — the substituted record is
+     * rerouted in place (no session rebuild); a plain no-op when no
+     * substituted record is live (the caller keeps the setting for the next
+     * mic start instead). The effective routing comes back via [onMicRouted].
+     */
+    fun setMicDevice(source: MicDeviceSource) {
+        post { substituter?.reroute(source) }
+    }
+
     // ---- Everything below runs (or is posted to) the session thread ----
 
     private fun post(block: () -> Unit) {
@@ -183,7 +195,9 @@ class MicCastSession(
                         substituter?.onRecordStart()
                     }
 
-                    override fun onWebRtcAudioRecordStop() = Unit
+                    override fun onWebRtcAudioRecordStop() {
+                        substituter?.onRecordStop()
+                    }
                 })
                 .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
                     override fun onWebRtcAudioRecordInitError(errorMessage: String) = micFailed("record init: $errorMessage")
@@ -195,7 +209,7 @@ class MicCastSession(
                     override fun onWebRtcAudioRecordError(errorMessage: String) = micFailed("record: $errorMessage")
                 })
                 .createAudioDeviceModule()
-            substituter = MicRecordSubstituter(context, adm, micDevice)
+            substituter = MicRecordSubstituter(context, adm, micDevice, onMicRouted)
             val newFactory = PeerConnectionFactory.builder()
                 .setAudioDeviceModule(adm)
                 .createPeerConnectionFactory()

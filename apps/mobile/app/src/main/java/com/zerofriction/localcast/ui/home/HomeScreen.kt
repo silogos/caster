@@ -2,6 +2,12 @@ package com.zerofriction.localcast.ui.home
 
 import android.Manifest
 import android.app.Activity
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
@@ -35,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -66,10 +73,12 @@ import com.zerofriction.localcast.R
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
+import com.zerofriction.localcast.audio.MicDeviceResolver
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CastSettingsStore
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.debug.DebugTestTone
@@ -77,9 +86,11 @@ import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.service.ConnectedDesktop
+import com.zerofriction.localcast.service.MicRoutingUiState
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.components.CastCard
+import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.CastSwitch
 import com.zerofriction.localcast.ui.components.CastTextButton
 import com.zerofriction.localcast.ui.components.IconListRow
@@ -113,6 +124,7 @@ fun HomeScreen(
     val connection by ConnectedDesktop.state.collectAsStateWithLifecycle()
     val gameAudioState by CastService.gameAudioState.collectAsStateWithLifecycle()
     val micState by CastService.micState.collectAsStateWithLifecycle()
+    val micRouting by CastService.micRouting.collectAsStateWithLifecycle()
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
     val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
@@ -174,6 +186,7 @@ fun HomeScreen(
         micState = micState,
         thermalState = thermalState,
         adaptiveState = adaptiveState,
+        micRouting = micRouting,
         settings = settings,
         onSetGameAudio = { on ->
             settingsViewModel.setGameAudio(on)
@@ -190,6 +203,14 @@ fun HomeScreen(
 
                     on != (micState != MicState.Off) -> CastService.requestToggleMic(context)
                 }
+            }
+        },
+        onSetMicDevice = { source ->
+            settingsViewModel.setMicDevice(source)
+            // Realtime while the mic records: reroute the live record. Without
+            // a live mic the pick is just the stored default (next start).
+            if (castState is CastState.Casting && micState != MicState.Off) {
+                CastService.requestSetMicDevice(context, source)
             }
         },
         onShareScreen = {
@@ -218,9 +239,11 @@ fun HomeContent(
     micState: MicState = MicState.Off,
     thermalState: ThermalState = ThermalState(),
     adaptiveState: AdaptiveUiState = AdaptiveUiState(),
+    micRouting: MicRoutingUiState? = null,
     settings: CastSettings = CastSettings.default(),
     onSetGameAudio: (Boolean) -> Unit = {},
     onSetMic: (Boolean) -> Unit = {},
+    onSetMicDevice: (MicDeviceSource) -> Unit = {},
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
@@ -375,10 +398,18 @@ fun HomeContent(
                     )
                 },
             )
+            // The routing fact line: off → the freeing hint; on → which mic
+            // records (live while casting — the reroute updates it instantly).
+            val micOn = if (casting) micState != MicState.Off else settings.mic
+            val effectiveDevice = if (casting) (micRouting?.effective ?: settings.micDevice) else settings.micDevice
             IconListRow(
                 iconRes = R.drawable.ic_mic,
                 title = stringResource(R.string.home_microphone),
-                sub = stringResource(R.string.home_mic_hint),
+                sub = when {
+                    !micOn -> stringResource(R.string.home_mic_hint)
+                    casting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
+                    else -> stringResource(R.string.mic_records_from, micSourceName(effectiveDevice))
+                },
                 fact = when (micState) {
                     MicState.Silenced -> stringResource(R.string.mic_silenced)
                     MicState.Failed -> stringResource(R.string.mic_unavailable)
@@ -387,11 +418,18 @@ fun HomeContent(
                 topDivider = true,
                 right = {
                     CastSwitch(
-                        checked = if (casting) micState != MicState.Off else settings.mic,
+                        checked = micOn,
                         onCheckedChange = onSetMic,
                     )
                 },
             )
+            if (micOn) {
+                MicDevicePicker(
+                    effective = effectiveDevice,
+                    fallbackFrom = if (casting) micRouting?.fallbackFrom else null,
+                    onSelect = onSetMicDevice,
+                )
+            }
         }
 
         // ---- "This cast": the live status lines while the video runs ----
@@ -492,6 +530,110 @@ private fun LiveElapsed(startedAtMillis: Long) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 10.dp),
     )
+}
+
+/** One offered mic kind: the config value plus its localized label. */
+private data class MicDeviceOption(val source: MicDeviceSource, val labelRes: Int)
+
+/** Connected input device types as AudioManager reports them right now. */
+private fun connectedInputTypes(context: Context): Set<Int> =
+    (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+        ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        ?.map { it.type }
+        ?.toSet()
+        ?: emptySet()
+
+/** Localized kind name ("Phone mic", …). */
+@Composable
+private fun micSourceName(source: MicDeviceSource): String = stringResource(
+    when (source) {
+        MicDeviceSource.BUILTIN -> R.string.mic_device_builtin
+        MicDeviceSource.WIRED_HEADSET -> R.string.mic_device_wired
+        MicDeviceSource.USB -> R.string.mic_device_usb
+        MicDeviceSource.BLUETOOTH -> R.string.mic_device_bluetooth
+    },
+)
+
+/**
+ * The connected kinds from the inputs plugged in right now — the phone mic
+ * always, a kind only while one of its inputs is connected (MicDeviceResolver
+ * resolves the same way at capture time, so the offered chips and the actual
+ * fallback can't drift apart). Follows plug/unplug **live**.
+ */
+@Composable
+private fun rememberMicOptions(): List<MicDeviceOption> {
+    val context = LocalContext.current
+    var connectedTypes by remember { mutableStateOf(connectedInputTypes(context)) }
+    DisposableEffect(context) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                connectedTypes = connectedInputTypes(context)
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                connectedTypes = connectedInputTypes(context)
+            }
+        }
+        audioManager?.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+        onDispose { audioManager?.unregisterAudioDeviceCallback(callback) }
+    }
+    return remember(connectedTypes) {
+        Log.d(TAG, "mic options from connected input types: \$connectedTypes")
+        listOf(
+            MicDeviceOption(MicDeviceSource.BUILTIN, R.string.mic_device_builtin),
+            MicDeviceOption(MicDeviceSource.WIRED_HEADSET, R.string.mic_device_wired),
+            MicDeviceOption(MicDeviceSource.USB, R.string.mic_device_usb),
+            MicDeviceOption(MicDeviceSource.BLUETOOTH, R.string.mic_device_bluetooth),
+        ).filter {
+            it.source == MicDeviceSource.BUILTIN ||
+                MicDeviceResolver.resolveType(it.source, connectedTypes) != MicDeviceResolver.FALLBACK_TYPE
+        }
+    }
+}
+
+/**
+ * The mic-device picker under the Microphone row (designs/mobile-app.html):
+ * the connected kinds as chips — picking one while casting reroutes the LIVE
+ * record (no session rebuild); idle it sets the next-start default. A kind
+ * that vanished mid-cast shows the plain-words fallback fact instead.
+ */
+@Composable
+private fun MicDevicePicker(
+    effective: MicDeviceSource,
+    fallbackFrom: MicDeviceSource?,
+    onSelect: (MicDeviceSource) -> Unit,
+) {
+    val options = rememberMicOptions()
+    val dividerColor = MaterialTheme.colorScheme.outline
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val y = 0.5.dp.toPx()
+                drawLine(
+                    color = dividerColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 14.dp),
+    ) {
+        CastChipRow(
+            options = options.map { option -> micSourceName(option.source) to (option.source == effective) },
+            onSelect = { index -> onSelect(options[index].source) },
+        )
+        if (fallbackFrom != null) {
+            Text(
+                text = stringResource(R.string.mic_device_fallback_fact, micSourceName(fallbackFrom)),
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
 }
 
 /** h:mm:ss / mm:ss — the hero timer's format (unit-tested; clamps at zero). */
@@ -640,6 +782,8 @@ private fun DebugToneButton(topDivider: Boolean) {
         }
     }
 }
+
+private const val TAG = "HomeScreen"
 
 /** The settings store, injected once — the Home's audio rows persist through it. */
 @Composable

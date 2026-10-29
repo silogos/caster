@@ -20,10 +20,13 @@ import com.zerofriction.localcast.R
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import com.zerofriction.localcast.audio.MicState
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.capture.CaptureSize
 import com.zerofriction.localcast.config.CastConfig
-import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.PROFILE_CUSTOM
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
@@ -63,6 +66,13 @@ sealed interface CastState {
  * "what happened" line the home/scan screens render). Blank state = no cast,
  * or the user's switch turned auto quality off.
  */
+/**
+ * The live mic routing while a mic session records (the Home picker's
+ * display state): which kind is actually capturing and, when the selected
+ * kind wasn't connected, which kind fell back. Null while the mic is off.
+ */
+data class MicRoutingUiState(val effective: MicDeviceSource, val fallbackFrom: MicDeviceSource? = null)
+
 data class AdaptiveUiState(
     val current: QualityLevel? = null,
     val ceiling: QualityLevel? = null,
@@ -107,6 +117,8 @@ class CastService : Service() {
         private const val ACTION_DISCONNECT = "com.zerofriction.localcast.service.DISCONNECT"
         private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
         private const val ACTION_TOGGLE_MIC = "com.zerofriction.localcast.service.TOGGLE_MIC"
+        private const val ACTION_SET_MIC_DEVICE = "com.zerofriction.localcast.service.SET_MIC_DEVICE"
+        private const val EXTRA_MIC_DEVICE = "micDevice"
         private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
@@ -129,6 +141,9 @@ class CastService : Service() {
          */
         private val _micState = MutableStateFlow<MicState>(MicState.Off)
         val micState: StateFlow<MicState> = _micState.asStateFlow()
+
+        private val _micRouting = MutableStateFlow<MicRoutingUiState?>(null)
+        val micRouting: StateFlow<MicRoutingUiState?> = _micRouting.asStateFlow()
 
         /**
          * The thermal half (Phase11, thermal.md) — read-only diagnostics for
@@ -207,6 +222,20 @@ class CastService : Service() {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_MIC))
         }
 
+        /**
+         * Switch the LIVE mic input mid-cast (no-op without a recording mic
+         * session — the caller persists the setting for the next start
+         * itself; keeping the setting out of the service preserves the
+         * "settings live in the store, the service reads fresh" rule).
+         */
+        fun requestSetMicDevice(context: Context, device: MicDeviceSource) {
+            context.startService(
+                Intent(context, CastService::class.java)
+                    .setAction(ACTION_SET_MIC_DEVICE)
+                    .putExtra(EXTRA_MIC_DEVICE, device.label),
+            )
+        }
+
         /** The user puts the cast back at their own settings (auto quality is reversible). */
         fun requestRestoreQuality(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_RESTORE_QUALITY))
@@ -234,6 +263,14 @@ class CastService : Service() {
 
     /** The mic half (Phase8) — non-null while the mic is on for this cast. */
     private var micSession: MicCastSession? = null
+
+    /**
+     * Plug/unplug watcher for a RECORDING mic session (the realtime picker's
+     * honest half): when the routed kind's inputs disappear mid-cast, the
+     * record is rerouted to the phone mic and the UI gets the fallback fact.
+     * Registered while a mic session exists, unregistered on its teardown.
+     */
+    private var micDeviceWatcher: AudioDeviceCallback? = null
 
     /** Thermal monitoring (Phase11) — runs for exactly the cast's lifetime. */
     private var thermalSource: ThermalSource? = null
@@ -274,6 +311,12 @@ class CastService : Service() {
             }
             ACTION_TOGGLE_MIC -> {
                 toggleMic()
+                return START_NOT_STICKY
+            }
+            ACTION_SET_MIC_DEVICE -> {
+                val label = intent.getStringExtra(EXTRA_MIC_DEVICE)
+                val device = MicDeviceSource.fromLabel(label ?: "")
+                if (device !== null) micSession?.setMicDevice(device)
                 return START_NOT_STICKY
             }
             ACTION_RESTORE_QUALITY -> {
@@ -356,6 +399,8 @@ class CastService : Service() {
         if (currentMic !== null) {
             currentMic.stop()
             micSession = null
+            unregisterMicDeviceWatcher()
+            _micRouting.value = null
             startCastForeground(micOn = false)
             // The session's onState(Off) republishes; the summary needs the
             // flag flipped after it.
@@ -378,14 +423,44 @@ class CastService : Service() {
             signaling = currentSignaling,
             micDevice = config?.micDevice ?: MicDeviceSource.BUILTIN,
             onState = { micState -> _micState.value = micState },
+            onMicRouted = { effective, fallbackFrom ->
+                _micRouting.value = MicRoutingUiState(effective, fallbackFrom)
+            },
         )
         micSession = newMic
+        registerMicDeviceWatcher()
         newMic.start()
         // Before the ADM's first mic read: the mic bit must be on the FGS
         // before the app can be backgrounded, or Android11+ mutes the mic.
         startCastForeground(micOn = true)
         sendSessionInfo(mic = true)
         Log.i(TAG, "mic session started")
+    }
+
+    /**
+     * Registers [micDeviceWatcher] (idempotent) while a mic session records.
+     */
+    private fun registerMicDeviceWatcher() {
+        if (micDeviceWatcher !== null) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val watcher = object : AudioDeviceCallback() {
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                // A removed input can only matter to a non-builtin routing;
+                // rerouting the (still-selected) kind lets the resolver fall
+                // back to the phone mic and report the fact via onMicRouted.
+                val routing = _micRouting.value ?: return
+                if (routing.effective == MicDeviceSource.BUILTIN) return
+                micSession?.setMicDevice(routing.effective)
+            }
+        }
+        micDeviceWatcher = watcher
+        am.registerAudioDeviceCallback(watcher, null)
+    }
+
+    private fun unregisterMicDeviceWatcher() {
+        val watcher = micDeviceWatcher ?: return
+        micDeviceWatcher = null
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.unregisterAudioDeviceCallback(watcher)
     }
 
     /**
@@ -613,6 +688,8 @@ class CastService : Service() {
         session = null
         micSession?.stop()
         micSession = null
+        unregisterMicDeviceWatcher()
+        _micRouting.value = null
         stopThermalMonitoring()
         stopAutoQuality()
         val currentSignaling = signaling
@@ -649,6 +726,8 @@ class CastService : Service() {
         session = null
         micSession?.stop()
         micSession = null
+        unregisterMicDeviceWatcher()
+        _micRouting.value = null
         stopThermalMonitoring()
         stopAutoQuality()
         signaling?.let { current ->

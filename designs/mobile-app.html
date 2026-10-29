@@ -252,8 +252,11 @@
   }
   .pick-spec { font-size: 11px; color: var(--cast-on-variant); margin-top: 3px; letter-spacing: 0.02em; }
 
-  /* ---- Mic device card body (chips + hint inside the card) ---- */
-  .mic-body { padding: 12px 16px 14px; }
+  /* ---- Mic device picker (Home's Audio card): chips under the mic row,
+     shown only while the mic is on — picking reroutes the LIVE record
+     (AudioRecord.setPreferredDevice on the active twin, no rebuild). ---- */
+  .mic-sub { padding: 4px 16px 14px; border-top: 1px solid var(--chip-border); }
+  .mic-live { font-size: 13px; color: var(--cast-on); }
 
   /* ---- Advanced card body (below its header row) ---- */
   .adv-body {
@@ -421,6 +424,11 @@ const MIC_DEVICE_OPTIONS = [
   { id: "usb",     name: "USB mic" },
   { id: "bt",      name: "Bluetooth mic" },
 ];
+/* The live-routing lines are NEW app strings at port time:
+   mic_records_from ("Records from %1$s" — mic on, not casting)
+   mic_recording_from ("Recording from %1$s" — the live cast)
+   mic_device_fallback_fact ("%1$s disconnected — switched to the phone mic.")
+   and the settings_mic_device_* block moves to the Home screen with it. */
 
 const THERMAL = {
   normal: "Phone temperature: normal.",
@@ -457,7 +465,9 @@ const state = {
   // Mic device selection (#59, strings.xml mic_device_*): a KIND, not a
   // concrete device — offered only while one of its inputs is connected
   // (the app resolves the same way at capture time, MicDeviceResolver).
-  micDevice: "builtin",
+  micDevice: "builtin", // the chosen kind (the stored setting)
+  micLiveDevice: "builtin", // what the live record is actually routed to
+  micFallbackFact: null, // "…disconnected — switched to the phone mic."
   micInputs: ["builtin"], // connected kinds: builtin | wired | usb | bt
   // capture settings
   profile: "balanced", longEdge: 1280, fps: 30,
@@ -617,6 +627,22 @@ function pickRow(profile, spec, selected, onClick) {
   r.appendChild(t);
   if (onClick) r.addEventListener("click", onClick);
   return r;
+}
+
+/* Keep the live routing honest: a kind that is no longer connected cannot
+   stay the routing target — fall back to the phone mic with a plain-words
+   fact (the same resolver rule the capture side applies). */
+function syncMicLive() {
+  if (state.micLiveDevice !== "builtin" && !state.micInputs.includes(state.micLiveDevice)) {
+    state.micFallbackFact = micOptionName(state.micLiveDevice) +
+      " disconnected — switched to the phone mic.";
+    state.micLiveDevice = "builtin";
+  } else if (state.micLiveDevice === state.micDevice) {
+    state.micFallbackFact = null;
+  }
+}
+function micOptionName(id) {
+  return MIC_DEVICE_OPTIONS.find((o) => o.id === id).name;
 }
 
 /* Auto-advancing transient states (pairing found, cast starting). */
@@ -818,11 +844,41 @@ function renderHome(parent) {
     sub: "Off silences the game audio, but its track stays part of the cast.",
     right: switchEl(state.gameAudio, (on) => { state.gameAudio = on; renderAll(); }),
   }));
+  // The mic row's sub is the ROUTING FACT: which device records right now
+  // (live while casting) or will record (the default when off/next start).
+  // With the mic on, the connected kinds sit under the row — picking one
+  // reroutes the live record instantly; an unplugged kind falls back to the
+  // phone mic with a plain-words fact. (New strings, port-time note:
+  // mic_records_from / mic_recording_from / mic_device_fallback_fact.)
+  const micName = (id) => MIC_DEVICE_OPTIONS.find((o) => o.id === id).name;
+  const micSub = !state.mic
+    ? "Off removes the microphone from the cast and frees it for the game's own voice chat."
+    : (casting ? "Recording from " : "Records from ") + micName(state.micLiveDevice);
   audio.appendChild(iconRow({
     ico: "mic", title: "Microphone",
-    sub: "Off removes the microphone from the cast and frees it for the game's own voice chat.",
-    right: switchEl(state.mic, (on) => { state.mic = on; renderAll(); }),
+    sub: micSub,
+    id: "home-mic-row",
+    right: switchEl(state.mic, (on) => { state.mic = on; syncMicLive(); renderAll(); }),
   }));
+  if (state.mic) {
+    const micSub1 = el('<div class="mic-sub"></div>');
+    micSub1.appendChild(chipRow(
+      MIC_DEVICE_OPTIONS.filter((o) => state.micInputs.includes(o.id)),
+      state.micLiveDevice,
+      (id) => {
+        state.micDevice = id;
+        state.micLiveDevice = id; // live reroute — no session rebuild
+        state.micFallbackFact = null;
+        renderAll();
+      },
+    ));
+    if (state.micFallbackFact) {
+      const fact = el('<div class="hint"></div>');
+      fact.textContent = state.micFallbackFact;
+      micSub1.appendChild(fact);
+    }
+    audio.appendChild(micSub1);
+  }
   root.appendChild(audio);
 
   // This cast (live conditions) — only while casting
@@ -937,22 +993,6 @@ function renderSettings(parent) {
   foot.textContent = "Picking a template also sets the Advanced defaults below — you can still override them.";
   q.appendChild(foot);
   root.appendChild(q);
-
-  // Microphone device (#59): which mic the cast records from — the built-in
-  // mic always offered, a kind only while connected; a chosen-but-unplugged
-  // kind highlights nothing (capture falls back to the phone mic, per hint).
-  root.appendChild(silkscreen("Microphone"));
-  const mic = card();
-  mic.setAttribute("data-od-id", "settings-mic-device");
-  const micBody = el('<div class="mic-body"></div>');
-  micBody.appendChild(chipRow(
-    MIC_DEVICE_OPTIONS.filter((o) => state.micInputs.includes(o.id)),
-    state.micDevice,
-    (id) => { state.micDevice = id; renderAll(); },
-  ));
-  micBody.appendChild(hint("Which microphone the cast records from. If the chosen one is not plugged in when the mic starts, the phone's built-in mic is used. Bluetooth headsets record at phone-call quality."));
-  mic.appendChild(micBody);
-  root.appendChild(mic);
 
   // Advanced card — collapsed by default; the header row is the toggle
   root.appendChild(silkscreen("Advanced"));
@@ -1092,7 +1132,11 @@ function renderControls() {
         c.appendChild(pbtn(k, state.scanFail === k, () => { state.scanFail = k; renderAll(); }));
       }
     }
-  } else if (state.screen === "settings") {
+  } else if (state.screen === "home") {
+    c.appendChild(protoLabel("Home state:"));
+    for (const s of ["connected", "starting", "casting", "failed"]) {
+      c.appendChild(pbtn(s, state.homeState === s, () => { state.homeState = s; renderAll(); }));
+    }
     c.appendChild(protoLabel("Mic inputs:"));
     const combos = [
       ["phone", ["builtin"]],
@@ -1104,13 +1148,9 @@ function renderControls() {
     for (const [label, inputs] of combos) {
       c.appendChild(pbtn(label, state.micInputs.join(",") === inputs.join(","), () => {
         state.micInputs = inputs;
+        syncMicLive(); // an unplug while recording is the fallback case
         renderAll();
       }));
-    }
-  } else if (state.screen === "home") {
-    c.appendChild(protoLabel("Home state:"));
-    for (const s of ["connected", "starting", "casting", "failed"]) {
-      c.appendChild(pbtn(s, state.homeState === s, () => { state.homeState = s; renderAll(); }));
     }
     if (state.homeState === "casting") {
       c.appendChild(protoLabel("Thermal:"));
