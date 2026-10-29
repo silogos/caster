@@ -55,7 +55,7 @@ apps/mobile/
 ├── settings.gradle.kts / build.gradle.kts / gradle.properties
 ├── gradle/libs.versions.toml        # every pinned version lives here
 └── app/src/main/java/com/zerofriction/localcast/
-    ├── MainActivity.kt              # single activity; Home ⇄ Scan navigation (state-based, no nav lib). Phase10: the home page carries the cast settings.
+    ├── MainActivity.kt              # single activity; Scan ⇄ Home ⇄ Settings navigation (state-based, no nav lib; Settings handles system back with BackHandler)
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)
     ├── config/                      # CastConfig + CastSettings: presets, JSON codec, persistence (Phases 5/10; thermal vocabulary in Phase11)
@@ -66,10 +66,11 @@ apps/mobile/
     ├── service/                     # CastService — mediaProjection FGS owning the whole session (Phase 6)
     ├── debug/                        # DebugTestTone launcher glue (debug builds only)
     └── ui/
-        ├── home/                    # HomeScreen (header: cast state + button; content: settings + live controls) + HomeViewModel
-        ├── settings/                # CastSettingsPanel (the home page's settings sections) + SettingsViewModel (Phase 10)
+        ├── home/                    # HomeScreen — the connected hub (on-air hero + share transport + audio cards; "This cast" LED rows while casting) + HomeViewModel
+        ├── settings/                # CastSettingsScreen + CastSettingsPanel (the gear's cast settings) + SettingsViewModel (Phase 10)
+        ├── components/              # shared cast-UI vocabulary (cards, silkscreen labels, icon/LED rows) — designs/mobile-app.html
         ├── pairing/                 # ScanScreen + ScanViewModel + QrCamera (CameraX + ML Kit)
-        └── theme/                   # dark-first Material 3 theme
+        └── theme/                   # dark-only Material 3 theme (broadcast amber accent; token source: designs/mobile-app.html)
 ```
 
 The package skeleton follows [architecture/mobile.md](../architecture/mobile.md): more packages (`webrtc/`, `service/`, …) appear as their phases land — do not create them early.

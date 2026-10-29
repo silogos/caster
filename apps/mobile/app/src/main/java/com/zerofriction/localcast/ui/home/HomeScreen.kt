@@ -8,40 +8,51 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,16 +79,26 @@ import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
+import com.zerofriction.localcast.ui.components.CastCard
+import com.zerofriction.localcast.ui.components.CastSwitch
+import com.zerofriction.localcast.ui.components.CastTextButton
+import com.zerofriction.localcast.ui.components.IconListRow
+import com.zerofriction.localcast.ui.components.LedDot
+import com.zerofriction.localcast.ui.components.LedListRow
+import com.zerofriction.localcast.ui.components.LedTone
+import com.zerofriction.localcast.ui.components.SilkscreenLabel
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
+import kotlinx.coroutines.delay
 
 /**
- * The Home hub (designs/mobile-app.html): reached only through a successful
- * pairing on the scan screen. The header states the connection, the share
- * trigger (with the gear to all cast settings beside it) starts and stops
- * the **video** — "Stop share screen" leaves the pairing connected — and
- * Disconnect ends everything. The audio rows are the live toggles *and* the
- * next-cast defaults: only the microphone is ever fully removed from a cast;
+ * The Home hub (designs/mobile-app.html — the broadcast-console redesign):
+ * reached only through a successful pairing on the scan screen. The on-air
+ * hero (tally lamp + desktop name, elapsed timer while casting) states the
+ * connection; the transport control below it starts and stops the **video**
+ * — "Stop share screen" leaves the pairing connected — and Disconnect ends
+ * everything. The audio rows are the live toggles *and* the next-cast
+ * defaults: only the microphone is ever fully removed from a cast;
  * game-audio "off" mutes the track, which stays part of the cast.
  */
 @Composable
@@ -205,154 +226,281 @@ fun HomeContent(
     onDisconnect: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
+    val casting = castState is CastState.Casting
+
+    // Surface (like the scan screen's Scaffold): paints the theme
+    // background and provides contentColor — plain Columns default to
+    // black text, not the theme's.
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
     Column(
+        // Edge-to-edge: the hub scrolls below the system bars, but its
+        // resting content starts below the status bar and ends above the
+        // gesture bar (the scan screen gets this from its Scaffold).
         modifier = Modifier
             .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = 20.dp),
     ) {
-        // ---- Header: title, connection status, Disconnect ----
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.home_title),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
+        // ---- App bar: product name + the gear (all cast settings) ----
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = stringResource(R.string.home_title),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(0.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_gear),
+                    contentDescription = stringResource(R.string.cast_settings_title),
+                    modifier = Modifier.size(19.dp),
                 )
-                Spacer(Modifier.height(2.dp))
-                when (val state = castState) {
-                    is CastState.Failed -> StatusRow(
-                        message = state.message,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-
-                    else -> Text(
-                        text = when (state) {
-                            is CastState.Casting -> stringResource(R.string.casting_to, state.desktopName)
-                            else -> (connection as? ConnectedDesktop.State.Connected)
-                                ?.let { stringResource(R.string.connected_to, it.desktopName) }
-                                ?: stringResource(R.string.home_not_connected)
-                        },
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-            TextButton(onClick = onDisconnect) {
-                Text(stringResource(R.string.disconnect))
             }
         }
 
-        // ---- Share screen + gear (all cast settings) ----
-        when (castState) {
-            is CastState.Starting -> {
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.width(10.dp))
-                    Text(text = stringResource(R.string.starting_cast), fontSize = 14.sp)
-                }
-                // mobile.md consent affordance (Android 14+): the dialog shown
-                // during this window defaults to the cast-killing choice.
-                HintText(stringResource(R.string.share_full_screen_hint))
+        // ---- On-air hero: the tally section (who, and live-or-not) ----
+        if (castState is CastState.Failed) {
+            Spacer(Modifier.height(12.dp))
+            CastCard {
+                IconListRow(iconRes = R.drawable.ic_warning, title = castState.message, err = true)
             }
+        } else {
+            OnAirHero(
+                casting = casting,
+                desktopName = if (casting) {
+                    (castState as CastState.Casting).desktopName
+                } else {
+                    (connection as? ConnectedDesktop.State.Connected)?.desktopName
+                        ?: stringResource(R.string.home_not_connected)
+                },
+                startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
+                onDisconnect = onDisconnect,
+            )
+        }
 
-            else -> {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 12.dp),
+        // ---- The transport control: amber to go, outlined to stop ----
+        // (stopping leaves the pairing connected — only the video stops)
+        if (castState is CastState.Starting) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 18.dp),
+            ) {
+                CircularProgressIndicator(Modifier.size(16.dp))
+                Text(text = stringResource(R.string.starting_cast), fontSize = 14.sp)
+            }
+            // mobile.md consent affordance (Android 14+): the dialog shown
+            // during this window defaults to the cast-killing choice.
+            HintText(stringResource(R.string.share_full_screen_hint))
+        } else {
+            val goShape = RoundedCornerShape(16.dp)
+            if (casting) {
+                OutlinedButton(
+                    onClick = onStopShareScreen,
+                    shape = goShape,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp)
+                        .height(54.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 ) {
-                    Button(onClick = if (castState is CastState.Casting) onStopShareScreen else onShareScreen) {
-                        Text(
-                            stringResource(
-                                if (castState is CastState.Casting) R.string.stop_share_screen else R.string.share_screen_action,
-                            ),
-                        )
-                    }
-                    OutlinedButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.cast_settings_title))
-                    }
+                    Text(text = stringResource(R.string.stop_share_screen), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                }
+            } else {
+                Button(
+                    onClick = onShareScreen,
+                    shape = goShape,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp)
+                        .height(54.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                ) {
+                    Text(text = stringResource(R.string.share_screen_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        // ---- Audio rows: live toggles and next-cast defaults ----
-        SectionLabel(R.string.settings_audio)
-        // Game audio: the track always rides the cast (when permission
-        // allows) — the switch is audibility. Only the microphone is ever
-        // fully removed (designs/mobile-app.html, ADR-004 semantics).
-        AudioRow(
-            label = stringResource(R.string.home_game_audio),
-            checked = when {
-                castState is CastState.Casting && gameAudioState != GameAudioState.Off ->
-                    gameAudioState != GameAudioState.Muted
+        // ---- Audio card — one switch per track ----
+        SilkscreenLabel(stringResource(R.string.settings_audio))
+        CastCard {
+            // Game audio: the track always rides the cast (when permission
+            // allows) — the switch is audibility. Only the microphone is ever
+            // fully removed (designs/mobile-app.html, ADR-004 semantics).
+            IconListRow(
+                iconRes = R.drawable.ic_gamepad,
+                title = stringResource(R.string.home_game_audio),
+                sub = stringResource(R.string.home_game_audio_hint),
+                fact = when (gameAudioState) {
+                    GameAudioState.Silent -> stringResource(R.string.game_audio_cannot_capture)
+                    GameAudioState.Failed -> stringResource(R.string.game_audio_unavailable)
+                    GameAudioState.Off -> if (casting) stringResource(R.string.game_audio_off) else null
+                    else -> null
+                },
+                topDivider = true,
+                right = {
+                    CastSwitch(
+                        checked = when {
+                            casting && gameAudioState != GameAudioState.Off ->
+                                gameAudioState != GameAudioState.Muted
 
-                else -> settings.gameAudio
-            },
-            onCheckedChange = onSetGameAudio,
-        )
-        HintText(stringResource(R.string.home_game_audio_hint))
-        when (gameAudioState) {
-            GameAudioState.Silent -> FactText(stringResource(R.string.game_audio_cannot_capture))
-            GameAudioState.Failed -> FactText(stringResource(R.string.game_audio_unavailable))
-            GameAudioState.Off -> if (castState is CastState.Casting) FactText(stringResource(R.string.game_audio_off))
-            else -> Unit
-        }
-
-        AudioRow(
-            label = stringResource(R.string.home_microphone),
-            checked = if (castState is CastState.Casting) micState != MicState.Off else settings.mic,
-            onCheckedChange = onSetMic,
-        )
-        HintText(stringResource(R.string.home_mic_hint))
-        when (micState) {
-            MicState.Silenced -> FactText(stringResource(R.string.mic_silenced))
-            MicState.Failed -> FactText(stringResource(R.string.mic_unavailable))
-            else -> Unit
+                            else -> settings.gameAudio
+                        },
+                        onCheckedChange = onSetGameAudio,
+                    )
+                },
+            )
+            IconListRow(
+                iconRes = R.drawable.ic_mic,
+                title = stringResource(R.string.home_microphone),
+                sub = stringResource(R.string.home_mic_hint),
+                fact = when (micState) {
+                    MicState.Silenced -> stringResource(R.string.mic_silenced)
+                    MicState.Failed -> stringResource(R.string.mic_unavailable)
+                    else -> null
+                },
+                topDivider = true,
+                right = {
+                    CastSwitch(
+                        checked = if (casting) micState != MicState.Off else settings.mic,
+                        onCheckedChange = onSetMic,
+                    )
+                },
+            )
         }
 
         // ---- "This cast": the live status lines while the video runs ----
-        if (castState is CastState.Casting) {
-            SectionLabel(R.string.live_cast_section)
-            if (micState == MicState.Active &&
-                (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
-            ) {
-                FactText(stringResource(R.string.mic_headphones_hint))
-            }
-            ThermalStatusLine(thermalState)
-            AdaptiveStatusLine(adaptiveState)
-            if (BuildConfig.DEBUG) {
-                DebugToneButton()
+        if (casting) {
+            SilkscreenLabel(stringResource(R.string.live_cast_section))
+            CastCard {
+                if (micState == MicState.Active &&
+                    (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
+                ) {
+                    IconListRow(
+                        iconRes = R.drawable.ic_headphones,
+                        title = stringResource(R.string.mic_headphones_hint),
+                    )
+                }
+                ThermalLedRow(thermalState, topDivider = micState == MicState.Active &&
+                    (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent))
+                AdaptiveLedRow(adaptiveState, topDivider = true)
+                if (BuildConfig.DEBUG) {
+                    DebugToneButton(topDivider = true)
+                }
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(28.dp))
+        }
     }
 }
 
-/** Icon + message row — the one failure treatment on every screen (prototype). */
+/**
+ * The hero (the prototype's .hero): tally lamp + caps overline + desktop
+ * name, the elapsed readout while casting, Disconnect quiet on the right.
+ */
 @Composable
-private fun StatusRow(message: String, color: Color) {
+private fun OnAirHero(
+    casting: Boolean,
+    desktopName: String,
+    startedAtMillis: Long,
+    onDisconnect: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 18.dp),
     ) {
-        Text(text = "⚠", fontSize = 15.sp, color = color)
-        Text(text = message, fontSize = 14.sp, color = color)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LedDot(tone = LedTone.ON, pulse = casting)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(
+                        if (casting) R.string.casting_overline else R.string.connected_overline,
+                    ).uppercase(),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.1.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = desktopName,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                letterSpacing = (-0.25).sp,
+                lineHeight = 27.sp,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            if (casting) {
+                LiveElapsed(startedAtMillis)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
     }
 }
 
+/**
+ * The live elapsed readout under the hero name — tabular monospace so the
+ * digits don't jitter. Anchored at the service's streaming transition
+ * ([CastState.Casting.startedAtMillis]); a 0 (unknown) falls back to the
+ * first composition, which stays honest on the screen the timer lives on.
+ */
 @Composable
-private fun SectionLabel(labelRes: Int) {
-    Spacer(Modifier.height(20.dp))
+private fun LiveElapsed(startedAtMillis: Long) {
+    var fallbackStart by rememberSaveable { mutableLongStateOf(0L) }
+    val start = if (startedAtMillis > 0) startedAtMillis else fallbackStart.also { if (it == 0L) fallbackStart = System.currentTimeMillis() }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(start) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
     Text(
-        text = stringResource(labelRes),
-        fontSize = 15.sp,
-        fontWeight = FontWeight.Medium,
+        text = formatCastDuration(((now - start).coerceAtLeast(0L)) / 1_000),
+        fontSize = 13.sp,
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 10.dp),
     )
+}
+
+/** h:mm:ss / mm:ss — the hero timer's format (unit-tested; clamps at zero). */
+internal fun formatCastDuration(totalSeconds: Long): String {
+    val total = totalSeconds.coerceAtLeast(0L)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
 
 /** The 13sp muted explanation under a control. */
@@ -362,101 +510,82 @@ private fun HintText(text: String) {
         text = text,
         fontSize = 13.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top =8.dp),
+        modifier = Modifier.padding(top = 8.dp),
         lineHeight = 18.sp,
     )
 }
 
-/** A 13sp plain-words fact about the running cast (AGENTS.md: no jargon). */
-@Composable
-private fun FactText(text: String) {
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        modifier = Modifier.padding(top = 4.dp),
-        lineHeight = 18.sp,
-    )
-}
-
-/** Label + switch — one control per track (prototype: no separate mute buttons). */
-@Composable
-private fun AudioRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp),
-    ) {
-        Text(text = label, fontSize = 15.sp, modifier = Modifier.padding(end = 16.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
 /**
- * The thermal read-out of a running cast (Phase11, thermal.md): plain words
- * for the platform ladder — read-only diagnostics, never a technical dump
- * and never an automatic action (AGENTS.md; the numbers live in the service
- * logs). The advice lines (cooler profile / stop) are suggestions for the
- * user, the app changes nothing on its own.
+ * The thermal read-out of a running cast (Phase11, thermal.md) as a console
+ * lamp: plain words for the platform ladder — read-only diagnostics, never
+ * a technical dump and never an automatic action (AGENTS.md; the numbers
+ * live in the service logs). DIM when normal, amber from warm, hot at
+ * severe+. The advice lines are suggestions for the user.
  */
 @Composable
-fun ThermalStatusLine(thermalState: ThermalState) {
-    val text = when (thermalState.status) {
-        ThermalStatus.NONE -> stringResource(R.string.thermal_normal)
-        ThermalStatus.LIGHT -> stringResource(R.string.thermal_light)
-        ThermalStatus.MODERATE -> stringResource(R.string.thermal_moderate)
-        ThermalStatus.SEVERE -> stringResource(R.string.thermal_severe)
-        ThermalStatus.CRITICAL, ThermalStatus.EMERGENCY,
-        ThermalStatus.SHUTDOWN,
-        -> stringResource(R.string.thermal_critical)
-    }
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        modifier = Modifier.padding(top = 4.dp),
+private fun ThermalLedRow(thermalState: ThermalState, topDivider: Boolean) {
+    val hot = thermalState.status == ThermalStatus.SEVERE ||
+        thermalState.status == ThermalStatus.CRITICAL ||
+        thermalState.status == ThermalStatus.EMERGENCY ||
+        thermalState.status == ThermalStatus.SHUTDOWN
+    LedListRow(
+        text = when (thermalState.status) {
+            ThermalStatus.NONE -> stringResource(R.string.thermal_normal)
+            ThermalStatus.LIGHT -> stringResource(R.string.thermal_light)
+            ThermalStatus.MODERATE -> stringResource(R.string.thermal_moderate)
+            ThermalStatus.SEVERE -> stringResource(R.string.thermal_severe)
+            ThermalStatus.CRITICAL, ThermalStatus.EMERGENCY, ThermalStatus.SHUTDOWN ->
+                stringResource(R.string.thermal_critical)
+        },
+        tone = when {
+            hot -> LedTone.HOT
+            thermalState.status == ThermalStatus.NONE -> LedTone.DIM
+            else -> LedTone.ON
+        },
+        hot = hot,
+        topDivider = topDivider,
     )
 }
 
 /**
- * The auto-quality read-out of a running cast (Phase12, thermal.md): plain
- * words for what the policy did — the current level against the ceiling
- * (the user's settings at cast start) and, when one fired, what happened
- * and why. Quiet while nothing changed: no line, no log noise.
+ * The auto-quality read-out of a running cast (Phase12, thermal.md) as a
+ * lamp: plain words for what the policy did — the current level against the
+ * ceiling (the user's settings at cast start) and, when one fired, what
+ * happened and why. Quiet while nothing changed: no line, no log noise.
  */
 @Composable
-fun AdaptiveStatusLine(adaptiveState: AdaptiveUiState) {
+private fun AdaptiveLedRow(adaptiveState: AdaptiveUiState, topDivider: Boolean) {
     val context = LocalContext.current
     val ceiling = adaptiveState.ceiling ?: return
     val current = adaptiveState.current ?: return
-    if (current == ceiling && adaptiveState.lastChange == null) return
     val change = adaptiveState.lastChange ?: return
-    Column(modifier = Modifier.padding(top = 4.dp)) {
-        Text(
-            text = when {
-                change.direction == AdaptiveQualityController.Direction.DOWN &&
-                    change.reason == AdaptiveQualityController.Reason.THERMAL ->
-                    stringResource(R.string.adaptive_lowered_thermal, levelName(change.to))
+    if (current == ceiling && adaptiveState.lastChange == null) return
+    val down = change.direction == AdaptiveQualityController.Direction.DOWN
+    LedListRow(
+        text = when {
+            down && change.reason == AdaptiveQualityController.Reason.THERMAL ->
+                stringResource(R.string.adaptive_lowered_thermal, levelName(change.to))
 
-                change.direction == AdaptiveQualityController.Direction.DOWN ->
-                    stringResource(R.string.adaptive_lowered_stream, levelName(change.to))
+            down -> stringResource(R.string.adaptive_lowered_stream, levelName(change.to))
 
-                change.reason == AdaptiveQualityController.Reason.USER ->
-                    stringResource(R.string.adaptive_restored, levelName(change.to))
+            change.reason == AdaptiveQualityController.Reason.USER ->
+                stringResource(R.string.adaptive_restored, levelName(change.to))
 
-                else -> stringResource(R.string.adaptive_raised, levelName(change.to))
-            },
-            fontSize = 13.sp,
-        )
-        if (current != ceiling) {
-            OutlinedButton(
-                onClick = { CastService.requestRestoreQuality(context) },
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                Text(stringResource(R.string.adaptive_restore))
+            else -> stringResource(R.string.adaptive_raised, levelName(change.to))
+        },
+        tone = if (down) LedTone.ON else LedTone.DIM,
+        topDivider = topDivider,
+        right = if (current != ceiling) {
+            {
+                CastTextButton(
+                    text = stringResource(R.string.adaptive_restore),
+                    onClick = { CastService.requestRestoreQuality(context) },
+                )
             }
-        }
-    }
+        } else {
+            null
+        },
+    )
 }
 
 /** Localized name for a quality level — "your settings" for a tweaked top rung. */
@@ -478,20 +607,37 @@ private fun levelName(level: QualityLevel): String = when (
  * game-audio chain works.
  */
 @Composable
-fun DebugToneButton() {
+private fun DebugToneButton(topDivider: Boolean) {
     var playing by rememberSaveable { mutableStateOf(false) }
-    TextButton(
-        onClick = {
+    val dividerColor = MaterialTheme.colorScheme.outline
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (topDivider) {
+                    Modifier.drawBehind {
+                        drawLine(
+                            color = dividerColor,
+                            start = Offset(0f, 0.5.dp.toPx()),
+                            end = Offset(size.width, 0.5.dp.toPx()),
+                            strokeWidth = 1.dp.toPx(),
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = {
             if (playing) DebugTestTone.stop() else DebugTestTone.start()
             playing = !playing
-        },
-    ) {
-        Text(
-            stringResource(
-                if (playing) R.string.debug_stop_test_tone else R.string.debug_play_test_tone,
-            ),
-            fontSize = 13.sp,
-        )
+        }) {
+            Text(
+                stringResource(if (playing) R.string.debug_stop_test_tone else R.string.debug_play_test_tone),
+                fontSize = 13.sp,
+            )
+        }
     }
 }
 
@@ -527,10 +673,22 @@ private fun HomeContentConnectedPreview() {
 private fun HomeContentCastingPreview() {
     LocalCastTheme {
         HomeContent(
-            castState = CastState.Casting("Gaming PC"),
+            castState = CastState.Casting("Gaming PC", startedAtMillis = System.currentTimeMillis() - 754_000),
             connection = ConnectedDesktop.State.Connected("Gaming PC"),
             gameAudioState = GameAudioState.Active,
             micState = MicState.Active,
+            settings = CastSettings.default(),
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 640)
+@Composable
+private fun HomeContentStartingPreview() {
+    LocalCastTheme {
+        HomeContent(
+            castState = CastState.Starting("Gaming PC"),
+            connection = ConnectedDesktop.State.Connected("Gaming PC"),
             settings = CastSettings.default(),
         )
     }

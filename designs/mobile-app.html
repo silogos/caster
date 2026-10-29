@@ -3,28 +3,61 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mobile app — full UI prototype (scan-first, share/gear home)</title>
+<title>Mobile app — full UI prototype (broadcast console: scan-first, on-air home)</title>
 <style>
-  /* Theme tokens — verbatim from ui/theme/Color.kt (Compose source of truth).
-     Shades are derived, never hand-picked hex. */
+  /* ─────────────────────────────────────────────────────────────────────
+     BROADCAST-CONSOLE REDESIGN (v2)
+
+     Identity: the phone is the tally/transport section of a broadcast
+     chain (desktop = receiver, OBS = the studio). One accent — broadcast
+     amber — plus neutral graphite. Status "lamps" (LEDs), silkscreen caps
+     labels (hardware panel printing), tabular mono for data.
+
+     TOKENS — port contract. After the port these move INTO
+     ui/theme/Color.kt + Theme.kt (the prototype becomes the source of
+     truth; v1 said the reverse). What changed vs v1 and why:
+       • primary #A8C7FA → #F2A93B. The old value is stock Material 3
+         dark primary (tone-80 of the default seed) — the "unmodified
+         theme" anti-pattern. Amber = tally/REC lamps on broadcast gear;
+         clearly distinct from the (pale pink) error color.
+       • Neutrals unchanged (off-black graphite, not #000 — Rule 5).
+     Port notes:
+       • Type: Roboto 400/500/700 ONLY (stock Android has no 600; v1 used
+         600). Data readouts (timer, profile specs) use tabular figures —
+         Compose: FontFeature "tnum" or Roboto Mono.
+       • Shapes (M3 mapping): cards 18→large 16, big button 16, controls
+         10→medium 12, chips/torch stay pill/circle.
+       • Icons: inline stroke SVGs here; port via Material Symbols
+         Outlined 1.7-weight equivalents — settings, sports_esports, mic,
+         headphones, warning, info, check_circle, chevron_left,
+         expand_more, tune, flashlight, qr_code_2.
+       • New strings needed: the hero splits "Connected to X"/"Casting to
+         X" into an overline + name (add connected_overline/casting_overline
+         or keep one string and style-what-exists); the live timer reads
+         the cast start timestamp (CastState.Casting) — integration point,
+         never faked.
+     ───────────────────────────────────────────────────────────────────── */
   :root {
-    --cast-primary: #a8c7fa;
+    --cast-primary: #F2A93B;
+    --cast-on-primary: #1A1206; /* filled-surface text — the onPrimary pair */
     --cast-background: #101418;
-    --cast-surface: #161b22;
-    --cast-on: #e6eaf2;
+    --cast-surface: #161B22;
+    --cast-on: #E6EAF2;
     /* onSurfaceVariant ≈ --cast-on desaturated into the background. */
     --cast-on-variant: color-mix(in srgb, var(--cast-on) 62%, var(--cast-background));
-    /* error: Material3 dark error tone — the app's stock colorScheme.error. */
-    --cast-error: #f2b8b5;
-    --chip-border: color-mix(in srgb, var(--cast-on) 18%, var(--cast-surface));
-    --chip-selected-bg: color-mix(in srgb, var(--cast-primary) 16%, var(--cast-surface));
+    /* error: Material3 dark error tone — distinct in hue from the amber accent. */
+    --cast-error: #F2B8B5;
+    --line: color-mix(in srgb, var(--cast-on) 13%, var(--cast-surface));
+    --chip-border: var(--line);
+    --chip-selected-bg: color-mix(in srgb, var(--cast-primary) 15%, var(--cast-surface));
     --page-bg: color-mix(in srgb, var(--cast-background) 60%, #000);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
   body {
     background: var(--page-bg);
     color: var(--cast-on);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
     display: flex; flex-direction: column; align-items: center;
     padding: 24px 16px 40px;
     min-height: 100vh;
@@ -55,38 +88,83 @@
     padding: 28px 20px 40px;
   }
 
-  /* ---- Type roles (the unified scale: 20 / 15 / 14 / 13) ---- */
-  .home-title { font-size: 20px; font-weight: 600; }
-  .screen-title { font-size: 20px; font-weight: 600; }
-  .cast-line { font-size: 15px; font-weight: 500; }
-  .section-label { font-size: 15px; font-weight: 500; margin-top: 20px; }
+  /* ---- Type roles ----
+     Scale 22 / 20 / 17 / 15 / 14 / 13 / 11; Roboto-real weights only. */
+  .hero-name { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.2; }
+  .screen-title { font-size: 20px; font-weight: 500; }
+  .bar-title { font-size: 17px; font-weight: 500; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub-label { font-size: 13px; color: var(--cast-on-variant); margin-top: 12px; }
-  .body-text { font-size: 14px; }
   .hint { font-size: 13px; color: var(--cast-on-variant); margin-top: 8px; line-height: 1.45; }
 
-  /* ---- Buttons: primary (filled) / secondary (outlined) / text ---- */
-  .btn {
+  /* Silkscreen: caps panel label above each card (hardware printing). */
+  .silkscreen {
+    font-size: 11px; font-weight: 500; letter-spacing: 0.10em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--cast-on-variant) 80%, var(--cast-on));
+    margin-top: 20px; padding: 0 4px;
+  }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- Status lamps (LEDs) ----
+     Three semantic states, tiny 9px lamps — console annunciators. */
+  .led {
+    flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%;
+    background: color-mix(in srgb, var(--cast-on) 45%, var(--cast-surface));
+  }
+  .led.on   { background: var(--cast-primary); box-shadow: 0 0 10px color-mix(in srgb, var(--cast-primary) 55%, transparent); }
+  .led.hot  { background: var(--cast-error);   box-shadow: 0 0 10px color-mix(in srgb, var(--cast-error) 45%, transparent); }
+  .led.pulse { animation: tally 2.4s ease-in-out infinite; }
+  @keyframes tally {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
+  /* ---- Buttons ---- */
+  .btn-go {
+    width: 100%; display: flex; align-items: center; justify-content: center;
+    min-height: 54px; border-radius: 16px;
+    background: var(--cast-primary); color: var(--cast-on-primary);
+    border: 1px solid var(--cast-primary);
+    font: inherit; font-size: 15px; font-weight: 700; letter-spacing: 0.01em;
+    cursor: pointer; margin-top: 16px;
+  }
+  .btn-go:active { filter: brightness(0.94); }
+  .btn-stop {
+    width: 100%; display: flex; align-items: center; justify-content: center;
+    min-height: 54px; border-radius: 16px;
+    background: transparent; color: var(--cast-on);
+    border: 1px solid color-mix(in srgb, var(--cast-on) 30%, var(--cast-surface));
+    font: inherit; font-size: 15px; font-weight: 500;
+    cursor: pointer; margin-top: 16px;
+  }
+  .btn-stop:active { background: color-mix(in srgb, var(--cast-on) 6%, transparent); }
+  .btn-mid {
     font: inherit; font-size: 14px; font-weight: 500;
-    border-radius: 999px; padding: 8px 16px; cursor: pointer;
-    flex: 0 0 auto;
+    border-radius: 12px; padding: 11px 18px; cursor: pointer;
+    background: var(--cast-primary); color: var(--cast-on-primary);
+    border: 1px solid var(--cast-primary);
   }
-  .btn-primary { background: var(--cast-primary); color: var(--cast-background); border: 1px solid var(--cast-primary); }
-  .btn-secondary { background: transparent; color: var(--cast-on); border: 1px solid var(--chip-border); }
-  .btn-text { background: none; border: none; color: var(--cast-primary); padding: 8px 8px; }
-  .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .btn-icon { padding: 8px 14px; }
-  .setting-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 6px 0; margin-top: 6px;
+  .text-btn {
+    font: inherit; font-size: 14px; font-weight: 500;
+    background: none; border: none; padding: 8px;
+    color: var(--cast-primary); cursor: pointer;
   }
-  .setting-row .label { flex: 1 1 auto; font-size: 15px; }
+  .text-btn.quiet { color: color-mix(in srgb, var(--cast-on-variant) 60%, var(--cast-on)); }
+  .icon-btn {
+    flex: 0 0 auto; width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid var(--chip-border); border-radius: 12px;
+    color: var(--cast-on); cursor: pointer;
+  }
+  .icon-btn:active { background: color-mix(in srgb, var(--cast-on) 6%, transparent); }
 
   /* ---- Status rows: icon + message, one treatment on every screen ---- */
   .status-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 14px; line-height: 1.45; }
-  .status-row .ico { flex: 0 0 auto; font-size: 15px; }
+  .status-row svg { flex: 0 0 auto; margin-top: 1px; }
   .status-row.error { color: var(--cast-error); }
   .status-row.info { color: var(--cast-on); }
   .status-row.ok { color: var(--cast-primary); }
+
   /* ---- Spinner ---- */
   .spinner {
     width: 16px; height: 16px; flex: 0 0 auto;
@@ -97,22 +175,150 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 14px; }
 
-  /* ---- Header layout ---- */
-  .head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
-  .head-row .head-status { min-width: 0; font-size: 14px; line-height: 1.4; }
-  .head-row .head-status.failed { color: var(--cast-error); }
-  .head-row .head-status.casting { font-size: 15px; font-weight: 500; }
-  .head-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+  /* ---- App bar (Home / Settings) ---- */
+  .app-bar { display: flex; align-items: center; gap: 10px; margin-top: 4px; min-height: 40px; }
+  .bar-sub { font-size: 13px; color: var(--cast-on-variant); margin-top: 6px; line-height: 1.45; }
 
-  /* ---- Camera preview placeholder (prototype never fakes a feed) ---- */
-  .qr-frame {
-    margin-top: 10px; height: 320px;
-    border: 1px solid var(--chip-border); border-radius: 20px;
+  /* ---- On-air hero: tally + desktop name (+ live timer) ---- */
+  .hero { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .hero-left { flex: 1 1 auto; min-width: 0; }
+  .hero-overline {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 500; letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--cast-on-variant);
+  }
+  .hero-name { margin-top: 6px; overflow-wrap: break-word; }
+  .hero-meta { margin-top: 10px; font-size: 13px; color: var(--cast-on-variant); }
+
+  /* ---- Grouped cards (inset lists) ---- */
+  .card {
+    background: var(--cast-surface);
+    border: 1px solid var(--chip-border);
+    border-radius: 18px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .card-foot { font-size: 13px; color: var(--cast-on-variant); padding: 10px 16px 12px; line-height: 1.45; border-top: 1px solid var(--chip-border); }
+
+  /* ---- Icon list rows ---- */
+  .icon-row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; }
+  .icon-row + .icon-row { border-top: 1px solid var(--chip-border); }
+  .row-ico {
+    flex: 0 0 auto; width: 38px; height: 38px; border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    color: var(--cast-on-variant); font-size: 13px; text-align: center; padding: 0 24px;
+    color: var(--cast-on);
+    background: color-mix(in srgb, var(--cast-on) 8%, var(--cast-surface));
+  }
+  .row-text { flex: 1 1 auto; min-width: 0; }
+  .row-title { font-size: 15px; font-weight: 500; line-height: 1.35; }
+  .row-sub { font-size: 13px; color: var(--cast-on-variant); line-height: 1.45; margin-top: 2px; }
+  .row-title.err, .row-sub.err { color: var(--cast-error); }
+  .row-ico.err { color: var(--cast-error); background: color-mix(in srgb, var(--cast-error) 10%, var(--cast-surface)); }
+  .row-right { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+
+  /* ---- LED rows (This cast): lamp + plain words ---- */
+  .led-row {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 12px 16px; font-size: 14px; line-height: 1.45;
+  }
+  .led-row + .led-row, .led-row + .icon-row, .icon-row + .led-row { border-top: 1px solid var(--chip-border); }
+  .led-row .led { margin-top: 5px; }
+  .led-row .row-right { align-self: center; }
+  .led-row.hot { color: var(--cast-error); }
+
+  /* ---- Segmented control (short option sets: resolution, fps) ---- */
+  .seg { display: flex; border: 1px solid var(--chip-border); border-radius: 12px; overflow: hidden; margin: 8px 16px 0; }
+  .seg-btn {
+    flex: 1 1 0; font: inherit; font-size: 14px; color: var(--cast-on);
+    background: transparent; border: none; cursor: pointer;
+    padding: 10px 0; text-align: center;
+  }
+  .seg-btn + .seg-btn { border-left: 1px solid var(--chip-border); }
+  .seg-btn[aria-pressed="true"] { background: var(--chip-selected-bg); color: var(--cast-primary); font-weight: 500; }
+  .seg-label { font-size: 13px; color: var(--cast-on-variant); margin-top: 14px; padding: 0 16px; }
+
+  /* ---- Profile selector rows (radio + name + intent + real spec) ---- */
+  .pick-row { display: flex; align-items: center; gap: 14px; padding: 12px 16px; cursor: pointer; }
+  .pick-row + .pick-row { border-top: 1px solid var(--chip-border); }
+  .pick-row.pick-on { background: color-mix(in srgb, var(--cast-primary) 7%, var(--cast-surface)); }
+  .pick-radio {
+    flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--cast-on) 30%, transparent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pick-row.pick-on .pick-radio { border-color: var(--cast-primary); }
+  .pick-row.pick-on .pick-radio::after {
+    content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--cast-primary);
+  }
+  .pick-spec { font-size: 11px; color: var(--cast-on-variant); margin-top: 3px; letter-spacing: 0.02em; }
+
+  /* ---- Advanced card body (below its header row) ---- */
+  .adv-body {
+    padding: 4px 16px 14px;
+    border-top: 1px solid var(--chip-border);
   }
 
-  /* ---- Chips (selector vocabulary, unchanged) ---- */
+  /* ---- QR scanner (full-bleed) ---- */
+  .scan-full {
+    /* Breaks out of the phone frame padding: the scanner IS the screen. */
+    margin: -28px -20px -40px;
+    height: 660px; border-radius: 28px; overflow: hidden;
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    /* Placeholder for the camera feed — the app shows the live preview here. */
+    background: color-mix(in srgb, var(--cast-background) 45%, #000);
+  }
+  .scan-title {
+    position: absolute; top: 22px; left: 0; right: 0;
+    text-align: center; font-size: 16px; font-weight: 500; color: var(--cast-on);
+  }
+  .scan-stage { position: relative; width: 252px; height: 252px; }
+  .scan-cutout {
+    position: absolute; inset: 0; border-radius: 26px;
+    /* Everything except the cutout is dimmed (scrim-with-hole;
+       Compose port: a scrim drawn with a rounded-rect hole / BlendMode.Clear). */
+    box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.55);
+  }
+  .scan-placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--cast-on-variant); font-size: 12px;
+  }
+  .scan-line {
+    position: absolute; left: 12px; right: 12px; top: 10px; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--cast-primary), transparent);
+    box-shadow: 0 0 12px 2px color-mix(in srgb, var(--cast-primary) 55%, transparent);
+    animation: scan-sweep 2.4s ease-in-out infinite alternate;
+  }
+  @keyframes scan-sweep { from { transform: translateY(0); } to { transform: translateY(228px); } }
+  .scan-c { position: absolute; width: 26px; height: 26px; border: 3px solid var(--cast-on); }
+  .scan-c.tl { top: -3px; left: -3px; border-right: none; border-bottom: none; border-top-left-radius: 10px; }
+  .scan-c.tr { top: -3px; right: -3px; border-left: none; border-bottom: none; border-top-right-radius: 10px; }
+  .scan-c.bl { bottom: -3px; left: -3px; border-right: none; border-top: none; border-bottom-left-radius: 10px; }
+  .scan-c.br { bottom: -3px; right: -3px; border-left: none; border-top: none; border-bottom-right-radius: 10px; }
+  .scan-caption {
+    margin-top: 26px; max-width: 300px; text-align: center;
+    font-size: 14px; line-height: 1.5; color: var(--cast-on);
+  }
+  /* Inline status over the scanner (failed/ended states) — same status-row
+     vocabulary, wrapped in a scrim pill so it reads over the dimmed feed. */
+  .scan-pill {
+    margin-top: 26px; max-width: 330px;
+    background: color-mix(in srgb, var(--cast-background) 78%, transparent);
+    border: 1px solid var(--chip-border); border-radius: 14px; padding: 10px 14px;
+  }
+  .scan-pill .status-row { margin-top: 0; font-size: 13px; }
+  .torch {
+    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+    width: 48px; height: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font: inherit; cursor: pointer;
+    color: var(--cast-on);
+    background: color-mix(in srgb, var(--cast-background) 55%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cast-on) 40%, transparent);
+  }
+  .torch[aria-pressed="true"] { background: var(--cast-on); color: var(--cast-background); border-color: var(--cast-on); }
+
+  /* ---- Chips (selector vocabulary) ---- */
   .chip-row { display: flex; gap: 8px; margin-top: 8px; overflow-x: auto; padding-bottom: 2px; }
   .chip {
     flex: 0 0 auto;
@@ -131,12 +337,6 @@
   }
   .chip:disabled { opacity: 0.45; cursor: default; }
 
-  /* ---- Toggle rows ---- */
-  .toggle-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 6px 0; margin-top: 6px;
-  }
-  .toggle-row .label { font-size: 15px; padding-right: 16px; }
   .slider-row { margin-top: 10px; }
   input[type="range"] { width: 100%; accent-color: var(--cast-primary); }
   .switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
@@ -154,22 +354,21 @@
   .switch input:checked ~ .track { background: var(--cast-primary); }
   .switch input:checked ~ .thumb { transform: translateX(20px); background: #101418; }
 
-  /* ---- Collapsible "Advanced" ---- */
-  .collapse-row {
-    display: flex; align-items: center; gap: 8px;
-    width: 100%; padding: 0; border: none; background: none;
-    font: inherit; color: inherit; text-align: left;
-    cursor: pointer; margin-top: 20px;
-  }
-  .collapse-row .chev { color: var(--cast-on-variant); font-size: 14px; }
-  .collapse-row .label { font-size: 15px; font-weight: 500; }
+  .chev { color: var(--cast-on-variant); display: flex; }
 
-  /* ---- Read-only facts ---- */
+  /* ---- Read-only facts (console readout strip) ---- */
   .readout {
-    margin-top: 10px; font-size: 13px; color: var(--cast-on-variant);
-    border: 1px dashed var(--chip-border); border-radius: 12px; padding: 10px 12px;
+    margin-top: 10px; font-size: 12px; color: var(--cast-on-variant);
+    background: color-mix(in srgb, var(--cast-on) 4%, var(--cast-surface));
+    border-radius: 10px; padding: 10px 12px;
   }
   .readout strong { color: var(--cast-on); font-weight: 500; }
+
+  /* ---- Reduced motion: spatial/attention loops off; fades stay ---- */
+  @media (prefers-reduced-motion: reduce) {
+    .scan-line { animation: none; }
+    .led.pulse { animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -183,10 +382,10 @@
 "use strict";
 
 /* ---- Data: every user-facing string is the app's real strings.xml text
-   (new Share-screen flow strings noted inline); settings mirror CastSettings
-   (CastSettingsCodec bumps to v4; each preset also carries the Advanced
-   defaults). The control bar above the phone drives prototype states — it is
-   never part of the ported design. ---- */
+   (the hero overline and live timer are new and noted in the file header);
+   settings mirror CastSettings (CastSettingsCodec bumps to v4; each preset
+   also carries the Advanced defaults). The control bar above the phone
+   drives prototype states — it is never part of the ported design. ---- */
 const DESKTOP_NAME = "Gaming PC";
 
 const PROFILES = [
@@ -235,6 +434,7 @@ const state = {
   screen: "scan",        // scan | home | settings
   scanState: "scanning", // permission | scanning | found | reconnecting | failed | ended
   scanFail: "connect_unreachable",
+  torch: false, // flashlight while scanning (prototype toggles the button; the app drives CameraX's torch)
   homeState: "connected", // connected | starting | casting | failed
   // Audio & mic rows on Home. One switch per track. Only the microphone is
   // truly removed when off (its stream is torn down and the hardware is
@@ -258,6 +458,27 @@ const state = {
 /* ---- DOM helpers ---- */
 const el = (html) => { const d = document.createElement("template"); d.innerHTML = html.trim(); return d.content.firstChild; };
 
+/* ---- Inline stroke icons (24px grid, 1.7 stroke) — no emoji anywhere.
+   Port: Material Symbols Outlined equivalents (names in the file header). */
+const ICONS = {
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  gamepad: '<path d="M6 12h4M8 10v4"/><path d="M15 13h.01M18 11h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3"/>',
+  headphones: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="7" rx="2"/><rect x="17" y="14" width="4" height="7" rx="2"/>',
+  warning: '<path d="M12 4 2.8 19a1.8 1.8 0 0 0 1.5 2.7h15.4a1.8 1.8 0 0 0 1.5-2.7L12 4z"/><path d="M12 10v4"/><circle cx="12" cy="17" r="0.4"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.4"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
+  chevLeft: '<path d="M14.5 6 8.5 12l6 6"/>',
+  chevRight: '<path d="M9.5 6l6 6-6 6"/>',
+  chevDown: '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
+  flashlight: '<path d="M7 3h10v3l-3.2 3.6V20a1 1 0 0 1-1 1h-1.6a1 1 0 0 1-1-1V9.6L7 6V3z"/><path d="M10.5 6h3"/>',
+  qr: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h3v3h-3zM20 17v3h-3"/>',
+  tune: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+};
+function icon(name, size) {
+  return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
+}
+
 function chipRow(choices, pressedId, onPick, disabledId) {
   const row = el('<div class="chip-row"></div>');
   for (const c of choices) {
@@ -271,14 +492,6 @@ function chipRow(choices, pressedId, onPick, disabledId) {
   return row;
 }
 
-function toggleRow(label, checked, onSet) {
-  const row = el('<div class="toggle-row"><span class="label"></span><label class="switch"><input type="checkbox"><span class="track"></span><span class="thumb"></span></label></div>');
-  row.querySelector(".label").textContent = label;
-  const box = row.querySelector("input");
-  box.checked = checked;
-  box.addEventListener("change", () => onSet(box.checked));
-  return row;
-}
 function switchEl(checked, onSet) {
   const sw = el('<label class="switch"><input type="checkbox"><span class="track"></span><span class="thumb"></span></label>');
   const box = sw.querySelector("input");
@@ -289,22 +502,22 @@ function switchEl(checked, onSet) {
 
 function subLabel(text) { const d = el('<div class="sub-label"></div>'); d.textContent = text; return d; }
 function hint(text) { const d = el('<div class="hint"></div>'); d.textContent = text; return d; }
-function sectionLabel(text) { const d = el('<div class="section-label"></div>'); d.textContent = text; return d; }
+function silkscreen(text) { const d = el('<div class="silkscreen"></div>'); d.textContent = text; return d; }
 
-function btn(label, cls, onClick) {
-  const b = el('<button class="btn ' + cls + '" type="button"></button>');
+function textBtn(label, quiet, onClick) {
+  const b = el('<button class="text-btn' + (quiet ? " quiet" : "") + '" type="button"></button>');
   b.textContent = label;
   b.addEventListener("click", onClick);
   return b;
 }
-function btnRow(button) { const r = el('<div class="btn-row"></div>'); r.appendChild(button); return r; }
 
 function statusRow(kind, text) {
   const r = el('<div class="status-row ' + kind + '"></div>');
-  const ico = el('<span class="ico"></span>');
-  ico.textContent = kind === "error" ? "⚠" : (kind === "ok" ? "✓" : "ⓘ");
+  const name = kind === "error" ? "warning" : (kind === "ok" ? "check" : "info");
+  const holder = el('<span></span>'); holder.innerHTML = icon(name, 17);
+  r.appendChild(holder.firstChild);
   const t = el('<span></span>'); t.textContent = text;
-  r.appendChild(ico); r.appendChild(t);
+  r.appendChild(t);
   return r;
 }
 function spinnerEl(lg) { return el('<span class="spinner' + (lg ? " spinner-lg" : "") + '"></span>'); }
@@ -320,9 +533,75 @@ function effectiveProfile() {
   if (v && v.longEdge === state.longEdge && v.fps === state.fps && v.bitrateMin === state.bitrateMin && v.bitrateMax === state.bitrateMax) return state.profile;
   return "custom";
 }
-function profileIntent() {
-  const p = PROFILES.find((x) => x.id === effectiveProfile());
-  return p ? p.intent : PROFILE_INTENT_CUSTOM;
+
+/* ---- Card / row builders ---- */
+function card() { return el('<div class="card"></div>'); }
+
+function iconRow(opts) {
+  const r = el('<div class="icon-row"></div>');
+  if (opts.id) r.setAttribute("data-od-id", opts.id);
+  const ico = el('<div class="row-ico' + (opts.err ? " err" : "") + '"></div>');
+  ico.innerHTML = icon(opts.ico, 19);
+  r.appendChild(ico);
+  const t = el('<div class="row-text"></div>');
+  const tt = el('<div class="row-title' + (opts.err ? " err" : "") + '"></div>'); tt.textContent = opts.title; t.appendChild(tt);
+  if (opts.sub) {
+    const s = el('<div class="row-sub' + (opts.err ? " err" : "") + '"></div>'); s.textContent = opts.sub;
+    t.appendChild(s);
+  }
+  r.appendChild(t);
+  if (opts.right) { const rr = el('<div class="row-right"></div>'); rr.appendChild(opts.right); r.appendChild(rr); }
+  if (opts.onClick) r.addEventListener("click", opts.onClick);
+  return r;
+}
+
+/* LED + plain-words row ("This cast"): lamp classes map the platform
+   ladder — normal=muted, warm/moderate=amber, severe+=error, and the
+   adaptive announcements light while they apply. */
+function ledRow(opts) {
+  const r = el('<div class="led-row' + (opts.hot ? " hot" : "") + '"></div>');
+  const led = el('<span class="led ' + (opts.led || "") + '"></span>');
+  r.appendChild(led);
+  const t = el('<div class="row-text"></div>');
+  const tt = el('<div class="row-title"></div>'); tt.textContent = opts.title; t.appendChild(tt);
+  r.appendChild(t);
+  if (opts.right) { const rr = el('<div class="row-right"></div>'); rr.appendChild(opts.right); r.appendChild(rr); }
+  return r;
+}
+
+function segLabel(text) { const d = el('<div class="seg-label"></div>'); d.textContent = text; return d; }
+
+function segControl(choices, pressedId, onPick) {
+  const seg = el('<div class="seg"></div>');
+  for (const c of choices) {
+    const b = el('<button class="seg-btn" type="button"></button>');
+    b.textContent = c.name;
+    b.setAttribute("aria-pressed", String(c.id === pressedId));
+    b.addEventListener("click", () => onPick(c.id));
+    seg.appendChild(b);
+  }
+  return seg;
+}
+
+/* The profile's real numbers (PROFILE_VALUES), shown as a tabular spec. */
+function specOf(v) {
+  return v.longEdge + " px · " + v.fps + " fps · " + v.bitrateMin + "–" + v.bitrateMax + " Mbps";
+}
+function pickRow(profile, spec, selected, onClick) {
+  const r = el('<div class="pick-row' + (selected ? " pick-on" : "") + '"></div>');
+  const radio = el('<span class="pick-radio"></span>');
+  r.appendChild(radio);
+  const t = el('<div class="row-text"></div>');
+  const tt = el('<div class="row-title"></div>'); tt.textContent = profile.name;
+  const s = el('<div class="row-sub"></div>'); s.textContent = profile.intent;
+  t.appendChild(tt); t.appendChild(s);
+  if (spec) {
+    const sp = el('<div class="pick-spec mono"></div>'); sp.textContent = spec;
+    t.appendChild(sp);
+  }
+  r.appendChild(t);
+  if (onClick) r.addEventListener("click", onClick);
+  return r;
 }
 
 /* Auto-advancing transient states (pairing found, cast starting). */
@@ -332,108 +611,230 @@ function scheduleAuto(fn) {
   autoTimer = setTimeout(fn, 1200);
 }
 
+/* ---- Live timer: ticks the hero's elapsed readout once a second without
+   a re-render (keeps the tally pulse and sweep animations running). The
+   app reads the cast-start timestamp from CastState.Casting — integration
+   point; the prototype anchors it at the moment casting begins. ---- */
+let castStart = null;
+function fmtDuration(totalSeconds) {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  return h > 0 ? h + ":" + p(m) + ":" + p(s) : p(m) + ":" + p(s);
+}
+setInterval(() => {
+  const node = document.querySelector('[data-od-id="home-live-timer"]');
+  if (!node) {
+    if (state.homeState !== "casting") castStart = null;
+    return;
+  }
+  if (castStart === null) castStart = Date.now();
+  node.textContent = fmtDuration(Math.floor((Date.now() - castStart) / 1000));
+}, 1000);
+
 /* ---- Scan (the launch screen: pair with the desktop) ---- */
-function scanBlock() {
-  const b = el('<div></div>');
-  b.appendChild(hint("Point the camera at the QR code shown on the desktop app."));
-  const f = el('<div class="qr-frame"></div>'); f.textContent = "Camera preview";
-  b.appendChild(f);
+/* Telegram/WhatsApp-style scanner: full-bleed camera area, dimmed scrim with
+   a rounded-square cutout, corner brackets, animated scan line, caption, torch.
+   status = null while scanning, or {kind, text} for the failed/ended overlays. */
+function scanBlock(status) {
+  const b = el('<div class="scan-full" data-od-id="scan-scanner"></div>');
+  const title = el('<div class="scan-title"></div>');
+  title.textContent = "Scan the desktop's QR code";
+  b.appendChild(title);
+
+  const stage = el('<div class="scan-stage"></div>');
+  const cutout = el('<div class="scan-cutout" data-od-id="scan-cutout"></div>');
+  const ph = el('<div class="scan-placeholder"></div>');
+  ph.textContent = "Camera preview"; // placeholder — the app renders the live feed here
+  cutout.appendChild(ph);
+  cutout.appendChild(el('<div class="scan-line"></div>'));
+  stage.appendChild(cutout);
+  for (const pos of ["tl", "tr", "bl", "br"]) {
+    stage.appendChild(el('<span class="scan-c ' + pos + '"></span>'));
+  }
+  b.appendChild(stage);
+
+  if (status) {
+    const pill = el('<div class="scan-pill"></div>');
+    pill.appendChild(statusRow(status.kind, status.text));
+    b.appendChild(pill);
+  } else {
+    const cap = el('<div class="scan-caption" data-od-id="scan-caption"></div>');
+    cap.textContent = "Point the camera at the QR code shown on the desktop app.";
+    b.appendChild(cap);
+  }
+
+  const torch = el('<button class="torch" type="button" data-od-id="scan-torch" aria-label="Flashlight"></button>');
+  torch.innerHTML = icon("flashlight", 22);
+  torch.setAttribute("aria-pressed", String(state.torch));
+  torch.addEventListener("click", () => {
+    state.torch = !state.torch;
+    torch.setAttribute("aria-pressed", String(state.torch)); // local update only — keeps the sweep animation running
+  });
+  b.appendChild(torch);
   return b;
 }
 
 function renderScan(parent) {
   const root = el('<div></div>');
-  const title = el('<div class="screen-title"></div>'); title.textContent = "Scan the desktop's QR code"; root.appendChild(title);
 
   if (state.scanState === "permission") {
-    root.appendChild(hint("Camera access is needed to scan the QR code."));
-    root.appendChild(btnRow(btn("Grant camera access", "btn-primary", () => { state.scanState = "scanning"; renderAll(); })));
+    // Pre-camera state: QR glyph + title + the grant action, centered.
+    const wrap = el('<div class="scan-perm"></div>');
+    const glyph = el('<div class="scan-perm-ico"></div>');
+    glyph.innerHTML = icon("qr", 40);
+    glyph.style.color = "var(--cast-on-variant)";
+    wrap.appendChild(glyph);
+    const title = el('<div class="screen-title"></div>'); title.textContent = "Scan the desktop's QR code";
+    title.style.textAlign = "center";
+    wrap.appendChild(title);
+    const h = hint("Camera access is needed to scan the QR code.");
+    h.style.textAlign = "center"; h.style.marginTop = "10px";
+    wrap.appendChild(h);
+    const btn = el('<button class="btn-mid" type="button"></button>');
+    btn.textContent = "Grant camera access";
+    btn.style.marginTop = "16px";
+    btn.addEventListener("click", () => { state.scanState = "scanning"; renderAll(); });
+    wrap.appendChild(btn);
+    wrap.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:560px;padding:0 12px;";
+    root.appendChild(wrap);
   } else if (state.scanState === "scanning") {
-    root.appendChild(scanBlock());
+    root.appendChild(scanBlock(null));
   } else if (state.scanState === "found") {
-    const t = el('<div class="screen-title"></div>'); t.textContent = "Desktop found"; t.style.marginTop = "12px"; root.appendChild(t);
-    const r = spinnerRow("Pairing with the desktop…", true); r.style.marginTop = "10px"; root.appendChild(r);
+    const wrap = el('<div></div>');
+    wrap.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:560px;padding:0 24px;";
+    const glyph = el('<div></div>'); glyph.innerHTML = icon("check", 40);
+    glyph.style.color = "var(--cast-primary)";
+    glyph.style.marginBottom = "14px";
+    wrap.appendChild(glyph);
+    const t = el('<div class="screen-title"></div>'); t.textContent = "Desktop found";
+    t.style.textAlign = "center";
+    wrap.appendChild(t);
+    const r = spinnerRow("Pairing with the desktop…", true); r.style.marginTop = "14px";
+    wrap.appendChild(r);
+    root.appendChild(wrap);
     scheduleAuto(() => { state.screen = "home"; state.homeState = "connected"; renderAll(); });
   } else if (state.scanState === "reconnecting") {
-    const r = spinnerRow("Reconnecting to the desktop…", true); r.style.marginTop = "16px"; root.appendChild(r);
+    const wrap = el('<div></div>');
+    wrap.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:560px;padding:0 24px;";
+    const r = spinnerRow("Reconnecting to the desktop…", true);
+    wrap.appendChild(r);
+    root.appendChild(wrap);
     scheduleAuto(() => { state.screen = "home"; state.homeState = "connected"; renderAll(); });
   } else if (state.scanState === "failed") {
-    root.appendChild(statusRow("error", PAIRING_ERRORS[state.scanFail]));
-    root.appendChild(scanBlock());
+    root.appendChild(scanBlock({ kind: "error", text: PAIRING_ERRORS[state.scanFail] }));
   } else if (state.scanState === "ended") {
-    root.appendChild(statusRow("info", "The desktop ended the session. Scan again to connect."));
-    root.appendChild(scanBlock());
+    root.appendChild(scanBlock({ kind: "info", text: "The desktop ended the session. Scan again to connect." }));
   }
   parent.appendChild(root);
 }
 
 /* ---- Home (the connected hub) ---- */
-function audioSettingRow(label, on, onSetOn) {
-  const row = el('<div class="setting-row"></div>');
-  const l = el('<span class="label"></span>'); l.textContent = label; row.appendChild(l);
-  row.appendChild(switchEl(on, onSetOn));
-  return row;
-}
-
-function renderThisCast() {
-  const cast = el('<div></div>');
-  if (state.mic && state.gameAudio) {
-    cast.appendChild(hint("Tip: use headphones — otherwise the mic picks up the game audio playing from this phone."));
-  }
-  cast.appendChild(hint(THERMAL[state.thermal]));
-  if (state.adaptive) {
-    cast.appendChild(hint(ADAPTIVE[state.adaptive]));
-    if (state.belowCeiling) {
-      cast.appendChild(btnRow(btn("Restore quality", "btn-secondary", () => {
-        state.adaptive = "restored"; state.belowCeiling = false; renderAll();
-      })));
-    }
-  }
-  return cast;
-}
-
 function renderHome(parent) {
   const root = el('<div></div>');
-  const title = el('<div class="home-title"></div>'); title.textContent = "Zero-Friction Local Cast"; root.appendChild(title);
+  const casting = state.homeState === "casting";
 
-  const head = el('<div class="head-row"></div>');
+  // App bar: product name + the gear (all cast settings)
+  const bar = el('<div class="app-bar"></div>');
+  const bt = el('<div class="bar-title"></div>'); bt.textContent = "Zero-Friction Local Cast";
+  bar.appendChild(bt);
+  const gear = el('<button class="icon-btn" type="button" aria-label="Cast settings"></button>');
+  gear.innerHTML = icon("gear", 19);
+  gear.addEventListener("click", () => { state.screen = "settings"; renderAll(); });
+  bar.appendChild(gear);
+  root.appendChild(bar);
+
+  // On-air hero — the tally section. Connected = steady lamp; casting =
+  // pulsing lamp + the live elapsed readout. (New strings noted in header.)
   if (state.homeState === "failed") {
-    const sr = statusRow("error", "Couldn't start the cast. Please try again."); sr.style.marginTop = "0";
-    head.appendChild(sr);
+    const err = card();
+    err.setAttribute("data-od-id", "home-connection");
+    err.appendChild(iconRow({ ico: "warning", title: "Couldn't start the cast. Please try again.", err: true }));
+    root.appendChild(err);
   } else {
-    const st = el('<div class="head-status casting"></div>');
-    st.textContent = state.homeState === "casting" ? "Casting to " + DESKTOP_NAME : "Connected to " + DESKTOP_NAME;
-    head.appendChild(st);
+    const hero = el('<div class="hero" data-od-id="home-hero"></div>');
+    const left = el('<div class="hero-left"></div>');
+    const overline = el('<div class="hero-overline"></div>');
+    const led = el('<span class="led on' + (casting ? " pulse" : "") + '"></span>');
+    const ov = el('<span></span>');
+    ov.textContent = casting ? "Casting to" : "Connected to";
+    overline.appendChild(led); overline.appendChild(ov);
+    left.appendChild(overline);
+    const name = el('<div class="hero-name"></div>'); name.textContent = DESKTOP_NAME;
+    left.appendChild(name);
+    if (casting) {
+      const meta = el('<div class="hero-meta mono" data-od-id="home-live-timer">00:00</div>');
+      left.appendChild(meta);
+    }
+    hero.appendChild(left);
+    // Disconnect ends everything: the session too. Back to the scan screen.
+    hero.appendChild(textBtn("Disconnect", true, () => { state.screen = "scan"; state.scanState = "scanning"; renderAll(); }));
+    root.appendChild(hero);
   }
-  // Disconnect ends everything: the session too. Back to the scan screen.
-  head.appendChild(btn("Disconnect", "btn-text", () => { state.screen = "scan"; state.scanState = "scanning"; renderAll(); }));
-  root.appendChild(head);
 
-  // Share screen + gear (all cast settings)
-  const actions = el('<div class="btn-row"></div>');
+  // The transport control: solid amber to go, outlined to stop the video
+  // (the pairing session stays connected — only the video stops).
   if (state.homeState === "starting") {
-    const r = spinnerRow("Starting the cast…"); r.style.marginTop = "0"; root.appendChild(r);
+    const r = spinnerRow("Starting the cast…"); r.style.marginTop = "18px"; root.appendChild(r);
+    // mobile.md consent affordance (Android 14+): the system dialog shown
+    // during this window defaults to the cast-killing choice.
+    const h = hint("When your phone asks what to share, choose “Share full screen”.");
+    h.style.marginTop = "10px";
+    root.appendChild(h);
   } else {
-    actions.appendChild(state.homeState === "casting"
-      ? btn("Stop share screen", "btn-primary", () => { state.homeState = "connected"; renderAll(); })
-      : btn("Share screen", "btn-primary", () => {
-          state.homeState = "starting"; renderAll();
-          scheduleAuto(() => { if (state.homeState === "starting") { state.homeState = "casting"; renderAll(); } });
-        }));
-    actions.appendChild(btn("⚙", "btn-secondary btn-icon", () => { state.screen = "settings"; renderAll(); }));
-    root.appendChild(actions);
+    const go = el('<button class="' + (casting ? "btn-stop" : "btn-go") + '" type="button" data-od-id="home-share"></button>');
+    go.textContent = casting ? "Stop share screen" : "Share screen";
+    go.addEventListener("click", () => {
+      if (casting) { state.homeState = "connected"; renderAll(); return; }
+      state.homeState = "starting"; renderAll();
+      scheduleAuto(() => { if (state.homeState === "starting") { state.homeState = "casting"; renderAll(); } });
+    });
+    root.appendChild(go);
   }
 
-  // Audio & mic rows
-  root.appendChild(sectionLabel("Audio"));
-  root.appendChild(audioSettingRow("Game audio", state.gameAudio, (on) => { state.gameAudio = on; renderAll(); }));
-  root.appendChild(hint("Off silences the game audio, but its track stays part of the cast."));
-  root.appendChild(audioSettingRow("Microphone", state.mic, (on) => { state.mic = on; renderAll(); }));
-  root.appendChild(hint("Off removes the microphone from the cast and frees it for the game's own voice chat."));
+  // Audio card — one switch per track
+  const audioLabel = silkscreen("Audio");
+  root.appendChild(audioLabel);
+  const audio = card();
+  audio.setAttribute("data-od-id", "home-audio");
+  audio.appendChild(iconRow({
+    ico: "gamepad", title: "Game audio",
+    sub: "Off silences the game audio, but its track stays part of the cast.",
+    right: switchEl(state.gameAudio, (on) => { state.gameAudio = on; renderAll(); }),
+  }));
+  audio.appendChild(iconRow({
+    ico: "mic", title: "Microphone",
+    sub: "Off removes the microphone from the cast and frees it for the game's own voice chat.",
+    right: switchEl(state.mic, (on) => { state.mic = on; renderAll(); }),
+  }));
+  root.appendChild(audio);
 
-  if (state.homeState === "casting") {
-    root.appendChild(sectionLabel("This cast"));
-    root.appendChild(renderThisCast());
+  // This cast (live conditions) — only while casting
+  if (casting) {
+    root.appendChild(silkscreen("This cast"));
+    const cast = card();
+    cast.setAttribute("data-od-id", "home-this-cast");
+    if (state.mic && state.gameAudio) {
+      cast.appendChild(iconRow({ ico: "headphones", title: "Tip: use headphones — otherwise the mic picks up the game audio playing from this phone." }));
+    }
+    const hot = state.thermal === "severe" || state.thermal === "critical";
+    cast.appendChild(ledRow({
+      title: THERMAL[state.thermal],
+      led: hot ? "hot" : (state.thermal === "normal" ? "" : "on"),
+      hot,
+    }));
+    if (state.adaptive) {
+      const downshift = state.adaptive === "down_thermal" || state.adaptive === "down_stream";
+      cast.appendChild(ledRow({
+        title: ADAPTIVE[state.adaptive],
+        led: downshift ? "on" : "",
+        right: state.belowCeiling
+          ? textBtn("Restore quality", false, () => { state.adaptive = "restored"; state.belowCeiling = false; renderAll(); })
+          : null,
+      }));
+    }
+    root.appendChild(cast);
   }
   parent.appendChild(root);
 }
@@ -441,50 +842,65 @@ function renderHome(parent) {
 /* ---- Settings (the gear: all cast settings) ---- */
 function renderSettings(parent) {
   const root = el('<div></div>');
-  const head = el('<div class="head-row"></div>');
-  head.appendChild(btn("‹ Cast settings", "btn-text", () => { state.screen = "home"; renderAll(); }));
-  root.appendChild(head);
-  root.appendChild(hint("Changes take effect on the next cast."));
+  const bar = el('<div class="app-bar"></div>');
+  const back = el('<button class="icon-btn" type="button" aria-label="Back"></button>');
+  back.innerHTML = icon("chevLeft", 20);
+  back.style.marginLeft = "-8px";
+  back.addEventListener("click", () => { state.screen = "home"; renderAll(); });
+  bar.appendChild(back);
+  const bt = el('<div class="bar-title"></div>'); bt.textContent = "Cast settings";
+  bar.appendChild(bt);
+  root.appendChild(bar);
+  const sub = el('<div class="bar-sub"></div>');
+  sub.textContent = "Changes take effect on the next cast.";
+  root.appendChild(sub);
 
-  const section = el('<div></div>');
-  section.appendChild(sectionLabel("Share screen"));
-  section.appendChild(subLabel("Profile"));
-  section.appendChild(chipRow(PROFILES, effectiveProfile(), (id) => {
-    const v = PROFILE_VALUES[id];
-    Object.assign(state, {
-      profile: id, longEdge: v.longEdge, fps: v.fps,
-      bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax,
-      // Presets also reset the Advanced defaults (overridable afterwards):
-      encoderImpl: v.encoder, h264Profile: v.h264Profile, degradation: v.degradation,
-      fpsLimit: v.fpsLimit, bitrateMode: v.bitrateMode,
-    });
-    renderAll();
-  }));
-  section.appendChild(hint(profileIntent()));
-  section.appendChild(hint("Picking a template also sets the Advanced defaults below — you can still override them."));
+  // Quality card — profile, resolution, frame rate, bitrate, adaptive
+  root.appendChild(silkscreen("Share screen"));
+  const q = card();
+  q.setAttribute("data-od-id", "settings-quality");
+  const eff = effectiveProfile();
+  for (const p of PROFILES) {
+    q.appendChild(pickRow(p, specOf(PROFILE_VALUES[p.id]), eff === p.id, () => {
+      const v = PROFILE_VALUES[p.id];
+      Object.assign(state, {
+        profile: p.id, longEdge: v.longEdge, fps: v.fps,
+        bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax,
+        // Presets also reset the Advanced defaults (overridable afterwards):
+        encoderImpl: v.encoder, h264Profile: v.h264Profile, degradation: v.degradation,
+        fpsLimit: v.fpsLimit, bitrateMode: v.bitrateMode,
+      });
+      renderAll();
+    }));
+  }
+  if (eff === "custom") {
+    q.appendChild(pickRow({ name: "Custom", intent: PROFILE_INTENT_CUSTOM }, null, true, null));
+  }
 
-  section.appendChild(subLabel("Resolution (long edge)"));
-  section.appendChild(chipRow(
+  q.appendChild(segLabel("Resolution (long edge)"));
+  q.appendChild(segControl(
     [960, 1280, 1920].map((v) => ({ id: String(v), name: v + " px" })),
     String(state.longEdge),
     (id) => { state.longEdge = Number(id); renderAll(); },
   ));
-
-  section.appendChild(subLabel("Frame rate"));
-  section.appendChild(chipRow(
+  q.appendChild(segLabel("Frame rate"));
+  q.appendChild(segControl(
     [30, 60].map((v) => ({ id: String(v), name: v + " fps" })),
     String(state.fps),
     (id) => { state.fps = Number(id); renderAll(); },
   ));
 
-  section.appendChild(subLabel("Bitrate"));
-  section.appendChild(toggleRow("Automatic (follows the profile)", state.bitrateAuto, (on) => {
-    if (on) { const v = PROFILE_VALUES[state.profile]; Object.assign(state, { bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax }); }
-    else { state.bitrateAuto = false; state.bitrateMin = Math.round((state.bitrateMax * 0.5) * 10) / 10; }
-    renderAll();
+  q.appendChild(segLabel("Bitrate"));
+  q.appendChild(iconRow({
+    ico: "tune", title: "Automatic (follows the profile)",
+    right: switchEl(state.bitrateAuto, (on) => {
+      if (on) { const v = PROFILE_VALUES[state.profile]; Object.assign(state, { bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax }); }
+      else { state.bitrateAuto = false; state.bitrateMin = Math.round((state.bitrateMax * 0.5) * 10) / 10; }
+      renderAll();
+    }),
   }));
   if (!state.bitrateAuto) {
-    const wrap = el('<div class="slider-row"></div>');
+    const wrap = el('<div class="adv-body slider-row"></div>');
     const range = el('<input type="range" min="2" max="20" step="0.5">');
     range.value = String(state.bitrateMax);
     const note = el('<div class="hint"></div>');
@@ -495,36 +911,38 @@ function renderSettings(parent) {
       note.textContent = "Max " + state.bitrateMax + " Mbps";
     });
     wrap.appendChild(range); wrap.appendChild(note);
-    section.appendChild(wrap);
+    q.appendChild(wrap);
   }
+  q.appendChild(iconRow({
+    ico: "check", title: "Automatic quality",
+    sub: "Lowers the quality on its own when the phone gets hot or the stream struggles.",
+    right: switchEl(state.autoQuality, (on) => { state.autoQuality = on; renderAll(); }),
+  }));
+  const foot = el('<div class="card-foot"></div>');
+  foot.textContent = "Picking a template also sets the Advanced defaults below — you can still override them.";
+  q.appendChild(foot);
+  root.appendChild(q);
 
-  section.appendChild(toggleRow("Automatic quality", state.autoQuality, (on) => { state.autoQuality = on; renderAll(); }));
-  section.appendChild(hint("Lowers the quality on its own when the phone gets hot or the stream struggles."));
-  root.appendChild(section);
-
-  appendAdvanced(root);
+  // Advanced card — collapsed by default; the header row is the toggle
+  root.appendChild(silkscreen("Advanced"));
+  const adv = card();
+  adv.setAttribute("data-od-id", "settings-advanced");
+  const chev = el('<span class="chev"></span>');
+  chev.innerHTML = icon(state.advancedOpen ? "chevDown" : "chevRight", 18);
+  adv.appendChild(iconRow({
+    ico: "tune", title: "Advanced", right: chev,
+    onClick: () => { state.advancedOpen = !state.advancedOpen; renderAll(); },
+  }));
+  if (state.advancedOpen) {
+    const body = el('<div class="adv-body"></div>');
+    appendAdvancedContent(body);
+    adv.appendChild(body);
+  }
+  root.appendChild(adv);
   parent.appendChild(root);
 }
 
-function appendAdvanced(root) {
-  const adv = el('<div></div>');
-  const toggle = el('<button class="collapse-row" type="button" aria-expanded="false"></button>');
-  const chev = el('<span class="chev"></span>');
-  const label = el('<span class="label"></span>');
-  label.textContent = "Advanced";
-  toggle.appendChild(chev);
-  toggle.appendChild(label);
-  adv.appendChild(toggle);
-
-  const content = el('<div></div>');
-  const syncCollapse = () => {
-    chev.textContent = state.advancedOpen ? "▾" : "▸";
-    toggle.setAttribute("aria-expanded", String(state.advancedOpen));
-    content.style.display = state.advancedOpen ? "" : "none";
-  };
-  toggle.addEventListener("click", () => { state.advancedOpen = !state.advancedOpen; renderAll(); });
-  syncCollapse();
-
+function appendAdvancedContent(content) {
   content.appendChild(subLabel("Encoder"));
   content.appendChild(chipRow(
     [
@@ -589,7 +1007,7 @@ function appendAdvanced(root) {
     String(state.fpsLimit),
     (id) => { state.fpsLimit = id === "off" ? "off" : id; renderAll(); },
   ));
-  content.appendChild(hint("Caps how many frames per second the encoder works on. The effective rate is the lower of this and the capture frame rate — e.g. capture60 fps with a 30 fps limit encodes 30. Off follows the capture frame rate."));
+  content.appendChild(hint("Caps how many frames per second the encoder works on. The effective rate is the lower of this and the capture frame rate — e.g. capture 60 fps with a 30 fps limit encodes 30. Off follows the capture frame rate."));
 
   content.appendChild(subLabel("Bitrate mode"));
   content.appendChild(chipRow(
@@ -605,7 +1023,7 @@ function appendAdvanced(root) {
   // Read-only: the encoder libwebrtc actually picked for the active cast.
   // Real value comes from getStats (SenderStats.encoderImplementation) — shown
   // only when known, never faked.
-  const readout = el('<div class="readout"></div>');
+  const readout = el('<div class="readout mono"></div>');
   readout.textContent = "Encoder in use: — (visible during a cast)";
   if (state.encoderInUse) {
     const strong = el("<strong></strong>"); strong.textContent = state.encoderInUse;
@@ -613,8 +1031,6 @@ function appendAdvanced(root) {
   }
   content.appendChild(readout);
   content.appendChild(hint("Advanced settings — the defaults reproduce today's cast. Overrides here do not change which template chip is selected. Everything takes effect on the next cast."));
-  adv.appendChild(content);
-  root.appendChild(adv);
 }
 
 /* ---- Prototype-only control bar ---- */
