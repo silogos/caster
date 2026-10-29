@@ -8,6 +8,7 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import com.zerofriction.localcast.audio.MicRecordSubstituter
+import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.audio.MicSilenceMonitor
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.signaling.SignalingClient
@@ -46,6 +47,8 @@ import org.webrtc.audio.JavaAudioDeviceModule
 class MicCastSession(
     private val context: Context,
     private val signaling: SignalingClient,
+    /** The user's selected mic kind (settings); resolved to a device at record start. */
+    private val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
     /** State changes, delivered from the session thread. */
     private val onState: (MicState) -> Unit = {},
     statsIntervalMs: Long = STATS_INTERVAL_MS,
@@ -192,7 +195,7 @@ class MicCastSession(
                     override fun onWebRtcAudioRecordError(errorMessage: String) = micFailed("record: $errorMessage")
                 })
                 .createAudioDeviceModule()
-            substituter = MicRecordSubstituter(context, adm)
+            substituter = MicRecordSubstituter(context, adm, micDevice)
             val newFactory = PeerConnectionFactory.builder()
                 .setAudioDeviceModule(adm)
                 .createPeerConnectionFactory()
