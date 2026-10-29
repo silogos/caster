@@ -32,6 +32,12 @@ export function isPcId(value: unknown): value is PcId {
 export interface HelloPayload {
   /** App/platform string for logs, e.g. "ZeroFrictionCast/0.1.0 (Android15; Pixel8)". */
   ua: string
+  /**
+   * Optional (pairing.md, ADR-005): the mobile's persistent install-scoped
+   * UUID for the device registry — never an auth secret; older clients omit
+   * it and the handshake must still succeed.
+   */
+  deviceId?: string
   protoMin: number
   protoMax: number
 }

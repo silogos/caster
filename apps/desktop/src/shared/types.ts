@@ -81,3 +81,4 @@ export interface CastSessionInfo {
   gameAudio: boolean
   mic: boolean
 }
+

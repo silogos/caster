@@ -33,7 +33,6 @@ const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
-
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -201,8 +200,9 @@ let pairingSessionError = false
 
 // The receiver's stage split (Phase15): a live pairing session shows the
 // monitor-style "No input video" view — the desktop is a receiver, not a
-// pairing screen, while a device is paired. The QR hero (below) renders only
-// when no session exists: un-paired waiting or a creation error.
+// pairing screen, while a device is paired. Without a paired device the QR
+// hero leads again (the remembered-devices start screen was removed —
+// ADR-005's removal addendum).
 function renderHero(): void {
   if (connectedName !== null) {
     const view = noInputView(connectedName, reconnecting)
@@ -266,8 +266,8 @@ function showMobileState(state: MobileStateEvent): void {
     sessionInfo = state.info
     renderStatus()
   } else {
-    // 'waiting': the session itself is gone (bye/expiry/regenerate) — the QR
-    // hero is the honest screen now; rescan is the only way back.
+    // 'waiting': the session itself is gone (bye/expiry/regenerate) — the
+    // QR hero leads again; no device is paired.
     connectedName = null
     reconnecting = false
     sessionInfo = null
@@ -385,6 +385,7 @@ const unsubscribeSession = window.desktopApi.onPairingSessionUpdated((session) =
   session === null ? showSessionError() : showSession(session)
 )
 const unsubscribeMobile = window.desktopApi.onMobileStateChanged(showMobileState)
+
 const unsubscribeOffers = window.desktopApi.onSignalingSdpOffer((offer) => {
   void receiver.handleSdpOffer(offer)
 })

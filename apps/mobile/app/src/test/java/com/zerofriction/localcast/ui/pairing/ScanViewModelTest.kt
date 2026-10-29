@@ -23,7 +23,7 @@ import org.junit.Test
 class ScanViewModelTest {
 
     private fun newViewModel(fake: FakeTransport): ScanViewModel {
-        val pairing = PairingClient({ fake }, { IdleScheduler() }) { TEST_UA }
+        val pairing = PairingClient({ fake }, { IdleScheduler() }, { TEST_UA }) { TEST_DEVICE_ID }
         return ScanViewModel(pairing, MutableStateFlow(CastState.Idle))
     }
 
@@ -127,6 +127,7 @@ class ScanViewModelTest {
 
     private companion object {
         const val TEST_UA = "ZeroFrictionCast/0.1.0 (Android 15; Pixel8)"
+        const val TEST_DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
         const val TEST_DESKTOP_NAME = "test-desktop"
         const val VECTOR_SID = "Jm1LIOO4mWm0lRSSl2fClw"
         const val VECTOR_NONCE = "EBESExQVFhcYGRobHB0eHw"

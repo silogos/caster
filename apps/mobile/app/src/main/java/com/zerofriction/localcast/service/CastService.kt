@@ -49,7 +49,10 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed interface CastState {
     data object Idle : CastState
     data class Starting(val desktopName: String) : CastState
-    data class Casting(val desktopName: String) : CastState
+
+    /** [startedAtMillis] feeds the Home hero's live elapsed readout (wall
+     * clock at the streaming transition; 0 = unknown, the UI falls back). */
+    data class Casting(val desktopName: String, val startedAtMillis: Long = 0L) : CastState
     data class Failed(val message: String) : CastState
 }
 
@@ -307,7 +310,7 @@ class CastService : Service() {
             physicalHeight = args.physicalHeight,
             onState = { sessionState ->
                 if (sessionState == MediaCastSession.State.STREAMING) {
-                    _state.value = CastState.Casting(args.desktopName)
+                    _state.value = CastState.Casting(args.desktopName, System.currentTimeMillis())
                     // The media session's own summary rides its build; this
                     // one is the authoritative last word — by streaming time
                     // the mic decision (config + permission) is settled, so

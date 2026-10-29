@@ -67,6 +67,6 @@ class ScanViewModel(
     }
 }
 
-/** "ZeroFrictionCast/0.1.0 (Android 15; Pixel 8)" — the desktop shows the model. */
-private fun defaultUserAgent(): String =
+/** "ZeroFrictionCast/0.1.0 (Android 15; Pixel 8)" — the desktop shows the model. Shared with ScanScreen's VM factory. */
+fun defaultUserAgent(): String =
     "ZeroFrictionCast/${BuildConfig.VERSION_NAME} (Android ${android.os.Build.VERSION.RELEASE}; ${android.os.Build.MODEL})"

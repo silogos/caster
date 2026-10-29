@@ -2,6 +2,7 @@ package com.zerofriction.localcast.ui.pairing
 
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -28,23 +29,31 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * Live camera preview that decodes QR codes on-device with ML Kit (bundled
  * barcode model — no network dependency; Phase3 scanner decision). Only
  * QR-format barcodes are requested. The first decoded payload wins.
+ * [torchEnabled] drives CameraX's torch — the scanner's flashlight toggle.
  */
 @Composable
 fun QrCamera(
     onQrText: (String) -> Unit,
     modifier: Modifier = Modifier,
+    torchEnabled: Boolean = false,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context) }
-    // Holder so the DisposableEffect can unbind the provider acquired in LaunchedEffect.
+    // Holders so the DisposableEffect can unbind what the LaunchedEffect acquired.
     val cameraProviderRef = remember { arrayOfNulls<ProcessCameraProvider>(1) }
+    val cameraRef = remember { arrayOfNulls<Camera>(1) }
     val scanner = remember {
         BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                 .build(),
         )
+    }
+
+    // Torch follows the toggle as soon as the camera exists (bind completes).
+    LaunchedEffect(torchEnabled) {
+        cameraRef[0]?.cameraControl?.enableTorch(torchEnabled)
     }
 
     LaunchedEffect(lifecycleOwner) {
@@ -81,13 +90,20 @@ fun QrCamera(
         }
 
         provider.unbindAll()
-        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+        cameraRef[0] = provider.bindToLifecycle(
+            lifecycleOwner,
+            CameraSelector.DEFAULT_BACK_CAMERA,
+            preview,
+            analysis,
+        )
+        cameraRef[0]?.cameraControl?.enableTorch(torchEnabled)
         Log.i(TAG, "camera bound (preview + analysis)")
     }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
             Log.i(TAG, "unbinding camera")
+            cameraRef[0] = null
             cameraProviderRef[0]?.unbindAll()
             scanner.close()
         }

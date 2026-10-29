@@ -8,12 +8,12 @@
     <!-- Scan / pairing screen (Phase 3; screens polished in Phase 13). -->
     <string name="scan_title">Scan the desktop\'s QR code</string>
     <string name="scan_hint">Point the camera at the QR code shown on the desktop app.</string>
+    <string name="scan_torch">Flashlight</string>
     <string name="camera_permission_needed">Camera access is needed to scan the QR code.</string>
     <string name="grant_camera">Grant camera access</string>
     <!-- Phase13 mockup: scan → "Desktop found" → "Connected" → START CAST. -->
     <string name="desktop_found">Desktop found</string>
     <string name="pairing_with_desktop">Pairing with the desktop…</string>
-    <string name="connected_to">Connected to %1$s</string>
     <!-- mobile.md consent pitfall (Android 14+): the system dialog defaults to
          "Share one app", which ends when that app leaves the foreground — the
          hint steers the user to the choice that keeps the cast alive. -->
@@ -29,6 +29,10 @@
     <!-- Cast controls (Phase 5), shown once paired. -->
     <string name="starting_cast">Starting the cast…</string>
     <string name="casting_to">Casting to %1$s</string>
+    <!-- Home hero overlines (designs/mobile-app.html): the tally block —
+         the overline states the state in caps, the desktop name is the hero. -->
+    <string name="connected_overline">Connected to</string>
+    <string name="casting_overline">Casting to</string>
     <string name="stop_casting">Stop casting</string>
     <string name="cast_failed_generic">Couldn\'t start the cast. Please try again.</string>
     <string name="cast_stopped_projection_revoked">The screen cast was stopped.</string>
@@ -69,7 +73,6 @@
     <string name="settings_changes_next_cast">Changes take effect on the next cast.</string>
     <string name="live_cast_section">This cast</string>
     <string name="settings_sharescreen">Share screen</string>
-    <string name="settings_profile">Profile</string>
     <string name="profile_cool">Cool</string>
     <string name="profile_balanced">Balanced</string>
     <string name="profile_performance">Performance</string>
@@ -79,6 +82,7 @@
     <string name="profile_intent_performance">Smoother motion for fast games; more heat.</string>
     <string name="profile_intent_sharp">Highest detail; the most heat.</string>
     <string name="profile_intent_custom">Your own combination.</string>
+    <string name="profile_custom">Custom</string>
     <string name="settings_resolution">Resolution (long edge)</string>
     <string name="settings_px">%1$d px</string>
     <string name="settings_fps">Frame rate</string>

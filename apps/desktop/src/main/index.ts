@@ -43,10 +43,14 @@ let lastStreamSize: { width: number; height: number } | null = null
 // mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
 // name after the socket is gone, and only a real session replacement clears it.
 let pairedMobileName: string | null = null
-
 function pushToRenderer(
   channel: string,
-  payload: PairingSessionView | null | MobileStateEvent | { pc: PcId; sdp: string } | { pc: PcId; candidate: unknown }
+  payload:
+    | PairingSessionView
+    | null
+    | MobileStateEvent
+    | { pc: PcId; sdp: string }
+    | { pc: PcId; candidate: unknown }
 ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -127,7 +131,9 @@ app.whenReady().then(async () => {
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({
     desktopName: hostname(),
-    onMobileConnected: ({ name }) => pushMobileState({ state: 'connected', name }),
+    onMobileConnected: ({ name }) => {
+      pushMobileState({ state: 'connected', name })
+    },
     // Phase15: the authorized socket dropped — the pairing session is still
     // live (reconnect window open until expiry), so the receiver keeps
     // showing the device instead of falling back to the QR hero.

@@ -42,7 +42,7 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 
 | Type | Direction | Payload | Purpose |
 |---|---|---|---|
-| `hello` | m→d | `{ua, protoMin, protoMax}` | Start auth; `ua` = app/platform string for logs. |
+| `hello` | m→d | `{ua, deviceId?, protoMin, protoMax}` | Start auth; `ua` = app/platform string for logs; `deviceId` = the mobile's persistent install-scoped UUID for the desktop's device registry ([pairing.md](pairing.md), [ADR-005](../decisions/ADR-005-device-identity-and-registry.md)) — optional (older clients omit it), never an auth secret. |
 | `challenge` | d→m | `{n}` | 16-byte base64url nonce. |
 | `auth` | m→d | `{mac}` | HMAC-SHA256(k, s‖n), base64url ([pairing.md](pairing.md)). |
 | `auth-ok` | d→m | `{name, proto}` | Desktop name (for "Connected to *MacBook*") and negotiated protocol version. |

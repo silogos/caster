@@ -59,7 +59,7 @@ Runs over the WebSocket immediately after connect (envelope and message definiti
 
 ```text
 Mobile                                   Desktop
-  │ ── hello   {ua, protoMin, protoMax} ──▶ │   (envelope carries sid)
+  │ ── hello {ua, deviceId?, protoMin, protoMax} ──▶ │   (envelope carries sid)
   │ ◀─ challenge {n: nonce16} ───────────── │   or error: unknown-session / expired
   │ ── auth    {mac} ─────────────────────▶ │
   │ ◀─ auth-ok {name, proto} ────────────── │   or error: bad-auth / busy / bad-version
@@ -70,6 +70,7 @@ Mobile                                   Desktop
 - The nonce is 16 fresh random bytes per handshake; the binding to `s` prevents nonce reuse across sessions sharing a secret (defense in depth).
 - The desktop allows the full handshake 10 seconds; otherwise it closes the socket.
 - Failed `auth` closes the connection; repeated failures from one address are rate-limited (1 s, doubling, capped 30 s).
+- **`deviceId` (optional, defined 2026-10-10 — additive per the versioning rules below, `proto` stays 1):** a random UUID the mobile generates once per install and never changes. It exists so the desktop can keep an `adb devices`-style registry of the devices it has seen (name + state + last seen) — it is **not** an authentication secret (auth remains the HMAC above, ADR-002) and carries no user identity beyond what the install itself chose. Absent field = an older client; the desktop must accept the handshake and treat the device as unidentified. Validation: when present it must be a non-empty string (≤ 128 chars) — a malformed one is `bad-message`. Rationale and rejected alternatives: [ADR-005](../decisions/ADR-005-device-identity-and-registry.md).
 
 ### Why challenge–response (and the honest threat model)
 

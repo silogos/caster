@@ -49,6 +49,9 @@ export const ERROR_CODES = {
   badMessage: 'bad-message'
 } as const
 
+/** pairing.md: `deviceId` is an install-scoped UUID — anything longer is malformed. */
+const MAX_DEVICE_ID_LENGTH = 128
+
 /** Inbound SDP/ICE from the mobile — forwarded, never inspected (webrtc.md). */
 export interface SdpOfferEvent {
   pc: PcId
@@ -68,8 +71,8 @@ export interface SignalingServerOptions {
   /** Heartbeat cadence/timeout — injectable so tests use tight values (webrtc.md). */
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
-  onMobileConnected?: (event: { sid: string; ua: string; name: string }) => void
-  onMobileDisconnected?: (event: { sid: string }) => void
+  onMobileConnected?: (event: { sid: string; ua: string; name: string; deviceId?: string; remote: string }) => void
+  onMobileDisconnected?: (event: { sid: string; deviceId?: string; remote: string }) => void
   /** `bye` from either side — the coordinator invalidates the session and shows a fresh QR. */
   onBye?: (reason?: string) => void
   /** Media plumbing events for the (Phase5) ReceiverSession — SDP offers are never answered here. */
@@ -371,6 +374,14 @@ export class SignalingServer {
       conn.socket.close(1002, ERROR_CODES.badMessage)
       return
     }
+    // deviceId is the registry's optional field (pairing.md, ADR-005): absent
+    // = unidentified older client — accepted; present but malformed = the
+    // same bad-message treatment as any other malformed payload.
+    if (hello.deviceId !== undefined && (typeof hello.deviceId !== 'string' || hello.deviceId.length === 0 || hello.deviceId.length > MAX_DEVICE_ID_LENGTH)) {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello deviceId')
+      conn.socket.close(1002, ERROR_CODES.badMessage)
+      return
+    }
     conn.sid = envelope.sid
     conn.hello = hello
     conn.nonce = createNonce()
@@ -420,7 +431,13 @@ export class SignalingServer {
     this.send(conn, 'auth-ok', { name: this.desktopName, proto })
     const name = deviceNameFromUa(conn.hello.ua)
     logger.info(LOG_SCOPE, `mobile authorized`, { name })
-    this.options.onMobileConnected?.({ sid, ua: conn.hello.ua, name })
+    this.options.onMobileConnected?.({
+      sid,
+      ua: conn.hello.ua,
+      name,
+      deviceId: conn.hello.deviceId,
+      remote: conn.remote,
+    })
   }
 
   private onSdpOffer(conn: ConnectionState, envelope: Envelope): void {
@@ -520,7 +537,11 @@ export class SignalingServer {
     if (conn.phase === 'authorized') {
       this.store.release(conn.socketId)
       logger.info(LOG_SCOPE, 'authorized mobile disconnected — reconnect window open until expiry')
-      this.options.onMobileDisconnected?.({ sid: conn.sid ?? '' })
+      this.options.onMobileDisconnected?.({
+        sid: conn.sid ?? '',
+        deviceId: conn.hello?.deviceId,
+        remote: conn.remote,
+      })
     }
   }
 
