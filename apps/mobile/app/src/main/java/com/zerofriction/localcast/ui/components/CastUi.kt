@@ -41,9 +41,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zerofriction.localcast.R
 
 /**
  * The shared UI vocabulary of the broadcast-console design
@@ -64,6 +67,206 @@ fun CastCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Column { content() }
+    }
+}
+
+/**
+ * The prototype's .brand-mark — the console's 24dp tally chip (the cast
+ * glyph in a rounded tinted square; the row-ico vocabulary at lockup
+ * scale). [onAir] lights it amber: the console lit at the top.
+ */
+@Composable
+fun BrandMark(onAir: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(24.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (onAir) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_cast),
+            contentDescription = null,
+            tint = if (onAir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/** Annunciator coloring: the machine's state word rides the LED ladder. */
+enum class AnnuncTone { QUIET, LIVE, FAULT }
+
+/**
+ * The prototype's .annun — the bar's state lamp word (machine register):
+ * a 9dp LED + mono caps 12sp, one size with the nameplate, differentiated
+ * by ink. [pulse] is the ON AIR tally blink (the screen's only blink).
+ */
+@Composable
+fun Annunciator(
+    word: String,
+    tone: AnnuncTone,
+    pulse: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val ink = when (tone) {
+        AnnuncTone.QUIET -> MaterialTheme.colorScheme.onSurfaceVariant
+        AnnuncTone.LIVE -> MaterialTheme.colorScheme.primary
+        AnnuncTone.FAULT -> MaterialTheme.colorScheme.error
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+        LedDot(tone = when (tone) {
+            AnnuncTone.QUIET -> LedTone.DIM
+            AnnuncTone.LIVE -> LedTone.ON
+            AnnuncTone.FAULT -> LedTone.HOT
+        }, pulse = pulse)
+        Spacer(Modifier.width(7.dp))
+        Text(
+            text = word.uppercase(),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.4.sp,
+            fontFamily = FontFamily.Monospace,
+            color = ink,
+        )
+    }
+}
+
+/**
+ * The prototype's .zone-head — a named zone inside a card: hairline above,
+ * caps label left, [trailing] (the STATUS header's readout) right.
+ */
+@Composable
+fun ZoneHeader(
+    label: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val dividerColor = MaterialTheme.colorScheme.outline
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val y = 0.5.dp.toPx()
+                drawLine(
+                    color = dividerColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 2.dp),
+    ) {
+        Text(
+            text = label.uppercase(),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.1.sp,
+            color = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, 0.2f),
+            modifier = Modifier.weight(1f),
+        )
+        if (trailing != null) trailing()
+    }
+}
+
+/**
+ * The prototype's .card-foot — a muted note under the card's last row,
+ * above nothing (the card's floor). Takes the resolved string so both
+ * resource and composed callers share one treatment.
+ */
+@Composable
+fun CardFoot(text: String, modifier: Modifier = Modifier) {
+    val dividerColor = MaterialTheme.colorScheme.outline
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val y = 0.5.dp.toPx()
+                drawLine(
+                    color = dividerColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    )
+}
+
+/**
+ * The prototype's .seg — a connected switch bank for short option sets:
+ * the settings' selectors and the quality console's PRESET | CUSTOM tabs.
+ * Padding-free; the caller places it (the tabs sit in their own padded
+ * strip, settings rows carry their own insets).
+ */
+@Composable
+fun CastSegRow(
+    options: List<Pair<String, Boolean>>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val outline = MaterialTheme.colorScheme.outline
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, outline),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row {
+            options.forEachIndexed { index, (label, selected) ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (index > 0) {
+                                Modifier.drawBehind {
+                                    val x = 0.5.dp.toPx()
+                                    drawLine(
+                                        color = outline,
+                                        start = Offset(x, 0f),
+                                        end = Offset(x, size.height),
+                                        strokeWidth = 1.dp.toPx(),
+                                    )
+                                }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .background(
+                            if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            } else {
+                                Color.Transparent
+                            },
+                        )
+                        .clickable { onSelect(index) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 

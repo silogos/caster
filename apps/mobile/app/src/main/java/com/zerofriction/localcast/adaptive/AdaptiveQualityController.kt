@@ -242,17 +242,28 @@ class AdaptiveQualityController(
         /** thermal.md: "minutes, not seconds" of sustained heat before acting. */
         const val THERMAL_HOLD_MS = 120_000L
 
-        /** Sustained stream trouble (drops/loss/RTT) before a step down. */
-        const val NET_HOLD_MS = 30_000L
+        /**
+         * Sustained stream trouble (drops/loss/RTT) before a step down.
+         * Relaxed 30s → 60s (user review, the v3 port): the policy leans
+         * patient — a bad minute, not a bad half-minute, before acting.
+         */
+        const val NET_HOLD_MS = 60_000L
 
         /** Recovery needs a long clean stretch — the asymmetry that beats oscillation. */
         const val HEALTHY_HOLD_MS = 180_000L
 
-        /** Minimum spacing between any two steps, either direction. */
-        const val DWELL_MS = 90_000L
+        /**
+         * Minimum spacing between any two steps, either direction.
+         * Relaxed 90s → 180s (user review, the v3 port): every step gets a
+         * few minutes of quiet before the next decision — down or up.
+         */
+        const val DWELL_MS = 180_000L
 
-        /** Per-tick dropped-frame fraction considered encoder stress (Phase5's ≈0.3% healthy baseline). */
-        const val DROPPED_FRACTION_BAD = 0.05
+        /**
+         * Per-tick dropped-frame fraction considered encoder stress (Phase5's
+         * ≈0.3% healthy baseline; relaxed 0.05 → 0.08 with the v3 port).
+         */
+        const val DROPPED_FRACTION_BAD = 0.08
 
         /**
          * Fraction of wall time the encoder may sustain before it counts as
@@ -260,9 +271,10 @@ class AdaptiveQualityController(
          * as a re-tunable hypothesis; the recorded evidence it must separate:
          * the healthy rig ran 0.42–0.68 utilization (encode p50 19.5 ms/f ×
          * 30 fps), the Phase16 fps-placebo era ran ~1.83 (61 fps × 30 ms/f —
-         * the case this signal exists to catch before frames drop).
+         * the case this signal exists to catch before frames drop). Relaxed
+         * 0.85 → 0.90 with the v3 port.
          */
-        const val ENCODER_UTILIZATION_BAD = 0.85
+        const val ENCODER_UTILIZATION_BAD = 0.90
 
         /** Remote receiver loss fraction considered a struggling link. */
         const val PACKET_LOSS_FRACTION_BAD = 0.05

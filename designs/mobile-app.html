@@ -30,12 +30,26 @@
        • Icons: inline stroke SVGs here; port via Material Symbols
          Outlined 1.7-weight equivalents — settings, sports_esports, mic,
          headphones, warning, info, check_circle, chevron_left,
-         expand_more, tune, flashlight, qr_code_2.
-       • New strings needed: the hero splits "Connected to X"/"Casting to
-         X" into an overline + name (add connected_overline/casting_overline
-         or keep one string and style-what-exists); the live timer reads
-         the cast start timestamp (CastState.Casting) — integration point,
-         never faked.
+         expand_more, tune, flashlight, qr_code_2, cast (app-bar mark).
+       • New strings needed: the state words leave the hero — the app-bar
+         annunciator owns them (app_bar_state_*: Standby/Starting/On air/
+         Fault; ON AIR is the one blinking tally) and the hero is the
+         desktop name only. Home carries ONE tabbed quality card —
+         Preset | Custom (live_tabs_*) — in BOTH states, identical
+         layout: idle = next-cast defaults (a preset also resets the
+         Advanced defaults; the old Profile/Share screen sections are
+         gone), casting = the running cast (presets apply their full
+         spec live — no cast-start ceiling; any dial leaves the preset).
+         STATUS is casting-only; its header carries the live readout:
+         timecode (cast-start timestamp, CastState.Casting — integration
+         point, never faked) + shorthand quality. Settings = Advanced
+         only; Automatic quality joins it as an On/Off chip pair with
+         the other policies.
+       • The live readout (STATUS header, casting only) compacts to
+         streamer shorthand: timecode + p-notation/fps + megabits
+         ("04:57 · 1080p60 · 6–12M") — the longEdge→p map assumes the
+         16:9 capture aspect (1920→1080p, 1280→720p, 960→540p); full
+         specs stay on the preset rows.
      ───────────────────────────────────────────────────────────────────── */
   :root {
     --cast-primary: #F2A93B;
@@ -90,7 +104,7 @@
 
   /* ---- Type roles ----
      Scale 22 / 20 / 17 / 15 / 14 / 13 / 11; Roboto-real weights only. */
-  .hero-name { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.2; }
+  .hero-name { font-size: 24px; font-weight: 500; letter-spacing: -0.015em; line-height: 1.2; }
   .screen-title { font-size: 20px; font-weight: 500; }
   .bar-title { font-size: 17px; font-weight: 500; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub-label { font-size: 13px; color: var(--cast-on-variant); margin-top: 12px; }
@@ -138,6 +152,11 @@
     cursor: pointer; margin-top: 16px;
   }
   .btn-stop:active { background: color-mix(in srgb, var(--cast-on) 6%, transparent); }
+  /* Transport → card is a section boundary, not a card group: the card
+     stands off the big button at the same distance the button stands off
+     the hero (16/16, symmetric) — otherwise the bordered card glues to
+     the filled button at the generic 8px card gap. */
+  .btn-go + .card, .btn-stop + .card { margin-top: 16px; }
   .btn-mid {
     font: inherit; font-size: 14px; font-weight: 500;
     border-radius: 12px; padding: 11px 18px; cursor: pointer;
@@ -175,20 +194,61 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 14px; }
 
-  /* ---- App bar (Home / Settings) ---- */
-  .app-bar { display: flex; align-items: center; gap: 10px; margin-top: 4px; min-height: 40px; }
-  .bar-sub { font-size: 13px; color: var(--cast-on-variant); margin-top: 6px; line-height: 1.45; }
-
-  /* ---- On-air hero: tally + desktop name (+ live timer) ---- */
-  .hero { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
-  .hero-left { flex: 1 1 auto; min-width: 0; }
-  .hero-overline {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11px; font-weight: 500; letter-spacing: 0.10em; text-transform: uppercase;
+  /* ---- App bar: the console's nameplate + annunciator strip ----
+     Broadcast hardware logic: the top strip of a rack unit carries the
+     nameplate and the state lamps. The bar owns ALL the state words —
+     machine register — and the ONE blinking tally lamp (while ON AIR;
+     nothing else on the screen blinks). The hero below is wordless
+     state-wise: destination name + elapsed readout. Home = mark + name +
+     state lamp word (the mark itself goes amber while ON AIR — the
+     console lit at the top). Settings is a menu, not equipment: back +
+     a real 17px screen title.
+     Port notes:
+       • Nameplate = launcher name (app_name "Local Cast"), mono caps,
+         same printing ink as the silkscreen labels.
+       • Annunciator (new strings app_bar_state_*): "Standby" /
+         "Starting" / "On air" / "Fault", textAllCaps at render — mapped
+         1:1 to homeState, same color ladder as the LEDs
+         (dim → amber → error).
+       • The mark is the cast glyph in a 24px tally chip, sized to the
+         caps lockup (name and annunciator share one mono-caps size —
+         12px — differentiated by ink, not scale); its on-air tint =
+         chip-selected. Icons list gains "cast". */
+  .app-bar {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 4px; min-height: 48px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--chip-border);
+  }
+  .brand-mark {
+    flex: 0 0 auto; width: 24px; height: 24px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--cast-on);
+    background: color-mix(in srgb, var(--cast-on) 8%, var(--cast-surface));
+  }
+  .brand-mark.on-air { color: var(--cast-primary); background: var(--chip-selected-bg); }
+  .brand-name {
+    flex: 1 1 auto; min-width: 0;
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--cast-on-variant) 80%, var(--cast-on));
+  }
+  .annun {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--cast-on-variant);
   }
-  .hero-name { margin-top: 6px; overflow-wrap: break-word; }
-  .hero-meta { margin-top: 10px; font-size: 13px; color: var(--cast-on-variant); }
+  .annun.live { color: var(--cast-primary); }
+  .annun.fault { color: var(--cast-error); }
+  .bar-sub { font-size: 13px; color: var(--cast-on-variant); margin-top: 6px; line-height: 1.45; }
+
+  /* ---- Hero: the destination plate — desktop name + live readout ----
+     No state words, no lamp: the app-bar annunciator owns the machine's
+     state and the one blinking tally. The hero answers WHO this console
+     is chained to, and — while on air — for how long and at what. */
+  .hero { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .hero-left { flex: 1 1 auto; min-width: 0; }
+  .hero-name { overflow-wrap: break-word; }
 
   /* ---- Grouped cards (inset lists) ---- */
   .card {
@@ -215,6 +275,30 @@
   .row-title.err, .row-sub.err { color: var(--cast-error); }
   .row-ico.err { color: var(--cast-error); background: color-mix(in srgb, var(--cast-error) 10%, var(--cast-surface)); }
   .row-right { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+
+  /* ---- The live console (the tabbed card: Preset | Custom) ----
+     The tabs replace the old Auto/Manual pair (and the "While casting"
+     label): PRESET rides a named thermal bundle, CUSTOM dials the values
+     (any dial leaves the preset). STATUS keeps its own zone: the lamps. */
+  .live-tabs { padding: 14px 16px 0; }
+  .live-tabs .seg { margin: 0; }
+  .console-controls { padding: 2px 16px 14px; }
+  .zone-head {
+    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid var(--chip-border);
+    padding: 12px 16px 2px;
+    font-size: 11px; font-weight: 500; letter-spacing: 0.10em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--cast-on-variant) 80%, var(--cast-on));
+  }
+  /* STATUS header readout (casting only): amber timecode + shorthand
+     quality, right-aligned — the glance line the hero used to carry. */
+  .zone-readout {
+    margin-left: auto; display: flex; gap: 8px;
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 12px; font-weight: 500; letter-spacing: 0.02em;
+    color: var(--cast-on-variant);
+  }
+  .zone-readout .tc { color: var(--cast-primary); }
 
   /* ---- LED rows (This cast): lamp + plain words ---- */
   .led-row {
@@ -258,11 +342,9 @@
   .mic-sub { padding: 4px 16px 14px; border-top: 1px solid var(--chip-border); }
   .mic-live { font-size: 13px; color: var(--cast-on); }
 
-  /* ---- Advanced card body (below its header row) ---- */
-  .adv-body {
-    padding: 4px 16px 14px;
-    border-top: 1px solid var(--chip-border);
-  }
+  /* ---- Card body below a header row (Advanced card, manual bitrate) ---- */
+  .adv-body { padding: 4px 16px 14px; }
+  .icon-row + .adv-body { border-top: 1px solid var(--chip-border); }
 
   /* ---- QR scanner (full-bleed) ---- */
   .scan-full {
@@ -462,6 +544,15 @@ const state = {
   gameAudio: true, mic: false,
   // live-cast simulation ("This cast")
   thermal: "normal", adaptive: null, belowCeiling: false,
+  // Live quality console (realtime port candidate): a tabbed card —
+  // PRESET rides a named bundle (livePreset; picking applies its FULL
+  // spec to the running cast — the encoder reconfigures, no cast-start
+  // ceiling anymore), CUSTOM dials the values (any dial clears
+  // livePreset). The idle Profile/Share screen sections keep the
+  // next-cast defaults.
+  liveTab: "preset", livePreset: null,
+  homeTab: null, // idle tab choice; null = derive (custom settings → Custom)
+  liveLongEdge: null, liveFps: null, liveBitrateMax: null,
   // Mic device selection (#59, strings.xml mic_device_*): a KIND, not a
   // concrete device — offered only while one of its inputs is connected
   // (the app resolves the same way at capture time, MicDeviceResolver).
@@ -473,7 +564,6 @@ const state = {
   profile: "balanced", longEdge: 1280, fps: 30,
   bitrateAuto: true, bitrateMin: 4, bitrateMax: 6,
   autoQuality: true,
-  advancedOpen: false,
   encoderImpl: "hardware", codec: "h264", h264Profile: "high",
   degradation: "balanced", fpsLimit: "off", bitrateMode: "cbr",
   // Read-only during a cast (SenderStats.encoderImplementation) — never faked.
@@ -494,6 +584,7 @@ const ICONS = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.4"/>',
   check: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
   chevLeft: '<path d="M14.5 6 8.5 12l6 6"/>',
+  cast: '<path d="M3.5 21h.01"/><path d="M9.5 21a7 7 0 0 0-7-7"/><path d="M14 21A11.5 11.5 0 0 0 2.5 9.5"/>',
   chevRight: '<path d="M9.5 6l6 6-6 6"/>',
   chevDown: '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
   flashlight: '<path d="M7 3h10v3l-3.2 3.6V20a1 1 0 0 1-1 1h-1.6a1 1 0 0 1-1-1V9.6L7 6V3z"/><path d="M10.5 6h3"/>',
@@ -652,10 +743,11 @@ function scheduleAuto(fn) {
   autoTimer = setTimeout(fn, 1200);
 }
 
-/* ---- Live timer: ticks the hero's elapsed readout once a second without
-   a re-render (keeps the tally pulse and sweep animations running). The
-   app reads the cast-start timestamp from CastState.Casting — integration
-   point; the prototype anchors it at the moment casting begins. ---- */
+/* ---- Live timer: ticks the STATUS header's timecode once a second
+   without a re-render (keeps the tally pulse and sweep animations
+   running). The app reads the cast-start timestamp from
+   CastState.Casting — integration point; the prototype anchors it at
+   the moment casting begins. ---- */
 let castStart = null;
 function fmtDuration(totalSeconds) {
   const h = Math.floor(totalSeconds / 3600);
@@ -771,16 +863,64 @@ function renderScan(parent) {
   parent.appendChild(root);
 }
 
+/* ---- Live quality helpers ----
+   Entering a cast seeds the live values from the current settings and
+   remembers which preset they came from (livePreset) — the PRESET tab
+   shows that bundle selected; any custom dial clears it. Presets apply
+   their FULL spec live (no cast-start ceiling — the encoder
+   reconfigures). RES_RUNGS/FPS_RUNGS are the shared ladders (config's
+   CastSettingChoices on the port side). */
+const RES_RUNGS = [1920, 1280, 960];
+function startLiveQuality() {
+  const eff = effectiveProfile();
+  state.livePreset = eff !== "custom" ? eff : null;
+  state.liveTab = state.livePreset ? "preset" : "custom";
+  state.liveLongEdge = state.longEdge;
+  state.liveFps = state.fps;
+  state.liveBitrateMax = state.bitrateMax;
+}
+function liveBitrateMin() { return Math.round((state.liveBitrateMax * 0.5) * 10) / 10; }
+/* The hero readout in streamer shorthand — p-notation + fps ("1080p60"),
+   megabits without the unit word ("6–12M") — so the glance line stays one
+   short strip. longEdge→p assumes the 16:9 capture aspect (1920→1080p,
+   1280→720p, 960→540p); unknown values fall back to raw pixels. The full
+   spec stays on the preset rows (specOf). */
+function pNotation(longEdge) {
+  return { 1920: "1080p", 1280: "720p", 960: "540p" }[longEdge] || longEdge + "px";
+}
+function liveReadout() {
+  return pNotation(state.liveLongEdge) + state.liveFps + " · " +
+    liveBitrateMin() + "–" + state.liveBitrateMax + "M";
+}
+
 /* ---- Home (the connected hub) ---- */
 function renderHome(parent) {
   const root = el('<div></div>');
   const casting = state.homeState === "casting";
+  // The control bar can jump straight into casting — the live seed then
+  // happens here (the share button's path calls it at the transition).
+  if (casting && state.liveLongEdge === null) startLiveQuality();
 
-  // App bar: product name + the gear (all cast settings)
+  // App bar: nameplate + annunciator — the machine's state words and its
+  // ONE blinking tally (while on air). The hero below stays wordless.
   const bar = el('<div class="app-bar"></div>');
-  const bt = el('<div class="bar-title"></div>'); bt.textContent = "Zero-Friction Local Cast";
-  bar.appendChild(bt);
-  const gear = el('<button class="icon-btn" type="button" aria-label="Cast settings"></button>');
+  const mark = el('<div class="brand-mark' + (casting ? " on-air" : "") + '"></div>');
+  mark.innerHTML = icon("cast", 14);
+  bar.appendChild(mark);
+  const bn = el('<div class="brand-name"></div>'); bn.textContent = "Local Cast";
+  bar.appendChild(bn);
+  const ANNUN = {
+    connected: { cls: "",      led: "",         word: "Standby" },
+    starting:  { cls: "live",  led: "on",       word: "Starting" },
+    casting:   { cls: "live",  led: "on pulse", word: "On air" },
+    failed:    { cls: "fault", led: "hot",      word: "Fault" },
+  }[state.homeState];
+  const annun = el('<div class="annun ' + ANNUN.cls + '"></div>');
+  annun.appendChild(el('<span class="led ' + ANNUN.led + '"></span>'));
+  const aw = el('<span></span>'); aw.textContent = ANNUN.word;
+  annun.appendChild(aw);
+  bar.appendChild(annun);
+  const gear = el('<button class="icon-btn" type="button" aria-label="Advanced settings"></button>');
   gear.innerHTML = icon("gear", 19);
   gear.addEventListener("click", () => { state.screen = "settings"; renderAll(); });
   bar.appendChild(gear);
@@ -796,18 +936,10 @@ function renderHome(parent) {
   } else {
     const hero = el('<div class="hero" data-od-id="home-hero"></div>');
     const left = el('<div class="hero-left"></div>');
-    const overline = el('<div class="hero-overline"></div>');
-    const led = el('<span class="led on' + (casting ? " pulse" : "") + '"></span>');
-    const ov = el('<span></span>');
-    ov.textContent = casting ? "Casting to" : "Connected to";
-    overline.appendChild(led); overline.appendChild(ov);
-    left.appendChild(overline);
+    // Destination plate: name only, both states — the live timecode and
+    // quality readout live in the STATUS header (casting only).
     const name = el('<div class="hero-name"></div>'); name.textContent = DESKTOP_NAME;
     left.appendChild(name);
-    if (casting) {
-      const meta = el('<div class="hero-meta mono" data-od-id="home-live-timer">00:00</div>');
-      left.appendChild(meta);
-    }
     hero.appendChild(left);
     // Disconnect ends everything: the session too. Back to the scan screen.
     hero.appendChild(textBtn("Disconnect", true, () => { state.screen = "scan"; state.scanState = "scanning"; renderAll(); }));
@@ -829,10 +961,18 @@ function renderHome(parent) {
     go.addEventListener("click", () => {
       if (casting) { state.homeState = "connected"; renderAll(); return; }
       state.homeState = "starting"; renderAll();
-      scheduleAuto(() => { if (state.homeState === "starting") { state.homeState = "casting"; renderAll(); } });
+      scheduleAuto(() => {
+        if (state.homeState === "starting") { state.homeState = "casting"; startLiveQuality(); renderAll(); }
+      });
     });
     root.appendChild(go);
   }
+
+  // The quality console (Preset | Custom) sits right under the transport
+  // in BOTH states — same card, same tabs; only the target differs
+  // (idle = next cast, casting = running cast). STATUS rides with it,
+  // casting only.
+  root.appendChild(qualityCard(casting));
 
   // Audio card — one switch per track
   const audioLabel = silkscreen("Audio");
@@ -879,38 +1019,194 @@ function renderHome(parent) {
     }
     audio.appendChild(micSub1);
   }
+  // The headphones tip is audio advice, not cast status — it lives with the
+  // audio sources (card foot), and only matters while both tracks run live.
+  if (casting && state.mic && state.gameAudio) {
+    const tipFoot = el('<div class="card-foot"></div>');
+    tipFoot.textContent = "Tip: use headphones — otherwise the mic picks up the game audio playing from this phone.";
+    audio.appendChild(tipFoot);
+  }
   root.appendChild(audio);
 
-  // This cast (live conditions) — only while casting
-  if (casting) {
-    root.appendChild(silkscreen("This cast"));
-    const cast = card();
-    cast.setAttribute("data-od-id", "home-this-cast");
-    if (state.mic && state.gameAudio) {
-      cast.appendChild(iconRow({ ico: "headphones", title: "Tip: use headphones — otherwise the mic picks up the game audio playing from this phone." }));
-    }
-    const hot = state.thermal === "severe" || state.thermal === "critical";
-    cast.appendChild(ledRow({
-      title: THERMAL[state.thermal],
-      led: hot ? "hot" : (state.thermal === "normal" ? "" : "on"),
-      hot,
-    }));
-    if (state.adaptive) {
-      const downshift = state.adaptive === "down_thermal" || state.adaptive === "down_stream";
-      cast.appendChild(ledRow({
-        title: ADAPTIVE[state.adaptive],
-        led: downshift ? "on" : "",
-        right: state.belowCeiling
-          ? textBtn("Restore quality", false, () => { state.adaptive = "restored"; state.belowCeiling = false; renderAll(); })
-          : null,
-      }));
-    }
-    root.appendChild(cast);
-  }
   parent.appendChild(root);
 }
 
-/* ---- Settings (the gear: all cast settings) ---- */
+/* The quality console: ONE tabbed card — PRESET | CUSTOM — on Home in
+   BOTH states, identical layout (idle Home matches casting Home). The
+   state only changes what the tabs WRITE: idle = next-cast defaults (a
+   preset also resets the Advanced defaults), casting = the RUNNING cast
+   (a preset applies its full spec live — the encoder reconfigures, no
+   cast-start ceiling; any dial leaves the preset). PRESET rides a named
+   thermal bundle; CUSTOM dials the values. STATUS — casting only — is
+   the card's third zone: readout header + the lamps. */
+function qualityCard(casting) {
+  const cast = card();
+  cast.setAttribute("data-od-id", "home-quality");
+
+  // -- Tabs (Preset | Custom): navigation, not a mode pair — the tab
+  //    decides HOW you steer: by bundle or by dial. --
+  const tab = casting
+    ? state.liveTab
+    : (state.homeTab || (effectiveProfile() === "custom" ? "custom" : "preset"));
+  const tabs = el('<div class="live-tabs"></div>');
+  tabs.appendChild(segControl(
+    [{ id: "preset", name: "Preset" }, { id: "custom", name: "Custom" }],
+    tab,
+    (id) => {
+      if (casting) { if (state.liveTab !== id) { state.liveTab = id; renderAll(); } }
+      else if (tab !== id) { state.homeTab = id; renderAll(); }
+    },
+  ));
+  cast.appendChild(tabs);
+
+  if (tab === "preset") {
+    // The thermal intents matter most while casting — same rows both
+    // states; only the target differs (running cast vs. next cast).
+    const selected = casting ? state.livePreset : effectiveProfile();
+    for (const p of PROFILES) {
+      cast.appendChild(pickRow(p, specOf(PROFILE_VALUES[p.id]), selected === p.id, () => {
+        const v = PROFILE_VALUES[p.id];
+        if (casting) {
+          state.livePreset = p.id;
+          state.liveLongEdge = v.longEdge;
+          state.liveFps = v.fps;
+          state.liveBitrateMax = v.bitrateMax;
+        } else {
+          Object.assign(state, {
+            profile: p.id, longEdge: v.longEdge, fps: v.fps,
+            bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax,
+            // Presets also reset the Advanced defaults (overridable in settings):
+            encoderImpl: v.encoder, h264Profile: v.h264Profile, degradation: v.degradation,
+            fpsLimit: v.fpsLimit, bitrateMode: v.bitrateMode,
+          });
+        }
+        renderAll();
+      }));
+    }
+    if (!casting && selected === "custom") {
+      cast.appendChild(pickRow({ name: "Custom", intent: PROFILE_INTENT_CUSTOM }, null, true, null));
+    }
+    if (!casting) {
+      const foot = el('<div class="card-foot"></div>');
+      foot.textContent = "Defaults for the next cast — picking also sets the Advanced defaults in settings.";
+      cast.appendChild(foot);
+    }
+    return casting ? finishLiveCard(cast) : cast;
+  }
+
+  const controls = el('<div class="console-controls"></div>');
+  controls.appendChild(hint(casting
+    ? "Your values run until the cast ends."
+    : "Your values for the next cast."));
+  // Resolution: the shared ladder, any rung — presets prove raising live
+  // is fine (the encoder reconfigures), so no cast-start ceiling.
+  controls.appendChild(subLabel("Resolution"));
+  controls.appendChild(chipRow(
+    RES_RUNGS.map((r) => ({ id: String(r), name: r + " px" })),
+    String(casting ? state.liveLongEdge : state.longEdge),
+    (id) => {
+      if (casting) { state.livePreset = null; state.liveLongEdge = Number(id); }
+      else state.longEdge = Number(id);
+      renderAll();
+    },
+  ));
+  // Frame rate: same ladder rule as the resolution rungs.
+  controls.appendChild(subLabel("Frame rate"));
+  controls.appendChild(chipRow(
+    [60, 30].map((f) => ({ id: String(f), name: f + " fps" })),
+    String(casting ? state.liveFps : state.fps),
+    (id) => {
+      if (casting) { state.livePreset = null; state.liveFps = Number(id); }
+      else state.fps = Number(id);
+      renderAll();
+    },
+  ));
+  const wrap = el('<div class="slider-row"></div>');
+  const range = el('<input type="range" min="2" max="20" step="0.5">');
+  range.value = String(casting ? state.liveBitrateMax : state.bitrateMax);
+  range.addEventListener("input", () => {
+    const v = Number(range.value);
+    if (casting) {
+      state.livePreset = null; // any dial leaves the preset — honesty
+      state.liveBitrateMax = v;
+      // the STATUS header readout follows without a full re-render (focus stays put)
+      const q = document.querySelector('[data-od-id="home-status-quality"]');
+      if (q) q.textContent = liveReadout();
+    } else {
+      state.bitrateAuto = false;
+      state.bitrateMax = v;
+      state.bitrateMin = Math.round((v * 0.5) * 10) / 10;
+    }
+    rangeLabel.textContent = "Bitrate (max " + v + " Mbps)";
+  });
+  const rangeLabel = subLabel("Bitrate (max " + (casting ? state.liveBitrateMax : state.bitrateMax) + " Mbps)");
+  wrap.appendChild(range);
+  controls.appendChild(rangeLabel);
+  controls.appendChild(wrap);
+  cast.appendChild(controls);
+  return casting ? finishLiveCard(cast) : cast;
+}
+
+/* Casting-only tail of the quality console: the STATUS zone. Its header
+   carries the glance readout — timecode (amber; the interval ticks it in
+   place) + shorthand quality on the right — above the lamps. Restore
+   quality re-applies the running preset's spec when there is one. */
+function finishLiveCard(cast) {
+  const zone = el('<div class="zone-head"></div>');
+  const zl = el('<span></span>'); zl.textContent = "Status";
+  zone.appendChild(zl);
+  const readout = el('<div class="zone-readout"></div>');
+  const tc = el('<span class="tc" data-od-id="home-live-timer">00:00</span>');
+  readout.appendChild(tc);
+  const q = el('<span data-od-id="home-status-quality"></span>');
+  q.textContent = liveReadout();
+  readout.appendChild(q);
+  zone.appendChild(readout);
+  cast.appendChild(zone);
+
+  // -- Monitoring rows (unchanged lamp vocabulary) --
+  const hot = state.thermal === "severe" || state.thermal === "critical";
+  cast.appendChild(ledRow({
+    title: THERMAL[state.thermal],
+    led: hot ? "hot" : (state.thermal === "normal" ? "" : "on"),
+    hot,
+  }));
+  if (state.adaptive) {
+    const downshift = state.adaptive === "down_thermal" || state.adaptive === "down_stream";
+    cast.appendChild(ledRow({
+      title: ADAPTIVE[state.adaptive],
+      led: downshift ? "on" : "",
+      right: state.belowCeiling
+        ? textBtn("Restore quality", false, () => {
+            state.adaptive = "restored"; state.belowCeiling = false;
+            if (state.livePreset) {
+              const v = PROFILE_VALUES[state.livePreset];
+              Object.assign(state, { liveLongEdge: v.longEdge, liveFps: v.fps, liveBitrateMax: v.bitrateMax });
+            }
+            renderAll();
+          })
+        : null,
+    }));
+  }
+  return cast;
+}
+
+/* One rail lamp: micro-LED + 10px caps label — the console's at-a-glance
+   summary. Led classes: "" dim, "on" amber, "on pulse" amber blinking. */
+function railLamp(label, ledClass, odId) {
+  const lamp = el('<div class="rail-lamp"' + (odId ? ' data-od-id="' + odId + '"' : "") + "></div>");
+  const led = el('<span class="led ' + ledClass + '"></span>');
+  lamp.appendChild(led);
+  const t = el('<span></span>'); t.textContent = label;
+  lamp.appendChild(t);
+  return lamp;
+}
+
+/* ---- Settings (the gear) ---- */
+/* Advanced ONLY: Profile and Share screen moved to Home — the gear is
+   the deep config (encoder, codecs, degradation policy, fps cap, bitrate
+   mode + the read-only encoder-in-use readout). One card, always
+   expanded: the screen itself is the drawer now. */
 function renderSettings(parent) {
   const root = el('<div></div>');
   const bar = el('<div class="app-bar"></div>');
@@ -919,101 +1215,34 @@ function renderSettings(parent) {
   back.style.marginLeft = "-8px";
   back.addEventListener("click", () => { state.screen = "home"; renderAll(); });
   bar.appendChild(back);
-  const bt = el('<div class="bar-title"></div>'); bt.textContent = "Cast settings";
+  const bt = el('<div class="bar-title"></div>'); bt.textContent = "Advanced";
   bar.appendChild(bt);
   root.appendChild(bar);
   const sub = el('<div class="bar-sub"></div>');
   sub.textContent = "Changes take effect on the next cast.";
   root.appendChild(sub);
 
-  // Quality card — profile, resolution, frame rate, bitrate, adaptive
-  root.appendChild(silkscreen("Share screen"));
-  const q = card();
-  q.setAttribute("data-od-id", "settings-quality");
-  const eff = effectiveProfile();
-  for (const p of PROFILES) {
-    q.appendChild(pickRow(p, specOf(PROFILE_VALUES[p.id]), eff === p.id, () => {
-      const v = PROFILE_VALUES[p.id];
-      Object.assign(state, {
-        profile: p.id, longEdge: v.longEdge, fps: v.fps,
-        bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax,
-        // Presets also reset the Advanced defaults (overridable afterwards):
-        encoderImpl: v.encoder, h264Profile: v.h264Profile, degradation: v.degradation,
-        fpsLimit: v.fpsLimit, bitrateMode: v.bitrateMode,
-      });
-      renderAll();
-    }));
-  }
-  if (eff === "custom") {
-    q.appendChild(pickRow({ name: "Custom", intent: PROFILE_INTENT_CUSTOM }, null, true, null));
-  }
-
-  q.appendChild(segLabel("Resolution (long edge)"));
-  q.appendChild(segControl(
-    [960, 1280, 1920].map((v) => ({ id: String(v), name: v + " px" })),
-    String(state.longEdge),
-    (id) => { state.longEdge = Number(id); renderAll(); },
-  ));
-  q.appendChild(segLabel("Frame rate"));
-  q.appendChild(segControl(
-    [30, 60].map((v) => ({ id: String(v), name: v + " fps" })),
-    String(state.fps),
-    (id) => { state.fps = Number(id); renderAll(); },
-  ));
-
-  q.appendChild(segLabel("Bitrate"));
-  q.appendChild(iconRow({
-    ico: "tune", title: "Automatic (follows the profile)",
-    right: switchEl(state.bitrateAuto, (on) => {
-      if (on) { const v = PROFILE_VALUES[state.profile]; Object.assign(state, { bitrateAuto: true, bitrateMin: v.bitrateMin, bitrateMax: v.bitrateMax }); }
-      else { state.bitrateAuto = false; state.bitrateMin = Math.round((state.bitrateMax * 0.5) * 10) / 10; }
-      renderAll();
-    }),
-  }));
-  if (!state.bitrateAuto) {
-    const wrap = el('<div class="adv-body slider-row"></div>');
-    const range = el('<input type="range" min="2" max="20" step="0.5">');
-    range.value = String(state.bitrateMax);
-    const note = el('<div class="hint"></div>');
-    note.textContent = "Max " + state.bitrateMax + " Mbps";
-    range.addEventListener("input", () => {
-      state.bitrateMax = Number(range.value);
-      state.bitrateMin = Math.round((state.bitrateMax * 0.5) * 10) / 10;
-      note.textContent = "Max " + state.bitrateMax + " Mbps";
-    });
-    wrap.appendChild(range); wrap.appendChild(note);
-    q.appendChild(wrap);
-  }
-  q.appendChild(iconRow({
-    ico: "check", title: "Automatic quality",
-    sub: "Lowers the quality on its own when the phone gets hot or the stream struggles.",
-    right: switchEl(state.autoQuality, (on) => { state.autoQuality = on; renderAll(); }),
-  }));
-  const foot = el('<div class="card-foot"></div>');
-  foot.textContent = "Picking a template also sets the Advanced defaults below — you can still override them.";
-  q.appendChild(foot);
-  root.appendChild(q);
-
-  // Advanced card — collapsed by default; the header row is the toggle
-  root.appendChild(silkscreen("Advanced"));
   const adv = card();
   adv.setAttribute("data-od-id", "settings-advanced");
-  const chev = el('<span class="chev"></span>');
-  chev.innerHTML = icon(state.advancedOpen ? "chevDown" : "chevRight", 18);
-  adv.appendChild(iconRow({
-    ico: "tune", title: "Advanced", right: chev,
-    onClick: () => { state.advancedOpen = !state.advancedOpen; renderAll(); },
-  }));
-  if (state.advancedOpen) {
-    const body = el('<div class="adv-body"></div>');
-    appendAdvancedContent(body);
-    adv.appendChild(body);
-  }
+  const body = el('<div class="adv-body"></div>');
+  appendAdvancedContent(body);
+  adv.appendChild(body);
   root.appendChild(adv);
   parent.appendChild(root);
 }
 
 function appendAdvancedContent(content) {
+  // The policy master switch leads: whether quality may adapt at all —
+  // in the card's own vocabulary (label + chip pair + hint), not a
+  // Home-style switch row.
+  content.appendChild(subLabel("Automatic quality"));
+  content.appendChild(chipRow(
+    [{ id: "on", name: "On" }, { id: "off", name: "Off" }],
+    state.autoQuality ? "on" : "off",
+    (id) => { state.autoQuality = id === "on"; renderAll(); },
+  ));
+  content.appendChild(hint("Lowers the quality on its own when the phone gets hot or the stream struggles."));
+
   content.appendChild(subLabel("Encoder"));
   content.appendChild(chipRow(
     [

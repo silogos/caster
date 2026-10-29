@@ -120,6 +120,11 @@ class CastService : Service() {
         private const val ACTION_SET_MIC_DEVICE = "com.zerofriction.localcast.service.SET_MIC_DEVICE"
         private const val EXTRA_MIC_DEVICE = "micDevice"
         private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
+        private const val ACTION_SET_LIVE_QUALITY = "com.zerofriction.localcast.service.SET_LIVE_QUALITY"
+        private const val EXTRA_LONG_EDGE = "longEdgePx"
+        private const val EXTRA_FPS = "fps"
+        private const val EXTRA_BITRATE_MIN = "bitrateMinBps"
+        private const val EXTRA_BITRATE_MAX = "bitrateMaxBps"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
@@ -161,6 +166,17 @@ class CastService : Service() {
          */
         private val _adaptiveState = MutableStateFlow(AdaptiveUiState())
         val adaptiveState: StateFlow<AdaptiveUiState> = _adaptiveState.asStateFlow()
+
+        /**
+         * What the running cast actually sends right now (designs/
+         * mobile-app.html, the STATUS header's readout) — the cast-start
+         * targets, then every change, whether the adaptive policy's or the
+         * user's live pick ([requestSetLiveQuality]). Null without a cast;
+         * unlike [adaptiveState] it is populated even when auto quality is
+         * off — the readout states the stream, not the policy.
+         */
+        private val _liveQuality = MutableStateFlow<QualityLevel?>(null)
+        val liveQuality: StateFlow<QualityLevel?> = _liveQuality.asStateFlow()
 
         /**
          * What libwebrtc actually picked as the video encoder for the
@@ -239,6 +255,26 @@ class CastService : Service() {
         /** The user puts the cast back at their own settings (auto quality is reversible). */
         fun requestRestoreQuality(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_RESTORE_QUALITY))
+        }
+
+        /**
+         * The user steers the RUNNING cast's quality (designs/
+         * mobile-app.html, the quality console's Preset/Custom tabs): the
+         * values apply live via the same path the adaptive policy uses, the
+         * persisted settings are untouched — this is "until the cast ends",
+         * not a settings change. Auto quality, when on, is **reset** onto
+         * the new values (the controller is rebuilt with them as its
+         * ceiling): the policy keeps running from the user's new choice.
+         */
+        fun requestSetLiveQuality(context: Context, level: QualityLevel) {
+            context.startService(
+                Intent(context, CastService::class.java)
+                    .setAction(ACTION_SET_LIVE_QUALITY)
+                    .putExtra(EXTRA_LONG_EDGE, level.longEdgePx)
+                    .putExtra(EXTRA_FPS, level.fps)
+                    .putExtra(EXTRA_BITRATE_MIN, level.bitrateMinBps)
+                    .putExtra(EXTRA_BITRATE_MAX, level.bitrateMaxBps),
+            )
         }
     }
 
@@ -323,6 +359,18 @@ class CastService : Service() {
                 adaptive?.restore(System.currentTimeMillis())
                 return START_NOT_STICKY
             }
+            ACTION_SET_LIVE_QUALITY -> {
+                val longEdgePx = intent.getIntExtra(EXTRA_LONG_EDGE, 0)
+                val fps = intent.getIntExtra(EXTRA_FPS, 0)
+                val bitrateMinBps = intent.getIntExtra(EXTRA_BITRATE_MIN, 0)
+                val bitrateMaxBps = intent.getIntExtra(EXTRA_BITRATE_MAX, 0)
+                if (longEdgePx > 0 && fps > 0 && bitrateMinBps > 0 && bitrateMaxBps > 0) {
+                    applyUserLiveQuality(QualityLevel(longEdgePx, fps, bitrateMinBps, bitrateMaxBps))
+                } else {
+                    Log.w(TAG, "set-live-quality with incomplete extras — ignored")
+                }
+                return START_NOT_STICKY
+            }
         }
         val args = pendingStart ?: run {
             // Stopped by the system with nothing pending — nothing to resume.
@@ -372,6 +420,11 @@ class CastService : Service() {
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
         startThermalMonitoring()
+        // The STATUS readout's baseline: the cast starts at the user's
+        // settings — published even when auto quality is off.
+        _liveQuality.value = QualityLevel(
+            args.config.longEdgePx, args.config.fps, args.config.bitrateMinBps, args.config.bitrateMaxBps,
+        )
         // Auto quality rides the cast only when the user left it on (config
         // module: the switch is a cast setting like any other — next-cast
         // semantics, same as resolution/fps/bitrate).
@@ -563,6 +616,7 @@ class CastService : Service() {
                 "${describe(change.from)} → ${describe(change.to)}",
         )
         session?.changeQuality(change.to.longEdgePx, change.to.fps, change.to.bitrateMinBps, change.to.bitrateMaxBps)
+        _liveQuality.value = change.to
         // The summary follows the *live* targets: keep the per-cast config in
         // step so sendSessionInfo describes what is actually being sent. The
         // user's persisted settings are untouched — changes there are next-cast.
@@ -581,6 +635,32 @@ class CastService : Service() {
             lastChange = change,
         )
         announceQualityChange(change)
+    }
+
+    /**
+     * A user live pick (the quality console while casting): applied on the
+     * session through the same path the policy uses, the per-cast config
+     * follows so `session-info` states what is actually sent, and auto
+     * quality — when on — is **reset** onto the new values:
+     * [startAutoQuality] rebuilds the controller with them as its ceiling
+     * (clean slate — no last change, hysteresis restarted). The user's
+     * persisted settings are untouched; this lasts until the cast ends.
+     */
+    private fun applyUserLiveQuality(level: QualityLevel) {
+        val currentSession = session ?: return
+        currentSession.changeQuality(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
+        _liveQuality.value = level
+        config = config?.copy(
+            profile = matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)?.label
+                ?: PROFILE_CUSTOM,
+            longEdgePx = level.longEdgePx,
+            fps = level.fps,
+            bitrateMinBps = level.bitrateMinBps,
+            bitrateMaxBps = level.bitrateMaxBps,
+        )
+        sendSessionInfo(mic = micSession !== null)
+        if (adaptive !== null) config?.let { startAutoQuality(it) }
+        Log.i(TAG, "user live quality: ${describe(level)}")
     }
 
     /** One INFO line per change is the policy's announcement duty (thermal.md). */
@@ -622,10 +702,12 @@ class CastService : Service() {
         null -> getString(R.string.adaptive_your_settings)
     }
 
+    /** Cast teardown for the quality state: the policy and the live readout. */
     private fun stopAutoQuality() {
         adaptive = null
         adaptiveCeiling = null
         _adaptiveState.value = AdaptiveUiState()
+        _liveQuality.value = null
         _encoderImplementation.value = null
     }
 

@@ -1,9 +1,26 @@
 <resources>
-    <!-- Launcher label stays short; the full product name is shown on the home screen. -->
+    <!-- Launcher label stays short; it is also the app bar's nameplate. -->
     <string name="app_name">Local Cast</string>
-    <string name="home_title">Zero-Friction Local Cast</string>
     <string name="home_not_connected">Not connected</string>
-    <string name="start_cast">Start Cast</string>
+
+    <!-- App-bar annunciator (designs/mobile-app.html): the machine's state
+         words — mono caps at render, mapped 1:1 to the cast state. ON AIR
+         is the screen's only blinking tally. -->
+    <string name="app_bar_state_standby">Standby</string>
+    <string name="app_bar_state_starting">Starting</string>
+    <string name="app_bar_state_on_air">On air</string>
+    <string name="app_bar_state_fault">Fault</string>
+
+    <!-- The quality console (designs/mobile-app.html): one tabbed card on
+         Home in both states — idle writes the next-cast defaults, casting
+         steers the RUNNING cast (until it ends). -->
+    <string name="quality_tab_preset">Preset</string>
+    <string name="quality_tab_custom">Custom</string>
+    <string name="quality_custom_hint_live">Your values run until the cast ends.</string>
+    <string name="quality_custom_hint_next">Your values for the next cast.</string>
+    <string name="quality_foot_next_cast">Defaults for the next cast — picking also sets the Advanced defaults in settings.</string>
+    <string name="quality_bitrate_max_label">Bitrate (max %1$d Mbps)</string>
+    <string name="status_zone">Status</string>
 
     <!-- Scan / pairing screen (Phase 3; screens polished in Phase 13). -->
     <string name="scan_title">Scan the desktop\'s QR code</string>
@@ -29,10 +46,6 @@
     <!-- Cast controls (Phase 5), shown once paired. -->
     <string name="starting_cast">Starting the cast…</string>
     <string name="casting_to">Casting to %1$s</string>
-    <!-- Home hero overlines (designs/mobile-app.html): the tally block —
-         the overline states the state in caps, the desktop name is the hero. -->
-    <string name="connected_overline">Connected to</string>
-    <string name="casting_overline">Casting to</string>
     <string name="stop_casting">Stop casting</string>
     <string name="cast_failed_generic">Couldn\'t start the cast. Please try again.</string>
     <string name="cast_stopped_projection_revoked">The screen cast was stopped.</string>
@@ -71,8 +84,6 @@
          content: header = connection state + cast button, body = settings.
          The profile row is the thermal vocabulary (thermal.md). -->
     <string name="settings_changes_next_cast">Changes take effect on the next cast.</string>
-    <string name="live_cast_section">This cast</string>
-    <string name="settings_sharescreen">Share screen</string>
     <string name="profile_cool">Cool</string>
     <string name="profile_balanced">Balanced</string>
     <string name="profile_performance">Performance</string>
@@ -87,19 +98,20 @@
     <string name="settings_px">%1$d px</string>
     <string name="settings_fps">Frame rate</string>
     <string name="settings_fps_value">%1$d fps</string>
-    <string name="settings_bitrate">Bitrate</string>
-    <string name="settings_bitrate_auto">Automatic (follows the profile)</string>
-    <string name="settings_bitrate_max">Max %1$d Mbps</string>
     <string name="settings_audio">Audio</string>
     <string name="settings_game_audio">Include game audio</string>
     <string name="settings_mic">Start with microphone on</string>
     <string name="settings_mic_hint">You can also turn the microphone on and off during a cast.</string>
 
-    <!-- Auto quality (Phase12, thermal.md) — a cast setting like any other:
-             conservative step-downs with hysteresis, announced, reversible;
-             the switch is the "user can disable" acceptance criterion. -->
+    <!-- Auto quality (Phase12, thermal.md) — a policy like any other, first
+             block of the Advanced card: conservative step-downs with
+             hysteresis, announced, reversible; the On/Off pair is the "user
+             can disable" acceptance criterion (chip vocabulary, not a
+             Home-style switch row). -->
     <string name="settings_auto_quality">Automatic quality</string>
     <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
+    <string name="auto_quality_on">On</string>
+    <string name="auto_quality_off">Off</string>
 
     <!-- Microphone device (Home's Audio card, designs/mobile-app.html) — which
          mic the cast records from. The picker is realtime while casting
@@ -119,16 +131,16 @@
          screen" stops the video only; the pairing session stays connected. -->
     <string name="share_screen_action">Share screen</string>
     <string name="stop_share_screen">Stop share screen</string>
-    <string name="cast_settings_title">Cast settings</string>
     <string name="home_game_audio">Game audio</string>
     <string name="home_microphone">Microphone</string>
     <string name="home_game_audio_hint">Off silences the game audio, but its track stays part of the cast.</string>
     <string name="home_mic_hint">Off removes the microphone from the cast and frees it for the game\'s own voice chat.</string>
 
-    <!-- Advanced settings (designs/mobile-app.html) — encoder-level knobs.
-         Defaults reproduce today's cast exactly; every value is next-cast. -->
-    <string name="settings_advanced">Advanced</string>
-    <string name="settings_preset_sets_advanced_hint">Picking a template also sets the Advanced defaults below — you can still override them.</string>
+    <!-- Advanced settings (designs/mobile-app.html) — Settings is Advanced
+         ONLY (the profile/share-screen sections live on Home's quality
+         console). Encoder-level knobs; defaults reproduce today's cast
+         exactly; every value is next-cast. -->
+    <string name="advanced_settings_title">Advanced</string>
     <string name="settings_encoder">Encoder</string>
     <string name="settings_encoder_hardware">Hardware</string>
     <string name="settings_encoder_software">Software</string>

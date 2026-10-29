@@ -2,7 +2,6 @@ package com.zerofriction.localcast.ui.settings
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,17 +46,17 @@ import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderBitrateMode
 import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.PreferredVideoCodec
-import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 /**
- * The cast settings screen (designs/mobile-app.html) — the gear from the
- * Home hub. All cast settings live here: the Share screen section and the
- * collapsible Advanced section. Every change persists immediately and
- * applies on the next cast; the note at the top says so. Back — the button
- * and the system gesture alike — returns to the Home hub; the pairing
- * session is untouched.
+ * The settings screen (designs/mobile-app.html) — **Advanced only**: the
+ * profile and share-screen sections live on Home's quality console now;
+ * the gear is the deep config (encoder, codecs, degradation policy, fps
+ * cap, bitrate mode, the auto-quality master switch). Every change
+ * persists immediately and applies on the next cast; the note at the top
+ * says so. Back — the button and the system gesture alike — returns to the
+ * Home hub; the pairing session is untouched.
  */
 @Composable
 fun CastSettingsScreen(
@@ -74,11 +73,6 @@ fun CastSettingsScreen(
     CastSettingsContent(
         settings = settings,
         encoderInUse = encoderInUse,
-        onSelectProfile = viewModel::selectProfile,
-        onSelectLongEdge = viewModel::selectLongEdge,
-        onSelectFps = viewModel::selectFps,
-        onSetBitrateAuto = viewModel::setBitrateAuto,
-        onSetManualBitrateMax = viewModel::setManualBitrateMax,
         onSetAutoQuality = viewModel::setAutoQuality,
         onSetEncoderImpl = viewModel::setEncoderImpl,
         onSetH264HighProfile = viewModel::setH264HighProfile,
@@ -94,11 +88,6 @@ fun CastSettingsScreen(
 fun CastSettingsContent(
     settings: CastSettings,
     encoderInUse: String?,
-    onSelectProfile: (QualityProfile) -> Unit,
-    onSelectLongEdge: (Int) -> Unit,
-    onSelectFps: (Int) -> Unit,
-    onSetBitrateAuto: (Boolean) -> Unit,
-    onSetManualBitrateMax: (Int) -> Unit,
     onSetAutoQuality: (Boolean) -> Unit,
     onSetEncoderImpl: (EncoderImplementation) -> Unit,
     onSetH264HighProfile: (Boolean) -> Unit,
@@ -137,12 +126,12 @@ fun CastSettingsContent(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_chevron_left),
-                    contentDescription = stringResource(R.string.cast_settings_title),
+                    contentDescription = stringResource(R.string.advanced_settings_title),
                     modifier = Modifier.size(20.dp),
                 )
             }
             Text(
-                text = stringResource(R.string.cast_settings_title),
+                text = stringResource(R.string.advanced_settings_title),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -156,18 +145,11 @@ fun CastSettingsContent(
             modifier = Modifier.padding(top = 6.dp),
         )
 
-        ShareScreenSettingsSection(
-            settings = settings,
-            onSelectProfile = onSelectProfile,
-            onSelectLongEdge = onSelectLongEdge,
-            onSelectFps = onSelectFps,
-            onSetBitrateAuto = onSetBitrateAuto,
-            onSetManualBitrateMax = onSetManualBitrateMax,
-            onSetAutoQuality = onSetAutoQuality,
-        )
+        Spacer(Modifier.height(8.dp))
         AdvancedSettingsSection(
             settings = settings,
             encoderInUse = encoderInUse,
+            onSetAutoQuality = onSetAutoQuality,
             onSetEncoderImpl = onSetEncoderImpl,
             onSetH264HighProfile = onSetH264HighProfile,
             onSetPreferredCodec = onSetPreferredCodec,
@@ -202,11 +184,6 @@ private fun CastSettingsContentPreview() {
         CastSettingsContent(
             settings = CastSettings.default(),
             encoderInUse = null,
-            onSelectProfile = {},
-            onSelectLongEdge = {},
-            onSelectFps = {},
-            onSetBitrateAuto = {},
-            onSetManualBitrateMax = {},
             onSetAutoQuality = {},
             onSetEncoderImpl = {},
             onSetH264HighProfile = {},

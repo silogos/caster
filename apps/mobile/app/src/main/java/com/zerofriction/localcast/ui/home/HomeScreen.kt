@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -89,6 +92,10 @@ import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.service.MicRoutingUiState
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
+import com.zerofriction.localcast.ui.components.AnnuncTone
+import com.zerofriction.localcast.ui.components.Annunciator
+import com.zerofriction.localcast.ui.components.BrandMark
+import com.zerofriction.localcast.ui.components.CardFoot
 import com.zerofriction.localcast.ui.components.CastCard
 import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.CastSwitch
@@ -127,6 +134,7 @@ fun HomeScreen(
     val micRouting by CastService.micRouting.collectAsStateWithLifecycle()
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
     val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
+    val liveQuality by CastService.liveQuality.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
 
     // No pairing session → nothing to show here: back to the scan screen.
@@ -188,6 +196,7 @@ fun HomeScreen(
         adaptiveState = adaptiveState,
         micRouting = micRouting,
         settings = settings,
+        liveQuality = liveQuality,
         onSetGameAudio = { on ->
             settingsViewModel.setGameAudio(on)
             if (castState is CastState.Casting && (gameAudioState == GameAudioState.Muted) != !on) {
@@ -213,6 +222,11 @@ fun HomeScreen(
                 CastService.requestSetMicDevice(context, source)
             }
         },
+        onSelectProfile = settingsViewModel::selectProfile,
+        onSelectLongEdge = settingsViewModel::selectLongEdge,
+        onSelectFps = settingsViewModel::selectFps,
+        onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
+        onApplyLiveQuality = { level -> CastService.requestSetLiveQuality(context, level) },
         onShareScreen = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -241,15 +255,22 @@ fun HomeContent(
     adaptiveState: AdaptiveUiState = AdaptiveUiState(),
     micRouting: MicRoutingUiState? = null,
     settings: CastSettings = CastSettings.default(),
+    liveQuality: QualityLevel? = null,
     onSetGameAudio: (Boolean) -> Unit = {},
     onSetMic: (Boolean) -> Unit = {},
     onSetMicDevice: (MicDeviceSource) -> Unit = {},
+    onSelectProfile: (QualityProfile) -> Unit = {},
+    onSelectLongEdge: (Int) -> Unit = {},
+    onSelectFps: (Int) -> Unit = {},
+    onSetManualBitrateMax: (Int) -> Unit = {},
+    onApplyLiveQuality: (QualityLevel) -> Unit = {},
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val casting = castState is CastState.Casting
+    val annunc = annunciatorFor(castState)
 
     // Surface (like the scan screen's Scaffold): paints the theme
     // background and provides contentColor — plain Columns default to
@@ -269,16 +290,45 @@ fun HomeContent(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
     ) {
-        // ---- App bar: product name + the gear (all cast settings) ----
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        // ---- App bar: the console's nameplate + annunciator strip ----
+        // The bar owns ALL the state words (machine register) and the ONE
+        // blinking tally (ON AIR); the hero below stays wordless.
+        val barInk = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, 0.2f)
+        val barOutline = MaterialTheme.colorScheme.outline
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+                .heightIn(min = 48.dp)
+                .drawBehind {
+                    val y = size.height - 0.5.dp.toPx()
+                    drawLine(
+                        color = barOutline,
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+                .padding(bottom = 14.dp),
+        ) {
+            BrandMark(onAir = casting)
             Text(
-                text = stringResource(R.string.home_title),
-                fontSize = 17.sp,
+                text = stringResource(R.string.app_name),
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.7.sp,
+                color = barInk,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
+            )
+            Annunciator(
+                word = stringResource(annunc.labelRes),
+                tone = annunc.tone,
+                pulse = annunc == ConsoleAnnunciator.ON_AIR,
             )
             OutlinedButton(
                 onClick = onOpenSettings,
@@ -293,13 +343,14 @@ fun HomeContent(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_gear),
-                    contentDescription = stringResource(R.string.cast_settings_title),
+                    contentDescription = stringResource(R.string.advanced_settings_title),
                     modifier = Modifier.size(19.dp),
                 )
             }
         }
 
-        // ---- On-air hero: the tally section (who, and live-or-not) ----
+        // ---- Hero: the destination plate — name only, both states; the
+        // live timecode and quality readout live in the STATUS header. ----
         if (castState is CastState.Failed) {
             Spacer(Modifier.height(12.dp))
             CastCard {
@@ -307,14 +358,12 @@ fun HomeContent(
             }
         } else {
             OnAirHero(
-                casting = casting,
                 desktopName = if (casting) {
                     (castState as CastState.Casting).desktopName
                 } else {
                     (connection as? ConnectedDesktop.State.Connected)?.desktopName
                         ?: stringResource(R.string.home_not_connected)
                 },
-                startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
                 onDisconnect = onDisconnect,
             )
         }
@@ -368,6 +417,30 @@ fun HomeContent(
                 }
             }
         }
+
+        // ---- The quality console (Preset | Custom) — same card in both
+        // states, 16dp off the transport (the prototype's 16/16 rhythm):
+        // idle = next-cast defaults, casting = the running cast. STATUS
+        // rides with it, casting only. ----
+        QualityConsoleCard(
+            casting = casting,
+            settings = settings,
+            liveQuality = liveQuality,
+            startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
+            onSelectProfile = onSelectProfile,
+            onSelectLongEdge = onSelectLongEdge,
+            onSelectFps = onSelectFps,
+            onSetManualBitrateMax = onSetManualBitrateMax,
+            onApplyLive = onApplyLiveQuality,
+            modifier = Modifier.padding(top = 16.dp),
+            statusRows = {
+                ThermalLedRow(thermalState, topDivider = false)
+                AdaptiveLedRow(adaptiveState, topDivider = true)
+                if (BuildConfig.DEBUG) {
+                    DebugToneButton(topDivider = true)
+                }
+            },
+        )
 
         // ---- Audio card — one switch per track ----
         SilkscreenLabel(stringResource(R.string.settings_audio))
@@ -430,26 +503,12 @@ fun HomeContent(
                     onSelect = onSetMicDevice,
                 )
             }
-        }
-
-        // ---- "This cast": the live status lines while the video runs ----
-        if (casting) {
-            SilkscreenLabel(stringResource(R.string.live_cast_section))
-            CastCard {
-                if (micState == MicState.Active &&
-                    (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
-                ) {
-                    IconListRow(
-                        iconRes = R.drawable.ic_headphones,
-                        title = stringResource(R.string.mic_headphones_hint),
-                    )
-                }
-                ThermalLedRow(thermalState, topDivider = micState == MicState.Active &&
-                    (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent))
-                AdaptiveLedRow(adaptiveState, topDivider = true)
-                if (BuildConfig.DEBUG) {
-                    DebugToneButton(topDivider = true)
-                }
+            // The headphones tip is audio advice, not cast status — it lives
+            // with the audio sources (card foot), only while both tracks run.
+            if (casting && micState == MicState.Active &&
+                (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
+            ) {
+                CardFoot(text = stringResource(R.string.mic_headphones_hint))
             }
         }
         Spacer(Modifier.height(28.dp))
@@ -458,14 +517,13 @@ fun HomeContent(
 }
 
 /**
- * The hero (the prototype's .hero): tally lamp + caps overline + desktop
- * name, the elapsed readout while casting, Disconnect quiet on the right.
+ * The hero (the prototype's .hero) — the destination plate: desktop name +
+ * Disconnect, wordless state-wise in both states. The app-bar annunciator
+ * owns the state words; the STATUS header owns the timecode/readout.
  */
 @Composable
 private fun OnAirHero(
-    casting: Boolean,
     desktopName: String,
-    startedAtMillis: Long,
     onDisconnect: () -> Unit,
 ) {
     Row(
@@ -474,62 +532,34 @@ private fun OnAirHero(
             .fillMaxWidth()
             .padding(top = 18.dp),
     ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                LedDot(tone = LedTone.ON, pulse = casting)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stringResource(
-                        if (casting) R.string.casting_overline else R.string.connected_overline,
-                    ).uppercase(),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.1.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                text = desktopName,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                letterSpacing = (-0.25).sp,
-                lineHeight = 27.sp,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            if (casting) {
-                LiveElapsed(startedAtMillis)
-            }
-        }
+        Text(
+            text = desktopName,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            letterSpacing = (-0.25).sp,
+            lineHeight = 27.sp,
+            modifier = Modifier.weight(1f),
+        )
         Spacer(Modifier.width(12.dp))
         CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
     }
 }
 
-/**
- * The live elapsed readout under the hero name — tabular monospace so the
- * digits don't jitter. Anchored at the service's streaming transition
- * ([CastState.Casting.startedAtMillis]); a 0 (unknown) falls back to the
- * first composition, which stays honest on the screen the timer lives on.
- */
-@Composable
-private fun LiveElapsed(startedAtMillis: Long) {
-    var fallbackStart by rememberSaveable { mutableLongStateOf(0L) }
-    val start = if (startedAtMillis > 0) startedAtMillis else fallbackStart.also { if (it == 0L) fallbackStart = System.currentTimeMillis() }
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(start) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
-    Text(
-        text = formatCastDuration(((now - start).coerceAtLeast(0L)) / 1_000),
-        fontSize = 13.sp,
-        fontFamily = FontFamily.Monospace,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 10.dp),
-    )
+/** The bar's annunciator states — machine words (designs/mobile-app.html). */
+internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) {
+    STANDBY(R.string.app_bar_state_standby, AnnuncTone.QUIET),
+    STARTING(R.string.app_bar_state_starting, AnnuncTone.LIVE),
+    ON_AIR(R.string.app_bar_state_on_air, AnnuncTone.LIVE),
+    FAULT(R.string.app_bar_state_fault, AnnuncTone.FAULT),
+}
+
+/** Idle-with-a-pairing reads STANDBY — Home is only shown while connected. */
+internal fun annunciatorFor(castState: CastState): ConsoleAnnunciator = when (castState) {
+    is CastState.Starting -> ConsoleAnnunciator.STARTING
+    is CastState.Casting -> ConsoleAnnunciator.ON_AIR
+    is CastState.Failed -> ConsoleAnnunciator.FAULT
+    CastState.Idle -> ConsoleAnnunciator.STANDBY
 }
 
 /** One offered mic kind: the config value plus its localized label. */
