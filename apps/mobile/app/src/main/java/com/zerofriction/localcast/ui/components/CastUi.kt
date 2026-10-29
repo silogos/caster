@@ -63,7 +63,8 @@ fun CastCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     }
 }
 
-/** The prototype's .silkscreen: caps panel label above a card. */
+/** The prototype's .silkscreen: caps panel label above a card (its .card
+ *  carries margin-top 8px — ported as this label's bottom padding). */
 @Composable
 fun SilkscreenLabel(text: String, modifier: Modifier = Modifier) {
     Text(
@@ -72,7 +73,7 @@ fun SilkscreenLabel(text: String, modifier: Modifier = Modifier) {
         fontWeight = FontWeight.Medium,
         letterSpacing = 1.1.sp,
         color = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, 0.2f),
-        modifier = modifier.padding(start = 4.dp, top = 20.dp),
+        modifier = modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp),
     )
 }
 
