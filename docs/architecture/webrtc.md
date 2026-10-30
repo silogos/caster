@@ -1,6 +1,6 @@
 # WebRTC & Signaling Architecture
 
-Status: signaling **implemented in Phase4**, video transport in **Phase 5**, game audio on the `media` PC in **Phase 7**, and the `mic` PC in **Phase 8** — verification records in [features/signaling.md](../features/signaling.md), [features/screen-capture.md](../features/screen-capture.md), [features/game-audio.md](../features/game-audio.md), and [features/microphone.md](../features/microphone.md). Envelope v1, message set and lifecycle rules below are as implemented.
+Status: signaling **implemented in Phase4**, video transport in **Phase 5**, game audio on the `media` PC in **Phase 7**, and the `mic` PC in **Phase 8** — verification records in [features/signaling.md](../features/signaling.md), [features/screen-capture.md](../features/screen-capture.md), [features/game-audio.md](../features/game-audio.md), and [features/microphone.md](../features/microphone.md). Envelope v1, message set and lifecycle rules below are as implemented. **Protocol version 2** (2026-10-30, [ADR-007](../decisions/ADR-007-virtual-camera.md)) adds the `vc-*` virtual-camera control messages; everything else is unchanged, and proto-1↔proto-2 peers simply never exchange `vc-*`.
 
 ## Separation of concerns
 
@@ -51,6 +51,9 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 | `sdp-answer` | d→m | `{pc, sdp}` | SDP answer. |
 | `ice` | both | `{pc, candidate}` | Trickled candidate; `candidate: null` marks end-of-gathering for that `pc`. The candidate value is the platform candidate object serialized as JSON (RTCIceCandidateInit-shaped on the desktop, the libwebrtc equivalent on mobile); signaling treats it as **opaque** and relays it verbatim — the concrete shape is exercised from Phase 5 on. |
 | `session-info` | m→d | `{profile, width, height, fps, gameAudio, mic}` | Display-only summary for the desktop status line. **Not** configuration — the desktop never acts on it beyond showing text. |
+| `vc-query` | m→d | `{}` | **Proto 2** ([ADR-007](../decisions/ADR-007-virtual-camera.md)): re-send `vc-status`. The phone sends it at cast start and after every re-auth, so the toggle stays truthful across reconnects. |
+| `vc-start` / `vc-stop` | m→d | `{}` | **Proto 2**: turn the desktop's virtual camera on/off. `vc-start` while the DirectShow filter is unregistered first triggers the desktop's one-time elevated registration, then the camera is created — the phone just waits for the next `vc-status`. |
+| `vc-status` | d→m | `{available, needsRegistration, active}` | **Proto 2**: the desktop's virtual-camera state, sent as the `vc-query` reply and on every change. `available:false` (non-Windows-x64 desktop, DLL missing) hides the phone UI; `needsRegistration:true` shows the one-time-setup copy; `active:true` mirrors the camera. The desktop only sends/processes `vc-*` on connections that negotiated proto ≥ 2. |
 | `ping` / `pong` | both | `{t}` | App-level heartbeat every 5 s; a peer silent > 15 s is considered gone. |
 | `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. The reserved reason `forget` (ADR-006) additionally revokes the persistent trust on both sides — what the desktop's Disconnect and the mobile's Terminate send; any other reason (the mobile's Disconnect, stopped casts) keeps it (the phone's next Connect is one tap, the desktop stays on its no-input stage). |
 
@@ -111,6 +114,15 @@ States (both sides): pairing → connecting → negotiating → connecting(ICE) 
 ### Error surfacing
 
 Signaling/ICE failures map to the simple user-facing messages defined in [pairing.md](pairing.md) §Failure modes; the raw codes stay in logs.
+
+## Virtual camera control (proto 2, ADR-007)
+
+The `vc-*` messages are control plumbing for the desktop's virtual camera ([ADR-007](../decisions/ADR-007-virtual-camera.md)) — the signaling channel relays them like any other message; no media logic lives here.
+
+- **Capability gating rides version negotiation.** The desktop advertises `protoMax: 2`; a phone that also speaks 2 gets `auth-ok.proto: 2` and may show the virtual-camera toggle. A proto-1 peer on either side never sends or receives `vc-*` (the desktop tracks the negotiated proto per connection and ignores `vc-*` below 2 — it also never sends them there).
+- **The phone is the only control surface** (mobile-controls invariant): toggle = `vc-start`/`vc-stop`; the desktop answers with `vc-status` on every state change (registration done, camera created/deleted, capability change). The desktop displays state only.
+- **Lifecycle rule:** the camera dies with the cast. `vc-stop`, cast end, mobile gone (`bye`, socket drop past the reconnect window, `waiting`), and app quit all delete the camera — after a mid-cast reconnect the phone re-queries (`vc-query` on re-auth) and finds `active:false`; turning it back on is a fresh user action.
+- Frames never touch the signaling channel — the desktop-internal frame path (renderer → main → DLL) is defined in [desktop.md](desktop.md).
 
 ## Statistics (input for adaptive quality)
 
