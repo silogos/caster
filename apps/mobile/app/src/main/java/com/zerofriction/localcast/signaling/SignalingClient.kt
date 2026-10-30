@@ -122,6 +122,9 @@ class SignalingClient(
     private var reconnectAttempt = 0
     private var heartbeatHandle: (() -> Unit)? = null
     private var reconnectHandle: (() -> Unit)? = null
+
+    /** Handshake watchdog — armed while a socket is open but auth-ok hasn't arrived. */
+    private var handshakeTimeoutHandle: (() -> Unit)? = null
     /** Epoch ms of the last inbound frame — heartbeat silence is measured from it. */
     private var lastInboundAtMs = 0L
 
@@ -129,6 +132,7 @@ class SignalingClient(
         override fun onTransportOpen() {
             _state.value = State.AUTHENTICATING
             Log.i(TAG, "connected, sending hello")
+            armHandshakeTimeout()
             emit(Event.Authenticating)
             sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX, resume))
         }
@@ -221,6 +225,7 @@ class SignalingClient(
     }
 
     private fun onConnectionLost(why: String) {
+        cancelHandshakeTimeout()
         when (_state.value) {
             State.AUTHORIZED, State.RECONNECTING -> {
                 Log.i(TAG, "authorized connection lost: $why")
@@ -308,6 +313,7 @@ class SignalingClient(
                 Log.i(TAG, if (resume) "authorized by desktop (resumed session)" else "authorized by desktop")
                 hasAuthorizedOnce = true
                 reconnectAttempt = 0
+                cancelHandshakeTimeout()
                 _state.value = State.AUTHORIZED
                 startHeartbeat()
                 emit(Event.Authorized(name, proto, trust))
@@ -412,11 +418,34 @@ class SignalingClient(
         emit(Event.Failed(error))
     }
 
+    /**
+     * The handshake watchdog (found live 2026-10-30): a peer that answers
+     * nothing — or with frames this client cannot parse (an older desktop
+     * sent sid-less handshake errors) — must not leave the UI on
+     * "Connecting…" forever. Mirrors pairing.md's desktop-side 10 s rule.
+     */
+    private fun armHandshakeTimeout() {
+        cancelHandshakeTimeout()
+        handshakeTimeoutHandle = scheduler.postDelayed(HANDSHAKE_TIMEOUT_MS) {
+            handshakeTimeoutHandle = null
+            if (_state.value != State.AUTHORIZED) {
+                Log.w(TAG, "handshake did not complete in ${HANDSHAKE_TIMEOUT_MS} ms — giving up")
+                fail(SignalingError.BAD_AUTH)
+            }
+        }
+    }
+
+    private fun cancelHandshakeTimeout() {
+        handshakeTimeoutHandle?.invoke()
+        handshakeTimeoutHandle = null
+    }
+
     private fun cancelTimers() {
         heartbeatHandle?.invoke()
         heartbeatHandle = null
         reconnectHandle?.invoke()
         reconnectHandle = null
+        cancelHandshakeTimeout()
     }
 
     companion object {
@@ -428,6 +457,9 @@ class SignalingClient(
 
         /** webrtc.md: a peer silent > 15 s is considered gone. */
         const val HEARTBEAT_TIMEOUT_MS = 15000L
+
+        /** pairing.md: the full handshake must complete within 10 s — the phone enforces its own half. */
+        const val HANDSHAKE_TIMEOUT_MS = 10_000L
 
         /** webrtc.md: 1 s → 2 s → 5 s → 10 s → 30 s cap. */
         val RECONNECT_BACKOFF_MS = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)

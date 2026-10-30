@@ -397,6 +397,26 @@ class SignalingClientResumeTest {
     }
 
     @Test
+    fun `a silent handshake times out instead of hanging on Connecting`() {
+        setUp()
+        // The desktop answers nothing — or with frames this client cannot
+        // parse (an older desktop sent sid-less handshake errors, found live
+        // 2026-10-30). The watchdog gives up and closes within the bound.
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+
+        scheduler.advance(SignalingClient.HANDSHAKE_TIMEOUT_MS)
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.BAD_AUTH),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+        assertTrue(fake.closeCount >= 1)
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    @Test
     fun `a trusted reconnect ladder is bounded — it ends in unreachable, not forever`() {
         setUp()
         authorizeResume()
