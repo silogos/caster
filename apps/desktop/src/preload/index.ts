@@ -5,7 +5,8 @@ import type {
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
-  SignalingSdpMessage
+  SignalingSdpMessage,
+  VcPumpCommand
 } from '../shared/types'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -43,6 +44,15 @@ const desktopApi: DesktopApi = {
   onSessionInfoOverlayChanged: (listener) => subscribe<boolean>(IPC.window.sessionInfoOverlay, listener),
   fitWindowToStream: () => {
     ipcRenderer.invoke(IPC.window.fitToStream)
+  },
+  onVcPump: (listener) => subscribe<VcPumpCommand>(IPC.vc.pump, listener),
+  sendVcFrame: (data, width, height) => {
+    // Plain send (fire-and-forget): frames are 30–120 Hz — invoke()'s reply
+    // round-trips would only queue promises. Structured clone copies the bytes.
+    ipcRenderer.send(IPC.vc.frame, { data, width, height })
+  },
+  reportVcPumpFailed: () => {
+    ipcRenderer.send(IPC.vc.pumpFailed)
   }
 }
 

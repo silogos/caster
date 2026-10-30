@@ -3,7 +3,8 @@ import type {
   PairingSessionView,
   SignalingIceMessage,
   SignalingSdpMessage,
-  TrustedDeviceView
+  TrustedDeviceView,
+  VcPumpCommand
 } from './types'
 
 /**
@@ -38,8 +39,7 @@ export const IPC = {
   },
   window: {
     /** Renderer → main: a cast is live/over — cast-window vs waiting-window minimums. */
-    castActive: 'window:cast-active',
-    /**
+    castActive: 'window:cast-active',    /**
      * Renderer → main: the stream's size changed (first metadata, rotation,
      * quality steps). The window's shape is the user's — the video letterboxes
      * via CSS; the size is only cached for the on-demand "Match window to
@@ -54,6 +54,18 @@ export const IPC = {
     sessionInfoOverlay: 'window:session-info-overlay',
     /** Renderer → main: re-fit the window to the current stream's aspect. */
     fitToStream: 'window:fit-to-stream'
+  },
+  vc: {
+    /**
+     * Push: the virtual camera's renderer pump command (ADR-007) — start
+     * publishing at the fixed camera dims (frames then flow on `frame`), or
+     * stop. Also drives the receiver's VC-active placeholder.
+     */
+    pump: 'vc:pump',
+    /** Renderer → main: one packed BGR24 frame (width×height×3 bytes, top-down). */
+    frame: 'vc:frame',
+    /** Renderer → main: the pump gave up (e.g. repeated context loss) — stop the camera honestly. */
+    pumpFailed: 'vc:pump-failed'
   }
 } as const
 
@@ -86,4 +98,10 @@ export interface DesktopApi {
   onSessionInfoOverlayChanged(listener: (enabled: boolean) => void): () => void
   /** Re-fits the window to the current stream's aspect (undoes a manual resize). */
   fitWindowToStream(): void
+  /** Subscribes to the virtual camera's pump commands; returns an unsubscribe function. */
+  onVcPump(listener: (command: VcPumpCommand) => void): () => void
+  /** Sends one packed BGR24 frame to the virtual camera (ADR-007 frame path). */
+  sendVcFrame(data: Uint8Array, width: number, height: number): void
+  /** Reports the renderer pump gave up — the main process stops the camera. */
+  reportVcPumpFailed(): void
 }

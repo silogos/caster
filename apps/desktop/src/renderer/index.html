@@ -38,6 +38,18 @@
         <p class="no-input-subline" id="no-input-subline"></p>
         <button class="button no-input-disconnect" id="no-input-disconnect" type="button">Disconnect</button>
       </div>
+      <!-- The virtual camera's placeholder (ADR-007): while the camera
+           publishes there is no preview (by design — the phone asked for
+           exactly that); this stage stands in for the video, in the no-input
+           stage's visual language. The frame pump behind it reads decoded
+           frames directly (MediaStreamTrackProcessor), so the window may be
+           minimized with the camera still publishing. The hover overlay (and
+           its Settings/mixer) stays reachable. -->
+      <div class="vc-stage" id="vc-stage" hidden>
+        <h2 class="vc-heading" id="vc-heading">Virtual camera active</h2>
+        <p class="vc-subline" id="vc-subline"></p>
+        <p class="vc-status" id="vc-status"></p>
+      </div>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
            Muted — since Phase9 the element renders video only; its audio

@@ -148,6 +148,58 @@ body {
   margin-top: 4px;
 }
 
+/*
+  The virtual camera's placeholder (ADR-007): the same monitor-language stage
+  as no-input, shown while the camera publishes instead of the video preview.
+  `body.vc-active` hides the video (the pump reads decoded frames directly —
+  the element keeps holding the stream, it just stops being shown) and lifts
+  this stage over the receiving rules below.
+*/
+.vc-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.vc-stage[hidden] {
+  display: none;
+}
+
+.vc-heading {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+
+.vc-subline,
+.vc-status {
+  font-size: 15px;
+  color: var(--fg-muted);
+}
+
+.vc-status {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+/* While the virtual camera publishes: no preview — the placeholder owns the
+   window (the receiving rules would otherwise tuck every non-video child
+   away); the video element itself is hidden. */
+body.receiving.vc-active .stage > *:not(.vc-stage) {
+  display: none;
+}
+
+body.receiving.vc-active .stage .vc-stage {
+  display: flex;
+}
+
+body.vc-active .video {
+  visibility: hidden;
+}
+
 /* Receiver/environment control only (overview.md) — the desktop exposes no
    cast settings; regenerating the pairing QR is the one allowed action. */
 .button {

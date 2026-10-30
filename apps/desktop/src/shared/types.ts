@@ -94,3 +94,11 @@ export interface CastSessionInfo {
   mic: boolean
 }
 
+/**
+ * The virtual camera's renderer pump command (ADR-007): start publishing at
+ * the fixed camera dims, or stop. Main → renderer push.
+ */
+export type VcPumpCommand =
+  | { active: true; width: number; height: number }
+  | { active: false; width: null; height: null }
+

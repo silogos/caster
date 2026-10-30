@@ -2,6 +2,7 @@ import { logger } from '../log'
 import type { SoftcamCamera, SoftcamLibrary } from './softcamLibrary'
 import type { RegistrationResult, SoftcamRegistration } from './registration'
 import { vcDims } from './vcDims'
+import type { VcPumpCommand } from '../../shared/types'
 
 /**
  * The virtual camera's state machine (ADR-007) — the seam every platform
@@ -27,8 +28,8 @@ export interface VcStatusPush {
   active: boolean
 }
 
-/** What the renderer pump needs: start publishing at these dims, or stop. */
-export type PumpCommand = { active: true; width: number; height: number } | { active: false; width: null; height: null }
+/** What the renderer pump needs: start publishing at these dims, or stop (shared type). */
+export type PumpCommand = VcPumpCommand
 
 export interface VirtualCameraOptions {
   softcam: SoftcamLibrary

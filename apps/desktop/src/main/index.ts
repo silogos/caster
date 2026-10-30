@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcPumpCommand } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -18,6 +18,9 @@ import { PairingServer } from './pairing/pairingServer'
 import { TrustStore, loadOrCreateDesktopId } from './pairing/trustStore'
 import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
+import { loadSoftcam } from './vc/softcamLibrary'
+import { SoftcamRegistration, softcamDir } from './vc/registration'
+import { VirtualCameraController } from './vc/virtualCamera'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -50,6 +53,21 @@ let lastStreamSize: { width: number; height: number } | null = null
 // mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
 // name after the socket is gone, and only a real session replacement clears it.
 let pairedMobileName: string | null = null
+// The virtual camera (ADR-007): created once the signaling server exists (it
+// owns the vc-status sender); null-checked in the signaling callbacks because
+// the server is constructed first.
+let virtualCamera: VirtualCameraController | null = null
+
+/** IPC input from the renderer is untrusted at the process boundary — one packed BGR24 frame. */
+function asVcFrame(raw: unknown): { data: Uint8Array; width: number; height: number } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { data, width, height } = raw as Record<string, unknown>
+  if (!(data instanceof Uint8Array)) return null
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
+  if ((width as number) <= 0 || (height as number) <= 0) return null
+  if (data.byteLength !== (width as number) * (height as number) * 3) return null
+  return { data, width: width as number, height: height as number }
+}
 function pushToRenderer(
   channel: string,
   payload:
@@ -58,7 +76,8 @@ function pushToRenderer(
     | MobileStateEvent
     | { pc: PcId; sdp: string }
     | { pc: PcId; candidate: unknown }
-): void {
+    | VcPumpCommand
+  ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
   }
@@ -71,6 +90,12 @@ function pushToRenderer(
  * the current line into the freshly opened overlay.
  */
 function pushMobileState(state: MobileStateEvent): void {
+  // ADR-007 lifecycle: the camera dies with the cast — a dropped socket past
+  // recovery or a replaced session means media is dead (a returning mobile
+  // always re-offers), so the virtual camera must not outlive it.
+  if (state.state === 'waiting' || state.state === 'disconnected') {
+    virtualCamera?.onCastGone()
+  }
   lastMobileState = state.state === 'waiting' ? null : state
   if (state.state === 'connected') pairedMobileName = state.name
   pushToRenderer(IPC.pairing.mobileState, state)
@@ -184,9 +209,30 @@ app.whenReady().then(async () => {
     // offers or inspects SDP/candidates itself (desktop.md process split).
     onSdpOffer: (offer) => pushToRenderer(IPC.signaling.sdpOffer, offer),
     onIceCandidate: (event) => pushToRenderer(IPC.signaling.iceCandidate, event),
-    onSessionInfo: (info) => pushMobileState({ state: 'session-info', info })
+    onSessionInfo: (info) => pushMobileState({ state: 'session-info', info }),
+    // Virtual camera control (webrtc.md proto 2, ADR-007) — the controller
+    // owns the camera; the callbacks are async fire-and-forget by shape.
+    onVcQuery: () => void virtualCamera?.onVcQuery(),
+    onVcStart: () => void virtualCamera?.onVcStart(),
+    onVcStop: () => void virtualCamera?.onVcStop()
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
+
+  // The virtual camera (ADR-007): the Windows softcam adapter today, the same
+  // seam for PipeWire/Syphon later. Cast-scoped lifecycle: the camera dies
+  // with the cast (see the teardown hooks below — every exit path).
+  const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
+  virtualCamera = new VirtualCameraController({
+    softcam: loadSoftcam(softcamDirectory),
+    registration: new SoftcamRegistration({
+      installerPath: join(softcamDirectory, 'softcam_installer.exe'),
+      dllPath: join(softcamDirectory, 'softcam.dll')
+    }),
+    streamSize: () => lastStreamSize,
+    sendStatus: (status) => signaling.sendVcStatus(status),
+    onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
+  })
+  void virtualCamera.ready()
 
   pairing = new PairingServer({
     port: signaling.actualPort,
@@ -265,6 +311,23 @@ app.whenReady().then(async () => {
     signaling.sendIceCandidate(message.pc, message.candidate)
   })
 
+  // The virtual camera's frame path (ADR-007): packed BGR24 frames from the
+  // renderer pump → scSendFrame. Fire-and-forget on purpose (30–120 Hz).
+  ipcMain.on(IPC.vc.frame, (_event, raw) => {
+    const frame = asVcFrame(raw)
+    if (frame === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed vc frame — dropping')
+      return
+    }
+    virtualCamera?.onFrame(frame.data)
+  })
+  // The pump gave up (e.g. repeated WebGL context loss) — stop the camera
+  // honestly; the phone's toggle follows the vc-status push.
+  ipcMain.on(IPC.vc.pumpFailed, () => {
+    logger.warn(LOG_SCOPE, 'renderer vc pump failed — stopping the virtual camera')
+    virtualCamera?.onCastGone()
+  })
+
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox
   // both funnel through setSessionInfoOverlayEnabled, so one state backs both.
@@ -321,6 +384,8 @@ app.whenReady().then(async () => {
       stopCastKeepAwake()
       closeSessionInfoWindow()
       lastStreamSize = null
+      // The cast is over — the virtual camera dies with it (ADR-007).
+      virtualCamera?.onCastGone()
     }
   })
   // The stream's size (first metadata, every rotation, quality steps): the
@@ -380,4 +445,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// App quit: delete the camera without protocol chatter — the socket may be
+// gone (softcam also cleans up on process death, but we never rely on it).
+app.on('will-quit', () => {
+  virtualCamera?.dispose()
 })

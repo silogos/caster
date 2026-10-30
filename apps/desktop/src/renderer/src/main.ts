@@ -5,6 +5,9 @@ import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
+import { FramePump, type PumpFrame, type PumpFrameSource } from './vc/framePump'
+import { createBgrCanvas } from './vc/webglBgrCanvas'
+import { vcActiveView } from './vc/vcActiveView'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
 const heroHeadingEl = document.getElementById('hero-heading') as HTMLHeadingElement
@@ -36,6 +39,12 @@ const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivEleme
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
 const noInputDisconnectEl = document.getElementById('no-input-disconnect') as HTMLButtonElement
+// The virtual camera's placeholder stage (ADR-007): shown instead of the video
+// while the camera publishes (no preview by design).
+const vcStageEl = document.getElementById('vc-stage') as HTMLDivElement
+const vcHeadingEl = document.getElementById('vc-heading') as HTMLHeadingElement
+const vcSublineEl = document.getElementById('vc-subline') as HTMLParagraphElement
+const vcStatusEl = document.getElementById('vc-status') as HTMLParagraphElement
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -63,6 +72,11 @@ const mixer = new AudioMixer({
   log
 })
 
+// The media pc's stream, held for the virtual camera pump (ADR-007): the pump
+// consumes the DECODED video frames straight from the track, so it needs the
+// track, not the rendered <video>.
+let currentMediaStream: MediaStream | null = null
+
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
   createPeerConnection,
@@ -73,6 +87,7 @@ const receiver = new ReceiverSession({
   sink: {
     show: (stream) => {
       videoEl.srcObject = stream as MediaStream
+      currentMediaStream = stream as MediaStream
       videoEl.hidden = false
       // The element stays muted (also in the markup): the stream's game
       // audio plays through the mixer now — an unmuted element would play
@@ -93,6 +108,7 @@ const receiver = new ReceiverSession({
     },
     clear: () => {
       videoEl.srcObject = null
+      currentMediaStream = null
       videoEl.hidden = true
       releaseVideoWindow()
       mixer.detachStream('game')
@@ -366,6 +382,86 @@ fitWindowEl.addEventListener('click', () => {
   window.desktopApi.fitWindowToStream()
 })
 
+// The virtual camera pump (ADR-007): decoded frames (MSTP — works minimized,
+// no preview needed) → WebGL canvas (GPU scale + letterbox + BGR byte-packing)
+// → raw IPC → scSendFrame. One frame in, one buffer out, no cap — the cast's
+// fps is the pump's fps.
+interface MediaStreamTrackProcessorLike {
+  readable: ReadableStream<VideoFrame>
+}
+interface MediaStreamTrackProcessorCtor {
+  new (options: { track: MediaStreamTrack }): MediaStreamTrackProcessorLike
+}
+
+const createMstpSource = (track: unknown): PumpFrameSource => {
+  const ctor = (window as unknown as { MediaStreamTrackProcessor?: MediaStreamTrackProcessorCtor })
+    .MediaStreamTrackProcessor
+  if (ctor === undefined) {
+    throw new Error('MediaStreamTrackProcessor is unavailable in this Chromium')
+  }
+  const reader = new ctor({ track: track as MediaStreamTrack }).readable.getReader()
+  return {
+    start(onFrame) {
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done || value === undefined) return
+            onFrame(value as unknown as PumpFrame)
+          }
+        } catch (error) {
+          log('warn', 'vc pump source ended', { error: String(error) })
+        }
+      })()
+    },
+    stop() {
+      void reader.cancel().catch(() => undefined)
+    }
+  }
+}
+
+const vcPump = new FramePump({
+  createSource: createMstpSource,
+  createCanvas: (width, height) => createBgrCanvas(document.createElement('canvas'), width, height),
+  send: (bytes, width, height) => window.desktopApi.sendVcFrame(bytes, width, height),
+  reportFailure: () => window.desktopApi.reportVcPumpFailed(),
+  log
+})
+
+/** The receiver's stage swap for VC mode (ADR-007): placeholder in, preview out. */
+function renderVcActive(active: boolean): void {
+  document.body.classList.toggle('vc-active', active)
+  vcStageEl.hidden = !active
+  if (active) {
+    const view = vcActiveView()
+    vcHeadingEl.textContent = view.heading
+    vcSublineEl.textContent = view.subline
+    vcStatusEl.textContent = sessionInfoLine(connectedName, sessionInfo)
+  }
+}
+
+const unsubscribeVcPump = window.desktopApi.onVcPump((command) => {
+  if (command.active) {
+    const track = currentMediaStream?.getVideoTracks()[0]
+    if (track === undefined) {
+      log('warn', 'vc pump start with no video track — ignoring (the camera dies with the cast)')
+      return
+    }
+    renderVcActive(true)
+    vcPump.start(track, command.width, command.height)
+  } else {
+    vcPump.stop()
+    renderVcActive(false)
+  }
+})
+
+// The placeholder's status line follows session-info while publishing.
+const unsubscribeVcStatusLine = window.desktopApi.onMobileStateChanged((state) => {
+  if (state.state === 'session-info' && !vcStageEl.hidden) {
+    vcStatusEl.textContent = sessionInfoLine(connectedName, state.info)
+  }
+})
+
 function enableRegenerate(enabled: boolean): void {
   regenerateEl.disabled = !enabled
 }
@@ -424,10 +520,13 @@ const unsubscribeIce = window.desktopApi.onSignalingIceCandidate((candidate) => 
 
 window.addEventListener('beforeunload', () => {
   receiver.close()
+  vcPump.stop()
   unsubscribeSession()
   unsubscribeSessionForButton()
   unsubscribeMobile()
   unsubscribeOffers()
   unsubscribeIce()
   unsubscribeOverlay()
+  unsubscribeVcPump()
+  unsubscribeVcStatusLine()
 })
