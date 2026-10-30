@@ -58,7 +58,7 @@ function makePump() {
       sources.push(source)
       return source
     },
-    createCanvas: () => {
+    createCanvas: (_width, _height, _format) => {
       const canvas = fakeCanvas()
       canvases.push(canvas)
       return canvas
@@ -73,7 +73,7 @@ function makePump() {
 describe('FramePump (ADR-007: decode-side source, 1:1 frames, no cap)', () => {
   it('forwards every delivered frame 1:1 and closes each one', () => {
     const { pump, sources, canvases, sent } = makePump()
-    pump.start({}, 8, 4)
+    pump.start({}, 8, 4, 'bgr24')
     const frames = [makeFrame(), makeFrame(), makeFrame()]
     for (const frame of frames) sources[0].deliver(frame)
     expect(canvases[0].drawn).toEqual(frames)
@@ -81,9 +81,16 @@ describe('FramePump (ADR-007: decode-side source, 1:1 frames, no cap)', () => {
     expect(frames.every((frame) => frame.closed)).toBe(true)
   })
 
+  it('the macOS bgra format sizes the scratch to 4 bytes/pixel', () => {
+    const { pump, sources, sent } = makePump()
+    pump.start({}, 8, 4, 'bgra') // 8*4*4 = 128 bytes
+    sources[0].deliver(makeFrame())
+    expect(sent[0].bytes).toHaveLength(128)
+  })
+
   it('sends buffers sized to the camera dims via one reused scratch buffer', () => {
     const { pump, sources, sent } = makePump()
-    pump.start({}, 8, 4) // 8*4*3 = 96 bytes
+    pump.start({}, 8, 4, 'bgr24') // 8*4*3 = 96 bytes
     sources[0].deliver(makeFrame())
     sources[0].deliver(makeFrame())
     expect(sent[0].bytes).toHaveLength(96)
@@ -94,7 +101,7 @@ describe('FramePump (ADR-007: decode-side source, 1:1 frames, no cap)', () => {
 
   it('stop() stops the source and drops in-flight frames silently (still closed)', () => {
     const { pump, sources, sent } = makePump()
-    pump.start({}, 8, 4)
+    pump.start({}, 8, 4, 'bgr24')
     pump.stop()
     expect(sources[0].stopped).toBe(1)
     expect(pump.active).toBe(false)
@@ -106,8 +113,8 @@ describe('FramePump (ADR-007: decode-side source, 1:1 frames, no cap)', () => {
 
   it('restarting stops the previous source and pumps into a fresh canvas pair', () => {
     const { pump, sources, canvases, sent } = makePump()
-    pump.start({}, 8, 4)
-    pump.start({}, 16, 8)
+    pump.start({}, 8, 4, 'bgr24')
+    pump.start({}, 16, 8, 'bgr24')
     expect(sources).toHaveLength(2)
     expect(sources[0].stopped).toBe(1)
     sources[1].deliver(makeFrame())
@@ -117,7 +124,7 @@ describe('FramePump (ADR-007: decode-side source, 1:1 frames, no cap)', () => {
 
   it('recovers from canvas context loss, bounded, then fails honestly', () => {
     const { pump, sources, canvases, sent, failures } = makePump()
-    pump.start({}, 8, 4)
+    pump.start({}, 8, 4, 'bgr24')
     // Lose + recover three times (the default bound)…
     for (let attempt = 0; attempt < 3; attempt++) {
       canvases[attempt].lost = true

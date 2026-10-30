@@ -29,6 +29,13 @@
     "mac": {
       "category": "public.app-category.utilities",
       "identity": null,
+      "extraResources": [
+        {
+          "from": "resources/syphon",
+          "to": "syphon",
+          "filter": ["syphon-helper", "Syphon.framework/**", "LICENSE"]
+        }
+      ],
       "target": [
         {
           "target": "dmg",

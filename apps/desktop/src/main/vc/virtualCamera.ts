@@ -1,5 +1,5 @@
 import { logger } from '../log'
-import type { SoftcamCamera, SoftcamLibrary } from './softcamLibrary'
+import type { SoftcamCamera, VcCameraBackend } from './softcamLibrary'
 import type { RegistrationResult, SoftcamRegistration } from './registration'
 import { vcDims } from './vcDims'
 import type { VcPumpCommand } from '../../shared/types'
@@ -32,14 +32,15 @@ export interface VcStatusPush {
 export type PumpCommand = VcPumpCommand
 
 export interface VirtualCameraOptions {
-  softcam: SoftcamLibrary
+  /** The platform adapter (Windows softcam / macOS Syphon — ADR-007's seam). */
+  backend: VcCameraBackend
   registration: SoftcamRegistration
   /** The stream's current size (camera dims are fixed at creation from it). */
   streamSize: () => { width: number; height: number } | null
   /** The signaling-layer sender — reaches the phone only on proto ≥ 2. */
   sendStatus: (status: VcStatusPush) => void
   /** Renderer pump control (the frame source; renderer owns the pixels). */
-  onPumpCommand: (command: PumpCommand) => void
+  onPumpCommand: (command: VcPumpCommand) => void
   log?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void
 }
 
@@ -58,6 +59,11 @@ export class VirtualCameraController {
     this.log = options.log ?? ((level, message, details) => logger[level](LOG_SCOPE, message, details))
   }
 
+  /** The active backend's pixel format (for frame-size validation); null while inactive. */
+  get activePixelFormat(): 'bgr24' | 'bgra' | null {
+    return this.state === 'active' ? this.options.backend.pixelFormat : null
+  }
+
   /**
    * Resolves the initial state (platform support + registration detection).
    * Idempotent; vc-* handlers await it so an early query can't race detection.
@@ -70,9 +76,9 @@ export class VirtualCameraController {
   }
 
   private async detectInitialState(): Promise<void> {
-    if (this.options.softcam.support !== 'ok' || !this.options.registration.filesPresent) {
+    if (this.options.backend.support !== 'ok' || !this.options.registration.filesPresent) {
       this.state = 'unavailable'
-      this.log('info', `virtual camera unavailable on this desktop (support=${this.options.softcam.support})`)
+      this.log('info', `virtual camera unavailable on this desktop (support=${this.options.backend.support})`)
       return
     }
     this.state = (await this.options.registration.isRegistered()) ? 'available' : 'needsRegistration'
@@ -139,17 +145,23 @@ export class VirtualCameraController {
     // (vcDims: ≤1920×1080, multiples of 4); rotation afterwards letterboxes
     // inside them — re-creating the camera would glitch consumers mid-use.
     const dims = vcDims(size.width, size.height)
-    const camera = this.options.softcam.createCamera(dims.width, dims.height)
+    const camera = this.options.backend.createCamera(dims.width, dims.height, {
+      // The backend died under us (helper crash, EPIPE) — stop honestly; the
+      // phone's toggle follows the vc-status push.
+      onDead: () => {
+        if (this.state === 'active') this.teardown('backend-dead')
+      }
+    })
     if (camera === null) {
       this.log('warn', 'camera creation failed — staying available')
       this.pushStatus()
       return
     }
     this.camera = camera
-    this.cameraBytes = dims.width * dims.height * 3
+    this.cameraBytes = dims.width * dims.height * (this.options.backend.pixelFormat === 'bgr24' ? 3 : 4)
     this.state = 'active'
     this.log('info', 'virtual camera active', { width: dims.width, height: dims.height })
-    this.options.onPumpCommand({ active: true, width: dims.width, height: dims.height })
+    this.options.onPumpCommand({ active: true, width: dims.width, height: dims.height, pixelFormat: this.options.backend.pixelFormat })
     this.pushStatus()
   }
 

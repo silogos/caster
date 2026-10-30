@@ -18,8 +18,9 @@ import { PairingServer } from './pairing/pairingServer'
 import { TrustStore, loadOrCreateDesktopId } from './pairing/trustStore'
 import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
-import { loadSoftcam } from './vc/softcamLibrary'
+import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
 import { SoftcamRegistration, softcamDir } from './vc/registration'
+import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
 import { logger } from './log'
 
@@ -58,14 +59,14 @@ let pairedMobileName: string | null = null
 // the server is constructed first.
 let virtualCamera: VirtualCameraController | null = null
 
-/** IPC input from the renderer is untrusted at the process boundary — one packed BGR24 frame. */
-function asVcFrame(raw: unknown): { data: Uint8Array; width: number; height: number } | null {
+/** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
+function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
   if (typeof raw !== 'object' || raw === null) return null
   const { data, width, height } = raw as Record<string, unknown>
   if (!(data instanceof Uint8Array)) return null
   if (!Number.isInteger(width) || !Number.isInteger(height)) return null
   if ((width as number) <= 0 || (height as number) <= 0) return null
-  if (data.byteLength !== (width as number) * (height as number) * 3) return null
+  if (data.byteLength !== (width as number) * (height as number) * bytesPerPixel) return null
   return { data, width: width as number, height: height as number }
 }
 function pushToRenderer(
@@ -218,16 +219,28 @@ app.whenReady().then(async () => {
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
 
-  // The virtual camera (ADR-007): the Windows softcam adapter today, the same
-  // seam for PipeWire/Syphon later. Cast-scoped lifecycle: the camera dies
-  // with the cast (see the teardown hooks below — every exit path).
-  const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
-  virtualCamera = new VirtualCameraController({
-    softcam: loadSoftcam(softcamDirectory),
-    registration: new SoftcamRegistration({
+  // The virtual camera (ADR-007): one controller seam, per-platform backends —
+  // Windows = softcam (UAC registration), macOS = a Syphon publisher (helper
+  // process, no registration). Cast-scoped lifecycle: the camera dies with the
+  // cast (see the teardown hooks below — every exit path).
+  let vcBackend: VcCameraBackend
+  let vcRegistration: SoftcamRegistration
+  if (process.platform === 'darwin') {
+    const syphonDir = app.isPackaged ? join(process.resourcesPath, 'syphon') : join(app.getAppPath(), 'resources', 'syphon')
+    const syphon = loadSyphonBackend({ dir: syphonDir })
+    vcBackend = syphon
+    vcRegistration = syphonNoopRegistration(syphon.support === 'ok')
+  } else {
+    const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
+    vcBackend = loadSoftcam(softcamDirectory)
+    vcRegistration = new SoftcamRegistration({
       installerPath: join(softcamDirectory, 'softcam_installer.exe'),
       dllPath: join(softcamDirectory, 'softcam.dll')
-    }),
+    })
+  }
+  virtualCamera = new VirtualCameraController({
+    backend: vcBackend,
+    registration: vcRegistration,
     streamSize: () => lastStreamSize,
     sendStatus: (status) => signaling.sendVcStatus(status),
     onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
@@ -311,10 +324,12 @@ app.whenReady().then(async () => {
     signaling.sendIceCandidate(message.pc, message.candidate)
   })
 
-  // The virtual camera's frame path (ADR-007): packed BGR24 frames from the
-  // renderer pump → scSendFrame. Fire-and-forget on purpose (30–120 Hz).
+  // The virtual camera's frame path (ADR-007): packed frames from the renderer
+  // pump → the backend camera. Fire-and-forget on purpose (30–120 Hz); the
+  // size check uses the active backend's pixel format (bgr24=3 / bgra=4).
   ipcMain.on(IPC.vc.frame, (_event, raw) => {
-    const frame = asVcFrame(raw)
+    const bytesPerPixel = (virtualCamera?.activePixelFormat ?? 'bgr24') === 'bgr24' ? 3 : 4
+    const frame = asVcFrame(raw, bytesPerPixel)
     if (frame === null) {
       logger.warn(LOG_SCOPE, 'renderer sent a malformed vc frame — dropping')
       return

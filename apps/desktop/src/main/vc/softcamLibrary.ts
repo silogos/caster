@@ -19,18 +19,35 @@ export const SOFTCAM_FRAMERATE_UNPACED = 0
 
 export type SoftcamSupport = 'ok' | 'unsupported-platform' | 'dll-missing'
 
-export interface SoftcamCamera {
-  /** Publishes one BGR24 frame (width×height×3 bytes, top-down). */
-  sendFrame(bgr: Uint8Array): void
-  /** Deletes the camera — the only global instance slot; must always run on teardown. */
+/**
+ * The pixel format a platform backend consumes (ADR-007) — it rides the pump
+ * command so the renderer produces exactly what the camera wants:
+ * Windows/softcam = BGR 24-bit packed; macOS/Syphon = BGRA 4-byte (a texture).
+ */
+export type VcPixelFormat = 'bgr24' | 'bgra'
+
+export interface VcCamera {
+  /** Publishes one frame in the backend's format (see VcCameraBackend.pixelFormat). */
+  sendFrame(bytes: Uint8Array): void
+  /** Tears the camera down — must always run on every exit path. */
   close(): void
 }
 
-export interface SoftcamLibrary {
+export interface VcCameraBackend {
   support: SoftcamSupport
-  /** Null when the platform is unsupported, the DLL is missing, or creation failed (another instance exists). */
-  createCamera(width: number, height: number): SoftcamCamera | null
+  /** What the renderer must produce for sendFrame. */
+  pixelFormat: VcPixelFormat
+  /** Null when the platform is unsupported, files are missing, or creation failed. */
+  createCamera(width: number, height: number, handlers?: VcCameraHandlers): VcCamera | null
 }
+
+/** Backend-side failure signals (e.g. the macOS helper process dying). */
+export interface VcCameraHandlers {
+  onDead?: () => void
+}
+
+export interface SoftcamLibrary extends VcCameraBackend {}
+export interface SoftcamCamera extends VcCamera {}
 
 interface KoffiExports {
   scCreateCamera(width: number, height: number, framerate: number): unknown
@@ -42,12 +59,12 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
   // softcam.dll ships x64 builds only; other platforms (and win-arm64) report
   // honest unavailability — the phone hides its toggle.
   if (process.platform !== 'win32' || process.arch !== 'x64') {
-    return { support: 'unsupported-platform', createCamera: () => null }
+    return { support: 'unsupported-platform', pixelFormat: 'bgr24', createCamera: () => null }
   }
   const dllPath = join(dllDir, 'softcam.dll')
   if (!existsSync(dllPath)) {
     logger.warn(LOG_SCOPE, `softcam.dll not found at ${dllPath}`)
-    return { support: 'dll-missing', createCamera: () => null }
+    return { support: 'dll-missing', pixelFormat: 'bgr24', createCamera: () => null }
   }
   try {
     // Lazy require: nothing outside this win32 path loads koffi (macOS dev, tests).
@@ -66,6 +83,7 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
     }
     return {
       support: 'ok',
+      pixelFormat: 'bgr24',
       createCamera(width, height) {
         const handle = exports.scCreateCamera(width, height, SOFTCAM_FRAMERATE_UNPACED)
         if (handle === null || handle === undefined) {
@@ -80,6 +98,6 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
     }
   } catch (error) {
     logger.warn(LOG_SCOPE, `softcam.dll could not be loaded — reporting unavailable`, { error: String(error) })
-    return { support: 'dll-missing', createCamera: () => null }
+    return { support: 'dll-missing', pixelFormat: 'bgr24', createCamera: () => null }
   }
 }

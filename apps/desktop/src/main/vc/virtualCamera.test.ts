@@ -1,29 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import { VirtualCameraController, type PumpCommand, type VcStatusPush } from './virtualCamera'
-import type { SoftcamCamera, SoftcamLibrary } from './softcamLibrary'
+import type { VcCamera, VcCameraBackend } from './softcamLibrary'
 import type { SoftcamRegistration } from './registration'
 
 /**
  * The virtual camera state machine (ADR-007) with every collaborator faked:
- * platform support, registration (UAC), the softcam instance, and the push
- * channels. The real DLL path is exercised on the Windows rig only.
+ * platform support, registration (UAC), the camera backend, and the push
+ * channels. The real backend paths (softcam DLL, Syphon helper) are exercised
+ * on their platforms' rigs only.
  */
 
 type RegisterResult = 'registered' | 'declined' | 'failed'
 
-function fakeSoftcam(createSucceeds = true): SoftcamLibrary & { created: string[]; closed: string[]; frames: Uint8Array[] } {
+function fakeBackend(createSucceeds = true, pixelFormat: 'bgr24' | 'bgra' = 'bgr24'): VcCameraBackend & { created: string[]; closed: string[]; frames: Uint8Array[] } {
   const state = { created: [] as string[], closed: [] as string[], frames: [] as Uint8Array[] }
   let n = 0
   return {
     support: 'ok',
+    pixelFormat,
     ...state,
-    createCamera(width, height): SoftcamCamera | null {
+    createCamera(width, height): VcCamera | null {
       if (!createSucceeds) return null
       n += 1
       const id = `cam-${n}:${width}x${height}`
       state.created.push(id)
       return {
-        sendFrame: (bgr) => state.frames.push(bgr),
+        sendFrame: (bytes) => state.frames.push(bytes),
         close: () => state.closed.push(id)
       }
     }
@@ -48,15 +50,15 @@ function fakeRegistration(initial: boolean, result: RegisterResult = 'registered
 }
 
 function makeController(options: {
-  softcam?: SoftcamLibrary
+  backend?: VcCameraBackend
   registration?: SoftcamRegistration
   streamSize?: { width: number; height: number } | null
 } = {}) {
   const statuses: VcStatusPush[] = []
   const pumps: PumpCommand[] = []
-  const softcam = options.softcam ?? fakeSoftcam()
+  const backend = options.backend ?? fakeBackend()
   const controller = new VirtualCameraController({
-    softcam,
+    backend,
     registration: options.registration ?? fakeRegistration(true),
     // Explicit null must survive (no ?? fallback — it would resurrect a default size).
     streamSize: () => (options.streamSize === undefined ? { width: 1280, height: 720 } : options.streamSize),
@@ -64,14 +66,14 @@ function makeController(options: {
     onPumpCommand: (command) => pumps.push(command),
     log: () => undefined
   })
-  return { controller, statuses, pumps, softcam }
+  return { controller, statuses, pumps, backend }
 }
 
 describe('VirtualCameraController (ADR-007 state machine)', () => {
   it('reports unavailable when the platform or files are missing, and never registers', async () => {
     const registration = fakeRegistration(false)
     const { controller, statuses } = makeController({
-      softcam: { support: 'unsupported-platform', createCamera: () => null },
+      backend: { support: 'unsupported-platform', pixelFormat: 'bgr24', createCamera: () => null },
       registration
     })
     await controller.onVcQuery()
@@ -89,11 +91,11 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
 
   it('vc-start on needsRegistration registers (UAC) then creates the camera and reports active', async () => {
     const registration = fakeRegistration(false)
-    const { controller, statuses, pumps, softcam } = makeController({ registration })
+    const { controller, statuses, pumps, backend } = makeController({ registration })
     await controller.onVcStart()
     expect(registration.registerCalls).toBe(1)
-    expect((softcam as ReturnType<typeof fakeSoftcam>).created).toEqual(['cam-1:1280x720'])
-    expect(pumps).toEqual([{ active: true, width: 1280, height: 720 }])
+    expect((backend as ReturnType<typeof fakeBackend>).created).toEqual(['cam-1:1280x720'])
+    expect(pumps).toEqual([{ active: true, width: 1280, height: 720, pixelFormat: 'bgr24' }])
     expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: true })
   })
 
@@ -107,10 +109,10 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
   })
 
   it('caps stream dims to the softcam rule at creation (1920×1080, multiples of 4)', async () => {
-    const { controller, pumps, softcam } = makeController({ streamSize: { width: 2560, height: 1440 } })
+    const { controller, pumps, backend } = makeController({ streamSize: { width: 2560, height: 1440 } })
     await controller.onVcStart()
-    expect((softcam as ReturnType<typeof fakeSoftcam>).created).toEqual(['cam-1:1920x1080'])
-    expect(pumps).toEqual([{ active: true, width: 1920, height: 1080 }])
+    expect((backend as ReturnType<typeof fakeBackend>).created).toEqual(['cam-1:1920x1080'])
+    expect(pumps).toEqual([{ active: true, width: 1920, height: 1080, pixelFormat: 'bgr24' }])
   })
 
   it('refuses to start without a stream size (toggle is cast-scoped)', async () => {
@@ -120,10 +122,10 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
   })
 
   it('feeds frames while active, drops mismatched ones, ignores them otherwise', async () => {
-    const { controller, softcam } = makeController()
+    const { controller, backend } = makeController()
     controller.onFrame(new Uint8Array(1280 * 720 * 3)) // before start — ignored
     await controller.onVcStart()
-    const cam = softcam as ReturnType<typeof fakeSoftcam>
+    const cam = backend as ReturnType<typeof fakeBackend>
     controller.onFrame(new Uint8Array(1280 * 720 * 3))
     controller.onFrame(new Uint8Array(42)) // wrong size — dropped, never reaches native
     expect(cam.frames).toHaveLength(1)
@@ -131,10 +133,10 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
   })
 
   it('vc-stop tears the camera down and returns to available (status pushed, pump stopped)', async () => {
-    const { controller, statuses, pumps, softcam } = makeController()
+    const { controller, statuses, pumps, backend } = makeController()
     await controller.onVcStart()
     await controller.onVcStop()
-    const cam = softcam as ReturnType<typeof fakeSoftcam>
+    const cam = backend as ReturnType<typeof fakeBackend>
     expect(cam.closed).toEqual(['cam-1:1280x720'])
     expect(pumps.at(-1)).toEqual({ active: false, width: null, height: null })
     expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: false })
@@ -146,13 +148,13 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     const a = makeController()
     await a.controller.onVcStart()
     a.controller.onCastGone()
-    expect((a.softcam as ReturnType<typeof fakeSoftcam>).closed).toHaveLength(1)
+    expect((a.backend as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
     expect(a.statuses.at(-1)?.active).toBe(false)
 
     const b = makeController()
     await b.controller.onVcStart()
     b.controller.dispose() // app quit — no status push needed
-    expect((b.softcam as ReturnType<typeof fakeSoftcam>).closed).toHaveLength(1)
+    expect((b.backend as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
     expect(b.pumps.at(-1)).toEqual({ active: false, width: null, height: null })
   })
 
@@ -164,7 +166,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
       new Promise<RegisterResult>((resolve) => {
         gate.release = () => resolve('registered')
       })
-    const { controller, softcam } = makeController({ registration })
+    const { controller, backend } = makeController({ registration })
     const first = controller.onVcStart()
     const second = controller.onVcStart()
     // The register() call only happens after ready()'s microtasks — wait for
@@ -174,13 +176,47 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     }
     gate.release()
     await Promise.all([first, second])
-    expect((softcam as ReturnType<typeof fakeSoftcam>).created).toHaveLength(1)
+    expect((backend as ReturnType<typeof fakeBackend>).created).toHaveLength(1)
   })
 
   it('vc-start while already active is a no-op', async () => {
-    const { controller, softcam } = makeController()
+    const { controller, backend } = makeController()
     await controller.onVcStart()
     await controller.onVcStart()
-    expect((softcam as ReturnType<typeof fakeSoftcam>).created).toHaveLength(1)
+    expect((backend as ReturnType<typeof fakeBackend>).created).toHaveLength(1)
+  })
+
+  it('a bgra backend (macOS/Syphon) validates 4-byte frames and rides the pump command', async () => {
+    const syphon = fakeBackend(true, 'bgra')
+    const { controller, statuses, pumps } = makeController({ backend: syphon })
+    await controller.onVcStart()
+    expect(pumps).toEqual([{ active: true, width: 1280, height: 720, pixelFormat: 'bgra' }])
+    expect(controller.activePixelFormat).toBe('bgra')
+    controller.onFrame(new Uint8Array(1280 * 720 * 4)) // the format's frame size
+    controller.onFrame(new Uint8Array(1280 * 720 * 3)) // a bgr24 frame — dropped
+    const cam = syphon as ReturnType<typeof fakeBackend>
+    expect(cam.frames).toHaveLength(1)
+    await controller.onVcStop()
+    expect(statuses.at(-1)?.active).toBe(false)
+    expect(controller.activePixelFormat).toBeNull()
+  })
+
+  it('a dead backend tears the camera down honestly (the Syphon helper case)', async () => {
+    let onDead: (() => void) | undefined
+    const backend: VcCameraBackend = {
+      support: 'ok',
+      pixelFormat: 'bgra',
+      createCamera: (_w, _h, handlers) => {
+        onDead = handlers?.onDead
+        return { sendFrame: () => undefined, close: () => undefined }
+      }
+    }
+    const { controller, statuses, pumps } = makeController({ backend })
+    await controller.onVcStart()
+    expect(statuses.at(-1)?.active).toBe(true)
+    onDead?.()
+    expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: false })
+    expect(pumps.at(-1)).toEqual({ active: false, width: null, height: null })
+    expect(controller.activePixelFormat).toBeNull()
   })
 })

@@ -1,14 +1,18 @@
 /**
  * Production WebGL2 canvas that turns video frames into the exact byte buffer
- * softcam wants (ADR-007): BGR, 3 bytes/pixel, top-down, tightly packed — all
- * on the GPU, so the main process never touches a pixel.
+ * the platform backend wants (ADR-007), all on the GPU — the main process
+ * never touches a pixel:
  *
- * Two passes:
- *   1. scale: the VideoFrame is drawn (linear-filtered, letterboxed) into an
- *      offscreen texture at the camera's fixed WxH;
- *   2. pack: a byte-packing shader reads that texture and writes 4 consecutive
- *      BGR bytes per output pixel — the canvas is (W*3/4) x H pixels, so
- *      readPixels(RGBA) yields exactly W*H*3 packed bytes.
+ *   'bgr24' (Windows/softcam): BGR, 3 bytes/pixel, top-down, tightly packed.
+ *     Pass 2 packs 4 consecutive BGR bytes per output pixel — the canvas is
+ *     (W*3/4) x H, so readPixels(RGBA) yields exactly W*H*3 packed bytes.
+ *
+ *   'bgra' (macOS/Syphon): BGRA, 4 bytes/pixel, top-down. Pass 2 is a copy
+ *     with vertical flip + R/B swap — the canvas is W x H and readPixels
+ *     yields W*H*4 BGRA bytes (the helper uploads them to a Metal texture).
+ *
+ * Both formats share pass 1: the VideoFrame drawn (linear-filtered,
+ * letterboxed) into an offscreen texture at the camera's fixed WxH.
  *
  * The hardware/GPU boundary — like softcamLibrary on the main side, it is not
  * node-testable; the orchestration around it (framePump) is.
@@ -82,19 +86,35 @@ void main() {
   outColor = bytes;
 }`
 
+/**
+ * Pass 2 for 'bgra' (macOS/Syphon): flip vertically (readPixels reads
+ * bottom-up; the helper wants top-down) and swap R/B — readPixels' RGBA bytes
+ * come out as BGRA.
+ */
+const COPY_BGRA_FS = `#version 300 es
+precision mediump float;
+uniform sampler2D u_scaled;
+in vec2 v_uv;
+out vec4 outColor;
+void main() {
+  outColor = texture(u_scaled, vec2(v_uv.x, 1.0 - v_uv.y)).bgra;
+}`
+
 export interface BgrCanvas {
   /** Draws one decoded video frame (scaled + letterboxed into the fixed camera size). */
   drawFrame(frame: unknown): void
-  /** Reads the packed BGR24 buffer (width×height×3 bytes, top-down). */
+  /** Reads the packed buffer (width×height×{3|4} bytes, top-down, per format). */
   readPixels(out: Uint8Array): void
   /** Context-loss probe (WebGL_CONTEXT_LOST). */
   isLost(): boolean
 }
 
-export function createBgrCanvas(canvas: HTMLCanvasElement, width: number, height: number): BgrCanvas {
+export type BgrFormat = 'bgr24' | 'bgra'
+
+export function createBgrCanvas(canvas: HTMLCanvasElement, width: number, height: number, format: BgrFormat = 'bgr24'): BgrCanvas {
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true })
   if (gl === null) throw new Error('WebGL2 is unavailable in this Chromium')
-  canvas.width = (width * 3) / 4
+  canvas.width = format === 'bgr24' ? (width * 3) / 4 : width
   canvas.height = height
 
   const compile = (type: number, source: string): WebGLShader => {
@@ -135,7 +155,7 @@ export function createBgrCanvas(canvas: HTMLCanvasElement, width: number, height
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
   const scaleProgram = link(SCALE_FS)
-  const packProgram = link(PACK_FS)
+  const pass2Program = link(format === 'bgr24' ? PACK_FS : COPY_BGRA_FS)
 
   const drawQuad = (program: WebGLProgram): void => {
     gl.useProgram(program)
@@ -167,15 +187,17 @@ export function createBgrCanvas(canvas: HTMLCanvasElement, width: number, height
       gl.uniform2f(gl.getUniformLocation(scaleProgram, 'u_dstAspect'), width, height)
       drawQuad(scaleProgram)
 
-      // Pass 2: scaled texture → packed BGR canvas ((width*3/4) × height).
+      // Pass 2: scaled texture → the format's output canvas.
       gl.bindFramebuffer(gl.FRAMEBUFFER, null)
       gl.viewport(0, 0, canvas.width, canvas.height)
       gl.bindTexture(gl.TEXTURE_2D, scaledTexture)
-      gl.useProgram(packProgram)
-      gl.uniform1i(gl.getUniformLocation(packProgram, 'u_scaled'), 0)
-      gl.uniform1i(gl.getUniformLocation(packProgram, 'u_srcWidth'), width)
-      gl.uniform1i(gl.getUniformLocation(packProgram, 'u_srcHeight'), height)
-      drawQuad(packProgram)
+      gl.useProgram(pass2Program)
+      gl.uniform1i(gl.getUniformLocation(pass2Program, 'u_scaled'), 0)
+      if (format === 'bgr24') {
+        gl.uniform1i(gl.getUniformLocation(pass2Program, 'u_srcWidth'), width)
+        gl.uniform1i(gl.getUniformLocation(pass2Program, 'u_srcHeight'), height)
+      }
+      drawQuad(pass2Program)
     },
     readPixels(out) {
       gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, out)

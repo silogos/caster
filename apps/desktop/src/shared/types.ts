@@ -96,9 +96,11 @@ export interface CastSessionInfo {
 
 /**
  * The virtual camera's renderer pump command (ADR-007): start publishing at
- * the fixed camera dims, or stop. Main → renderer push.
+ * the fixed camera dims in the backend's pixel format, or stop. Main →
+ * renderer push. `pixelFormat` picks the canvas mode: 'bgr24' (Windows
+ * softcam) packs 3 bytes/pixel on the GPU; 'bgra' (macOS Syphon) keeps 4.
  */
 export type VcPumpCommand =
-  | { active: true; width: number; height: number }
+  | { active: true; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
   | { active: false; width: null; height: null }
 

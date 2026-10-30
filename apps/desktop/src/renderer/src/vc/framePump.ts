@@ -21,16 +21,23 @@ export interface PumpFrameSource {
   stop(): void
 }
 
-/** Fixed-size BGR canvas — production: webglBgrCanvas (GPU scale + byte pack). */
+/** Fixed-size camera canvas — production: webglBgrCanvas (GPU scale + byte pack/swap). */
 export interface PumpCanvas {
   drawFrame(frame: PumpFrame): void
   readPixels(out: Uint8Array): void
   isLost(): boolean
 }
 
+/** The backend's pixel format (ADR-007): 'bgr24' packs 3 bytes/px, 'bgra' keeps 4. */
+export type PumpFormat = 'bgr24' | 'bgra'
+
+export function frameBytes(width: number, height: number, format: PumpFormat): number {
+  return width * height * (format === 'bgr24' ? 3 : 4)
+}
+
 export interface FramePumpDeps {
   createSource: (track: unknown) => PumpFrameSource
-  createCanvas: (width: number, height: number) => PumpCanvas
+  createCanvas: (width: number, height: number, format: PumpFormat) => PumpCanvas
   /** The IPC hop to the main process (bytes are copied by structured clone). */
   send: (bytes: Uint8Array, width: number, height: number) => void
   /** Bounded recovery gave up — the main process must stop the camera honestly. */
@@ -46,7 +53,7 @@ export class FramePump {
   private source: PumpFrameSource | null = null
   private canvas: PumpCanvas | null = null
   private scratch: Uint8Array | null = null
-  private dims: { width: number; height: number } | null = null
+  private dims: { width: number; height: number; format: PumpFormat } | null = null
   private recoveries = 0
   private readonly deps: FramePumpDeps
   private readonly maxRecoveries: number
@@ -62,16 +69,16 @@ export class FramePump {
     return this.source !== null
   }
 
-  /** Begin pumping `track` into a camera of the fixed `width`×`height`. */
-  start(track: unknown, width: number, height: number): void {
+  /** Begin pumping `track` into a camera of the fixed `width`×`height` in `format`. */
+  start(track: unknown, width: number, height: number, format: PumpFormat): void {
     this.stop()
-    this.dims = { width, height }
-    this.scratch = new Uint8Array(width * height * 3)
-    this.canvas = this.deps.createCanvas(width, height)
+    this.dims = { width, height, format }
+    this.scratch = new Uint8Array(frameBytes(width, height, format))
+    this.canvas = this.deps.createCanvas(width, height, format)
     this.recoveries = 0
     const source = this.deps.createSource(track)
     this.source = source
-    this.log('info', 'vc pump started', { width, height })
+    this.log('info', 'vc pump started', { width, height, format })
     source.start((frame) => this.onFrame(frame))
   }
 
@@ -102,7 +109,7 @@ export class FramePump {
     }
   }
 
-  /** Context loss: recreate the canvas (same dims); give up honestly after N. */
+  /** Context loss: recreate the canvas (same dims/format); give up honestly after N. */
   private recoverCanvas(): boolean {
     if (this.dims === null) return false
     if (this.recoveries >= this.maxRecoveries) {
@@ -112,7 +119,7 @@ export class FramePump {
       return false
     }
     this.recoveries += 1
-    this.canvas = this.deps.createCanvas(this.dims.width, this.dims.height)
+    this.canvas = this.deps.createCanvas(this.dims.width, this.dims.height, this.dims.format)
     this.log('warn', 'vc pump canvas recovered after context loss', { attempt: this.recoveries })
     return true
   }

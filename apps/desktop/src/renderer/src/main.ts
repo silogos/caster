@@ -422,7 +422,7 @@ const createMstpSource = (track: unknown): PumpFrameSource => {
 
 const vcPump = new FramePump({
   createSource: createMstpSource,
-  createCanvas: (width, height) => createBgrCanvas(document.createElement('canvas'), width, height),
+  createCanvas: (width, height, format) => createBgrCanvas(document.createElement('canvas'), width, height, format),
   send: (bytes, width, height) => window.desktopApi.sendVcFrame(bytes, width, height),
   reportFailure: () => window.desktopApi.reportVcPumpFailed(),
   log
@@ -448,7 +448,7 @@ const unsubscribeVcPump = window.desktopApi.onVcPump((command) => {
       return
     }
     renderVcActive(true)
-    vcPump.start(track, command.width, command.height)
+    vcPump.start(track, command.width, command.height, command.pixelFormat)
   } else {
     vcPump.stop()
     renderVcActive(false)
