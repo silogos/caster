@@ -416,6 +416,13 @@ export class SignalingServer {
       conn.socket.close(1002, ERROR_CODES.badMessage)
       return
     }
+    // The envelope's sid is known the moment hello validates — own it now so
+    // every reply below (challenge *or* any handshake failure) carries it.
+    // Frames with an empty sid are malformed on the mobile side, and replies
+    // used to go out sid-less exactly on the failure paths (found live
+    // 2026-10-30: the phone ignored its own unknown-device error and sat on
+    // "Connecting…" until the desktop's handshake timeout closed the socket).
+    conn.sid = envelope.sid
 
     const session = this.store.lookup(envelope.sid)
     if (session === null) {
@@ -650,9 +657,10 @@ export class SignalingServer {
     }
   }
 
-  /** Terminal error: send, then close (webrtc.md). */
+  /** Terminal error: send, then close (webrtc.md). Nothing else is expected. */
   private failHandshake(conn: ConnectionState, code: string): void {
     this.sendError(conn, code)
+    this.clearHandshakeTimer(conn)
     conn.socket.close(1008, code)
   }
 

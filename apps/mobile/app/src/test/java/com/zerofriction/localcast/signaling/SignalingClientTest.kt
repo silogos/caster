@@ -377,7 +377,7 @@ class SignalingClientResumeTest {
     }
 
     @Test
-    fun `unknown-device is a terminal failure mapped to UNKNOWN_DEVICE`() {
+    fun `unknown-device is a terminal failure that closes the connection immediately`() {
         setUp()
         fake.listener?.onTransportOpen()
         fake.listener?.onTransportText(
@@ -389,6 +389,11 @@ class SignalingClientResumeTest {
             listOf(SignalingError.UNKNOWN_DEVICE),
             events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
         )
+        // A terminal error ends the connection from this side too — never wait
+        // for the peer's close (found live 2026-10-30: the socket hung on the
+        // desktop's handshake timeout while the phone showed "Connecting…").
+        assertTrue(fake.closeCount >= 1)
+        assertEquals(0, scheduler.pendingCount())
     }
 
     @Test

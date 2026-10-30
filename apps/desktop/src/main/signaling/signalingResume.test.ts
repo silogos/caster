@@ -209,12 +209,16 @@ describe('persistent session (resume without QR, ADR-006)', () => {
     await settle()
   })
 
-  it('answers unknown-device for a resume it does not trust', async () => {
+  it('answers unknown-device for a resume it does not trust — carrying the sid', async () => {
     const h = harness as Harness
     const phone = await new PhoneClient(h.port, 'a-stranger', Buffer.alloc(32, 9)).connect()
     const reply = await phone.handshakeResume('a-stranger')
     expect(reply.type).toBe('error')
     expect((reply.payload as { code: string }).code).toBe('unknown-device')
+    // Every reply names the session: the mobile rejects sid-less frames as
+    // malformed, and handshake-phase errors used to go out sid-less (found
+    // live 2026-10-30 — the phone ignored its own unknown-device error).
+    expect(reply.sid).toBe('a-stranger')
   })
 
   it('answers busy for a second resume while the trusted phone is already authorized', async () => {
@@ -232,6 +236,7 @@ describe('persistent session (resume without QR, ADR-006)', () => {
     const reply = await resuming.handshakeResume(DEVICE_ID)
     expect(reply.type).toBe('error')
     expect((reply.payload as { code: string }).code).toBe('busy')
+    expect(reply.sid).toBe(DEVICE_ID)
     live.close()
     resuming.close()
     await settle()
@@ -244,6 +249,7 @@ describe('persistent session (resume without QR, ADR-006)', () => {
     const reply = await phone.handshakeResume(DEVICE_ID)
     expect(reply.type).toBe('error')
     expect((reply.payload as { code: string }).code).toBe('bad-auth')
+    expect(reply.sid).toBe(DEVICE_ID)
     // The injected clock is frozen; advance past the 1 s rate-limit block.
     h.setNow(1_800_000_002_000)
     await settle()

@@ -404,6 +404,11 @@ class SignalingClient(
     private fun fail(error: SignalingError) {
         cancelTimers()
         _state.value = State.FAILED
+        // A terminal error ends the connection from this side too — the peer
+        // sends error-then-close, but this side must not *wait* for the close
+        // (found live 2026-10-30: an unknown-device answer left the socket —
+        // and the desktop's handshake timer — hanging for the full window).
+        transport.close(1000, "error-$error")
         emit(Event.Failed(error))
     }
 
