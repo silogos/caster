@@ -13,7 +13,8 @@ import {
   type IcePayload,
   type PcId,
   type SessionInfoPayload,
-  type SdpPayload
+  type SdpPayload,
+  type VcStatusPayload
 } from './envelope'
 import { computeMac, createNonce, deriveTrustKey, negotiateProtocol, verifyMac } from './handshake'
 import { deviceNameFromUa } from './ua'
@@ -103,6 +104,14 @@ export interface SignalingServerOptions {
   onIceCandidate?: (event: IceCandidateEvent) => void
   /** Display-only summary for the status line (webrtc.md) — never acted on. */
   onSessionInfo?: (info: SessionInfoPayload) => void
+  /**
+   * Virtual-camera control (webrtc.md proto 2, ADR-007): the phone's toggle.
+   * Fired only on connections that negotiated proto ≥ 2; the coordinator owns
+   * the camera and answers with `vc-status` (sendVcStatus).
+   */
+  onVcQuery?: () => void
+  onVcStart?: () => void
+  onVcStop?: () => void
 }
 
 interface ConnectionState {
@@ -110,6 +119,8 @@ interface ConnectionState {
   socketId: string
   remote: string
   phase: 'awaiting-hello' | 'awaiting-auth' | 'authorized'
+  /** Negotiated protocol version (webrtc.md `proto`); 0 until auth-ok. Gates vc-* both ways. */
+  proto: number
   sid: string | null
   nonce: string | null
   hello: HelloPayload | null
@@ -250,6 +261,21 @@ export class SignalingServer {
   }
 
   /**
+   * The desktop's virtual-camera state (ADR-007): the reply to `vc-query` and
+   * the push on every change. Sent only to a proto-2 connection — a proto-1
+   * phone must never see `vc-*` frames (it would log them as unknown noise).
+   */
+  sendVcStatus(status: VcStatusPayload): void {
+    this.withAuthorized((conn) => {
+      if (conn.proto < 2) {
+        logger.debug(LOG_SCOPE, 'vc-status skipped — authorized phone speaks proto < 2')
+        return
+      }
+      this.send(conn, 'vc-status', status satisfies VcStatusPayload)
+    })
+  }
+
+  /**
    * Desktop-initiated graceful end: `bye` invalidates the session immediately
    * (webrtc.md), so this sends bye, closes the socket, and fires onBye for the
    * coordinator to show a fresh QR. The reserved `forget` reason (the desktop
@@ -295,6 +321,7 @@ export class SignalingServer {
       socketId: `sock-${this.nextSocketId++}`,
       remote,
       phase: 'awaiting-hello',
+      proto: 0,
       sid: null,
       nonce: null,
       hello: null,
@@ -375,6 +402,18 @@ export class SignalingServer {
         break
       case 'session-info':
         this.onSessionInfo(conn, envelope)
+        break
+      case 'vc-query':
+        this.onVcMessage(conn, envelope.type, () => this.options.onVcQuery?.())
+        break
+      case 'vc-start':
+        this.onVcMessage(conn, envelope.type, () => this.options.onVcStart?.())
+        break
+      case 'vc-stop':
+        this.onVcMessage(conn, envelope.type, () => this.options.onVcStop?.())
+        break
+      case 'vc-status':
+        this.sendError(conn, ERROR_CODES.badMessage, 'desktop is the sender of vc-status')
         break
       case 'ping':
         this.onPing(conn, envelope)
@@ -507,6 +546,7 @@ export class SignalingServer {
     }
 
     conn.phase = 'authorized'
+    conn.proto = proto
     this.clearHandshakeTimer(conn)
     this.startHeartbeat(conn)
     const authOk: AuthOkPayload = { name: this.desktopName, proto }
@@ -576,8 +616,25 @@ export class SignalingServer {
     this.options.onIceCandidate?.({ pc: payload.pc, candidate: payload.candidate })
   }
 
-  private onSessionInfo(conn: ConnectionState, envelope: Envelope): void {
+  /**
+   * The phone's virtual-camera toggle (webrtc.md proto 2, ADR-007). Payloads are
+   * empty `{}` — there is nothing to validate beyond the gate: authorized AND
+   * negotiated proto ≥ 2. Below proto 2 the frame is malformed by contract (a
+   * proto-1 phone never sends it), answered recoverably.
+   */
+  private onVcMessage(conn: ConnectionState, type: string, deliver: () => void): void {
     if (conn.phase !== 'authorized') {
+      this.rejectPreAuth(conn, type)
+      return
+    }
+    if (conn.proto < 2) {
+      this.sendError(conn, ERROR_CODES.badMessage, `unexpected ${type} at proto ${conn.proto}`)
+      return
+    }
+    deliver()
+  }
+
+  private onSessionInfo(conn: ConnectionState, envelope: Envelope): void {    if (conn.phase !== 'authorized') {
       this.rejectPreAuth(conn, envelope.type)
       return
     }

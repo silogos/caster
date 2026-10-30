@@ -18,6 +18,10 @@ export type EnvelopeType =
   | 'sdp-answer'
   | 'ice'
   | 'session-info'
+  | 'vc-query'
+  | 'vc-start'
+  | 'vc-stop'
+  | 'vc-status'
   | 'ping'
   | 'pong'
 
@@ -106,6 +110,18 @@ export interface SessionInfoPayload {
   gameAudio: boolean
   mic: boolean
 }
+/**
+ * The desktop's virtual-camera state (webrtc.md proto 2, ADR-007) — the phone's
+ * toggle renders exactly this, nothing inferred.
+ */
+export interface VcStatusPayload {
+  /** False on non-Windows-x64 desktops or when the DLL is missing — the phone hides its UI. */
+  available: boolean
+  /** True when the one-time (UAC) DirectShow registration has not happened yet. */
+  needsRegistration: boolean
+  /** True while the camera exists and frames are being published. */
+  active: boolean
+}
 export interface HeartbeatPayload {
   /** Sender's epoch milliseconds; echoed unchanged in the pong. */
   t: number
@@ -121,6 +137,7 @@ export type EnvelopePayload =
   | SdpPayload
   | IcePayload
   | SessionInfoPayload
+  | VcStatusPayload
   | HeartbeatPayload
 
 export interface Envelope<P extends EnvelopePayload = EnvelopePayload> {
@@ -148,6 +165,10 @@ const ENVELOPE_TYPES: ReadonlySet<string> = new Set<EnvelopeType>([
   'sdp-answer',
   'ice',
   'session-info',
+  'vc-query',
+  'vc-start',
+  'vc-stop',
+  'vc-status',
   'ping',
   'pong'
 ])
