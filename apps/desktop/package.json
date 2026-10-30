@@ -23,6 +23,9 @@
     "files": [
       "out/**"
     ],
+    "asarUnpack": [
+      "**/node_modules/koffi/**"
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "identity": null,
@@ -37,6 +40,12 @@
       ]
     },
     "win": {
+      "extraResources": [
+        {
+          "from": "resources/softcam",
+          "to": "softcam"
+        }
+      ],
       "target": [
         {
           "target": "nsis",
