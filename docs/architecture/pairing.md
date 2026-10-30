@@ -103,7 +103,7 @@ Mobile                                   Desktop
 ```
 
 - `hello.resume: true` + `sid = deviceId` selects the trust store instead of the QR session; the MAC is the same construction with the trustKey as key. An older desktop (no resume support) answers `unknown-session` for the unknown sid — the phone falls back to the QR flow automatically.
-- **`unknown-device`** (new error code, terminal): the desktop no longer trusts this phone (Disconnected there) — the phone drops its saved entry and prompts a re-scan.
+- **`unknown-device`** (new error code, terminal): the desktop no longer trusts this phone (Disconnected there) — the phone shows the failure ("This desktop no longer remembers this phone…") with the two escapes, **Scan QR code** and **Terminate**; the saved entry stays until the user picks (retrying Connect is allowed and harmless).
 - A successful resume closes the bypassed QR session and stages a fresh pending one underneath — a photographed old QR can never piggyback on a trusted reconnect.
 - **`auth-ok` gains `desktopId`** (the desktop's persistent UUID — the phone keys its saved entry on it) **and `h`** (the desktop's current LAN candidates) so the phone refreshes its entry on *every* successful connection, QR or resume.
 
@@ -143,7 +143,7 @@ Errors shown to users stay non-technical (spec §11); codes are for logs.
 | HMAC rejected | `bad-auth` | "Couldn't pair with this desktop. Scan the QR code shown on the desktop." |
 | Another phone already paired | `busy` | "The desktop is already connected to another device." |
 | QR of wrong app | parse `t`/`v` mismatch | "This isn't a Zero-Friction Cast QR code." |
-| Reconnect, but the desktop Disconnected first | `unknown-device` | "This desktop no longer remembers this phone. Scan the QR code to pair again." (the saved entry is dropped automatically) |
+| Reconnect, but the desktop Disconnected first | `unknown-device` | "This desktop no longer remembers this phone. Scan the QR code to pair again." — with Scan QR / Terminate escapes; nothing is dropped until the user chooses |
 
 ## Versioning rules
 

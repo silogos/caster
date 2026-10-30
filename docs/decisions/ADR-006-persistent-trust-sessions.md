@@ -51,6 +51,8 @@ ADR-002 accepted "anyone who can photograph the desktop's QR obtains `k`" becaus
 
 The first cut made the mobile's single **Disconnect** the revocation (`bye forget`). The user refined it immediately: **Connect/Disconnect are connection-level only** (Disconnect = plain `bye user-ended`; the session survives, the desktop stays on its no-input stage, the next Connect is one tap), and a separate **Terminate** is the session-level exit (`bye forget` + both stores cleared → QR flow). The desktop keeps its single Disconnect (the revocation) — one deliberate exit per surface, and the phone's hero now carries the connection action plus a quiet Terminate. Decision points 3 and 6 above read with this refinement; nothing else changes.
 
+The same refinement round also made the `unknown-device` failure **stay visible**: the failure card (message + Scan QR / Terminate) owns the moment — nothing is auto-dropped, retrying Connect stays possible, and the saved entry dies only when the user picks Scan QR or Terminate (the first cut auto-terminated and flashed the card away, found in live review).
+
 The same review surfaced a real bug, fixed with it: handshake-phase error frames went out with an **empty envelope `sid`** (`conn.sid` was only owned after a successful hello), and the mobile rejects sid-less frames as malformed — so an `unknown-device` answer was silently ignored and the phone sat on "Connecting…" until the desktop's handshake timeout. Replies now name the session from the moment hello validates, `failHandshake` clears its own timer, and the mobile closes its socket immediately on any terminal error instead of waiting for the peer's close.
 
 ## Verification pointers

@@ -153,16 +153,21 @@ fun HomeScreen(
     }
 
     // The resume machine's outcomes (ADR-006): a reconnected session is
-    // adopted into the hub exactly like a scan pairing; a forgotten session
-    // (desktop `bye forget` / unknown-device) drops the saved entry and the
-    // None-effect above leads back to the scanner.
+    // adopted into the hub exactly like a scan pairing. A failure is NOT
+    // auto-cleared — the failure card below owns the moment: the message plus
+    // the two escapes (Scan QR code / Terminate), the user decides (found in
+    // live review: auto-terminating flashed the card away and left a dead
+    // Connect hero). Only a mid-connect `bye` (Ended) is terminal by itself.
     LaunchedEffect(pairingState) {
         when (val ps = pairingState) {
             is PairingClient.State.Connected ->
                 viewModel.releaseSignalingClient()?.let { ConnectedDesktop.adopt(it, ps.desktopName) }
 
-            is PairingClient.State.Failed -> if (ps.error == PairingError.DESKTOP_FORGOT) viewModel.terminateSaved()
-            PairingClient.State.Ended -> viewModel.terminateSaved()
+            PairingClient.State.Ended -> {
+                viewModel.terminateSaved()
+                ConnectedDesktop.clear()
+                onDisconnected()
+            }
             else -> {}
         }
     }
@@ -275,6 +280,7 @@ fun HomeScreen(
         },
         onTerminateSaved = {
             viewModel.terminateSaved()
+            ConnectedDesktop.clear()
             onDisconnected()
         },
         onOpenSettings = onOpenSettings,
