@@ -54,8 +54,11 @@ class HomeViewModel(
         pairingClient.startSaved(saved, trustKey)
     }
 
-    /** The saved-session escape: drop the entry (the desktop is retired/gone). */
-    fun forgetSaved() {
+    /**
+     * Terminate without a live connection (the desktop is retired/unreachable):
+     * drop the saved session — the entry, not just the socket.
+     */
+    fun terminateSaved() {
         savedDesktops?.clear()
         pairingClient.reset()
     }

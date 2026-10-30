@@ -52,7 +52,7 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 | `ice` | both | `{pc, candidate}` | Trickled candidate; `candidate: null` marks end-of-gathering for that `pc`. The candidate value is the platform candidate object serialized as JSON (RTCIceCandidateInit-shaped on the desktop, the libwebrtc equivalent on mobile); signaling treats it as **opaque** and relays it verbatim — the concrete shape is exercised from Phase 5 on. |
 | `session-info` | m→d | `{profile, width, height, fps, gameAudio, mic}` | Display-only summary for the desktop status line. **Not** configuration — the desktop never acts on it beyond showing text. |
 | `ping` / `pong` | both | `{t}` | App-level heartbeat every 5 s; a peer silent > 15 s is considered gone. |
-| `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. The reserved reason `forget` (ADR-006) additionally revokes the persistent trust on both sides — what the Disconnect buttons send; any other reason keeps it (the phone's next Connect is one tap, the desktop stays on its no-input stage). |
+| `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. The reserved reason `forget` (ADR-006) additionally revokes the persistent trust on both sides — what the desktop's Disconnect and the mobile's Terminate send; any other reason (the mobile's Disconnect, stopped casts) keeps it (the phone's next Connect is one tap, the desktop stays on its no-input stage). |
 
 ## Media transport
 

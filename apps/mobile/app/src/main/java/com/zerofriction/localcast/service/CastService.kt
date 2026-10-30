@@ -116,6 +116,7 @@ class CastService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.zerofriction.localcast.service.STOP"
         private const val ACTION_DISCONNECT = "com.zerofriction.localcast.service.DISCONNECT"
+        private const val ACTION_TERMINATE = "com.zerofriction.localcast.service.TERMINATE"
         private const val ACTION_TOGGLE_GAME_AUDIO = "com.zerofriction.localcast.service.TOGGLE_GAME_AUDIO"
         private const val ACTION_TOGGLE_MIC = "com.zerofriction.localcast.service.TOGGLE_MIC"
         private const val ACTION_SET_MIC_DEVICE = "com.zerofriction.localcast.service.SET_MIC_DEVICE"
@@ -222,11 +223,20 @@ class CastService : Service() {
         }
 
         /**
-         * "Disconnect": stop the cast *and* tear the pairing session down —
-         * `bye` invalidates it on the desktop (fresh QR), the user rescans.
+         * "Disconnect" (ADR-006, refined 2026-10-30): stop the cast and close
+         * the *connection* only — the saved session survives; the next Connect
+         * is one tap and the desktop keeps its no-input stage.
          */
         fun requestDisconnect(context: Context) {
             context.startService(Intent(context, CastService::class.java).setAction(ACTION_DISCONNECT))
+        }
+
+        /**
+         * "Terminate": stop the cast *and* delete the saved session — `bye
+         * forget` revokes it on both sides (fresh QR on the desktop).
+         */
+        fun requestTerminate(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_TERMINATE))
         }
 
         /** Mute/unmute the game-audio track of the running cast (no-op without one). */
@@ -335,8 +345,14 @@ class CastService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_DISCONNECT -> {
-                // "Disconnect" revokes the persistent session too (ADR-006):
-                // `bye forget` + the saved desktop cleared on both sides.
+                // Connection-level only (ADR-006, refined 2026-10-30): the
+                // saved session survives; the desktop keeps its no-input stage.
+                endCast(keepSession = false, forget = false)
+                return START_NOT_STICKY
+            }
+            ACTION_TERMINATE -> {
+                // Session-level: `bye forget` + the saved desktop cleared on
+                // both sides — the next pairing is a fresh QR scan.
                 endCast(keepSession = false, forget = true)
                 return START_NOT_STICKY
             }
@@ -785,15 +801,15 @@ class CastService : Service() {
         if (keepSession && currentSignaling !== null) {
             ConnectedDesktop.adopt(currentSignaling, currentDesktopName)
         } else if (forget) {
-            // "Disconnect" (ADR-006): revoke the persistent session — `bye
-            // forget` on the cast's socket, and [ConnectedDesktop.disconnect]
-            // handles a socket it still owns plus the store clear on both sides.
+            // "Terminate": revoke the persistent session — `bye forget` on the
+            // cast's socket, and [ConnectedDesktop.terminate] handles a socket
+            // it still owns plus the store clear on both sides.
             currentSignaling?.disconnect(ByeReasons.FORGET)
-            ConnectedDesktop.disconnect()
+            ConnectedDesktop.terminate()
         } else {
-            // A dead session (desktop ended it, connection lost, system kill):
-            // close the socket, but the saved session stays — Home shows a
-            // one-tap Connect instead of forcing a rescan.
+            // "Disconnect" or a dead session (desktop ended it, connection
+            // lost, system kill): close the socket, but the saved session
+            // stays — Home shows a one-tap Connect instead of forcing a rescan.
             currentSignaling?.disconnect()
             ConnectedDesktop.transitionOffline()
         }

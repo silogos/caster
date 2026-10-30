@@ -161,8 +161,8 @@ fun HomeScreen(
             is PairingClient.State.Connected ->
                 viewModel.releaseSignalingClient()?.let { ConnectedDesktop.adopt(it, ps.desktopName) }
 
-            is PairingClient.State.Failed -> if (ps.error == PairingError.DESKTOP_FORGOT) viewModel.forgetSaved()
-            PairingClient.State.Ended -> viewModel.forgetSaved()
+            is PairingClient.State.Failed -> if (ps.error == PairingError.DESKTOP_FORGOT) viewModel.terminateSaved()
+            PairingClient.State.Ended -> viewModel.terminateSaved()
             else -> {}
         }
     }
@@ -267,13 +267,14 @@ fun HomeScreen(
         },
         onStopShareScreen = { CastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
+        onTerminate = { CastService.requestTerminate(context) },
         onConnectSaved = { viewModel.connectSaved() },
         onScanQr = {
             viewModel.prepareForScan()
             onDisconnected()
         },
-        onForgetSaved = {
-            viewModel.forgetSaved()
+        onTerminateSaved = {
+            viewModel.terminateSaved()
             onDisconnected()
         },
         onOpenSettings = onOpenSettings,
@@ -303,9 +304,10 @@ fun HomeContent(
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
+    onTerminate: () -> Unit = {},
     onConnectSaved: () -> Unit = {},
     onScanQr: () -> Unit = {},
-    onForgetSaved: () -> Unit = {},
+    onTerminateSaved: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
     val casting = castState is CastState.Casting
@@ -415,6 +417,7 @@ fun HomeContent(
                 connecting = reconnecting,
                 onConnect = onConnectSaved,
                 onDisconnect = onDisconnect,
+                onTerminate = if (connected) onTerminate else onTerminateSaved,
             )
         }
 
@@ -430,7 +433,7 @@ fun HomeContent(
                     modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
                 ) {
                     CastTextButton(text = stringResource(R.string.home_scan_qr), onClick = onScanQr)
-                    CastTextButton(text = stringResource(R.string.home_forget_desktop), onClick = onForgetSaved)
+                    CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminateSaved)
                 }
             }
         }
@@ -599,6 +602,7 @@ private fun OnAirHero(
     connecting: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onTerminate: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -625,6 +629,10 @@ private fun OnAirHero(
         } else {
             CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
         }
+        // Terminate is the session-level exit (ADR-006): deleting the saved
+        // session is deliberate, so it sits next to — quieter than — the
+        // connection-level action, never replacing it.
+        CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminate, quiet = true)
     }
 }
 

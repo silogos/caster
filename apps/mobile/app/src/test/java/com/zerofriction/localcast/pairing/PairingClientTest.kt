@@ -270,7 +270,7 @@ class PairingClientTest {
     }
 
     @org.junit.Test
-    fun `disconnect sends the reserved bye forget`() {
+    fun `disconnect ends the connection only - plain user-ended bye`() {
         val fake = FakeTransport()
         val client = PairingClient(
             { fake }, { IdleScheduler() }, { TEST_UA },
@@ -287,7 +287,9 @@ class PairingClientTest {
 
         val bye = parseFrame(fake.sentFrames.removeLast())
         assertEquals(Envelope.TYPE_BYE, bye.type)
-        assertEquals("forget", bye.payload["reason"]?.jsonPrimitive?.content)
+        // Connection-level exit (ADR-006, refined 2026-10-30): a plain bye —
+        // the saved session survives; only Terminate sends `forget`.
+        assertEquals("user-ended", bye.payload["reason"]?.jsonPrimitive?.content)
     }
 
     private fun parseFrame(raw: String): Envelope {

@@ -47,6 +47,12 @@ ADR-002 accepted "anyone who can photograph the desktop's QR obtains `k`" becaus
 | Trust with expiry / periodic renewal | **Rejected** — "hilang hanya ketika pencet tombol disconnect" is the requirement; silent expiry would betray it. |
 | Bumping QR `v` or `proto` | **Rejected as unnecessary** — everything rides documented optional fields (`hello.resume`, `auth-ok.desktopId`/`hosts`, error `unknown-device`, reserved `bye` reason), the ADR-005 precedent; degradation across versions is defined. |
 
+## Addendum (2026-10-30, live review): Disconnect/Terminate split on the mobile
+
+The first cut made the mobile's single **Disconnect** the revocation (`bye forget`). The user refined it immediately: **Connect/Disconnect are connection-level only** (Disconnect = plain `bye user-ended`; the session survives, the desktop stays on its no-input stage, the next Connect is one tap), and a separate **Terminate** is the session-level exit (`bye forget` + both stores cleared → QR flow). The desktop keeps its single Disconnect (the revocation) — one deliberate exit per surface, and the phone's hero now carries the connection action plus a quiet Terminate. Decision points 3 and 6 above read with this refinement; nothing else changes.
+
+The same review surfaced a real bug, fixed with it: handshake-phase error frames went out with an **empty envelope `sid`** (`conn.sid` was only owned after a successful hello), and the mobile rejects sid-less frames as malformed — so an `unknown-device` answer was silently ignored and the phone sat on "Connecting…" until the desktop's handshake timeout. Replies now name the session from the moment hello validates, `failHandshake` clears its own timer, and the mobile closes its socket immediately on any terminal error instead of waiting for the peer's close.
+
 ## Verification pointers
 
 Cross-platform HKDF vectors mirrored in both test suites; the resume handshake, `busy`, `unknown-device`, `bye forget`, re-pair key rotation, and the bounded ladder are exercised by loopback/JVM tests (`signalingResume.test.ts`, `SignalingClientResumeTest`, `PairingClientTest`, `trustStore.test.ts`). The on-device matrix lives in [features/pairing.md](../features/pairing.md).

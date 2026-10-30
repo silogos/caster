@@ -4,7 +4,6 @@ import android.util.Log
 import com.zerofriction.localcast.signaling.Handshake
 import com.zerofriction.localcast.signaling.HandlerSignalingScheduler
 import com.zerofriction.localcast.signaling.OkHttpSignalingTransport
-import com.zerofriction.localcast.signaling.ByeReasons
 import com.zerofriction.localcast.signaling.SignalingClient
 import com.zerofriction.localcast.signaling.SignalingError
 import com.zerofriction.localcast.signaling.SignalingScheduler
@@ -200,9 +199,13 @@ class PairingClient(
         client.connect(handler)
     }
 
-    /** User-initiated end: sends `bye forget` — the desktop revokes the saved session too (ADR-006). */
+    /**
+     * User-initiated end of the *connection* — a plain `bye` (the saved
+     * session survives, ADR-006; the next Connect is one tap). Deleting the
+     * session itself is Terminate, which lives beyond this QR-shaped machine.
+     */
     fun disconnect() {
-        signaling?.disconnect(ByeReasons.FORGET)
+        signaling?.disconnect()
         eventHandler = null
         signaling = null
         _state.value = State.Idle

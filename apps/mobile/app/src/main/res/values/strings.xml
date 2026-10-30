@@ -207,5 +207,5 @@
     <string name="home_connect">Connect</string>
     <string name="home_connecting">Connecting…</string>
     <string name="home_scan_qr">Scan QR code</string>
-    <string name="home_forget_desktop">Forget this desktop</string>
+    <string name="home_terminate">Terminate</string>
 </resources>

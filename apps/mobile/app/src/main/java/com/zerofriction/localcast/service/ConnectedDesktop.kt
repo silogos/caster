@@ -114,18 +114,33 @@ object ConnectedDesktop {
     }
 
     /**
-     * "Disconnect" (ADR-006): revoke the saved session — `bye forget` on
-     * whichever socket this side still owns, the trust store cleared on both
-     * ends. State lands in None: the next pairing is a fresh QR scan.
+     * "Disconnect" (ADR-006, refined 2026-10-30): close the *connection* only
+     * — `bye user-ended` on whichever socket this side still owns, the trust
+     * store untouched. The desktop stays on its no-input stage and this side
+     * lands in Saved: the next Connect is one tap.
      */
     @Synchronized
     fun disconnect() {
         val client = signaling
         clearSocket()
+        _state.value = store()?.load()?.let { State.Saved(it.name) } ?: State.None
+        client?.disconnect(ByeReasons.USER_ENDED)
+        Log.i(TAG, "disconnected — connection only, saved session kept")
+    }
+
+    /**
+     * "Terminate": delete the *session* — `bye forget` (the desktop revokes
+     * its trust and returns to the QR hero) and the local store cleared.
+     * State lands in None: the next pairing is a fresh QR scan.
+     */
+    @Synchronized
+    fun terminate() {
+        val client = signaling
+        clearSocket()
         store()?.clear()
         _state.value = State.None
         client?.disconnect(ByeReasons.FORGET)
-        Log.i(TAG, "disconnected — saved session revoked")
+        Log.i(TAG, "terminated — saved session revoked on both sides")
     }
 
     /**

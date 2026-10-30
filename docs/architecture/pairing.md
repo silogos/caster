@@ -109,7 +109,7 @@ Mobile                                   Desktop
 
 ### `bye forget` — the only way trust ends
 
-`bye {reason: "forget"}` (reserved value) ends the session **and revokes the persistent trust on both sides**; that is exactly what both Disconnect buttons send. Any other reason (e.g. `user-ended` — a stopped cast) ends the session but keeps the trust: the phone's next Connect is one tap, and the desktop stays on its no-input stage. A **desktop Disconnect while the phone is offline** revokes silently — the phone learns it on its next Connect attempt (`unknown-device`) and falls back to the QR flow.
+`bye {reason: "forget"}` (reserved value) ends the session **and revokes the persistent trust on both sides**; that is what the **desktop's Disconnect** and the **mobile's Terminate** send. Everything else is connection-level: the mobile's **Disconnect** sends a plain `bye user-ended` — the session survives, the phone's next Connect is one tap, and the desktop stays on its no-input stage — as do stopped casts and dead connections. A **revocation while the other side is offline** revokes silently — the phone learns it on its next Connect attempt (`unknown-device`) and falls back to the QR flow.
 
 ### Reconnect rules for a trusted session
 
