@@ -808,10 +808,14 @@ class CastService : Service() {
             ConnectedDesktop.terminate()
         } else {
             // "Disconnect" or a dead session (desktop ended it, connection
-            // lost, system kill): close the socket, but the saved session
-            // stays — Home shows a one-tap Connect instead of forcing a rescan.
+            // lost, system kill): close the socket — bying it when this side
+            // still owns a live one (found live 2026-10-30: the no-cast
+            // Disconnect used the dead-socket path, so no `bye` left the
+            // phone, the desktop stayed "connected", and the next Connect hit
+            // the leaked authorized socket as `busy`) — but the saved session
+            // always stays: Home shows a one-tap Connect, never a rescan.
             currentSignaling?.disconnect()
-            ConnectedDesktop.transitionOffline()
+            ConnectedDesktop.disconnect()
         }
         config = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
