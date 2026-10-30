@@ -32,6 +32,7 @@ import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.signaling.ByeReasons
 import com.zerofriction.localcast.signaling.SignalingClient
+import com.zerofriction.localcast.signaling.VcStatus
 import com.zerofriction.localcast.thermal.ThermalMonitor
 import com.zerofriction.localcast.thermal.ThermalSource
 import com.zerofriction.localcast.thermal.ThermalState
@@ -73,6 +74,26 @@ sealed interface CastState {
  * kind wasn't connected, which kind fell back. Null while the mic is off.
  */
 data class MicRoutingUiState(val effective: MicDeviceSource, val fallbackFrom: MicDeviceSource? = null)
+
+/**
+ * The virtual camera's UI half (ADR-007, proto 2): what the home screen shows
+ * while casting. [VcCapability.Hidden] — the default — hides the card
+ * entirely: no vc-status yet (old desktop, proto 1) or the desktop reported
+ * itself unavailable (non-Windows-x64, DLL missing).
+ */
+enum class VcCapability { Hidden, NeedsSetup, Ready }
+
+data class VirtualCameraUiState(
+    val capability: VcCapability = VcCapability.Hidden,
+    val active: Boolean = false,
+)
+
+/** `vc-status` (webrtc.md proto 2) → the toggle's UI state — pure, JVM-tested. */
+internal fun VcStatus.toUiState(): VirtualCameraUiState = when {
+    !available -> VirtualCameraUiState(VcCapability.Hidden)
+    needsRegistration -> VirtualCameraUiState(VcCapability.NeedsSetup)
+    else -> VirtualCameraUiState(VcCapability.Ready, active = active)
+}
 
 data class AdaptiveUiState(
     val current: QualityLevel? = null,
@@ -123,6 +144,7 @@ class CastService : Service() {
         private const val EXTRA_MIC_DEVICE = "micDevice"
         private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
         private const val ACTION_SET_LIVE_QUALITY = "com.zerofriction.localcast.service.SET_LIVE_QUALITY"
+        private const val ACTION_TOGGLE_VIRTUAL_CAMERA = "com.zerofriction.localcast.service.TOGGLE_VIRTUAL_CAMERA"
         private const val EXTRA_LONG_EDGE = "longEdgePx"
         private const val EXTRA_FPS = "fps"
         private const val EXTRA_BITRATE_MIN = "bitrateMinBps"
@@ -188,6 +210,19 @@ class CastService : Service() {
          */
         private val _encoderImplementation = MutableStateFlow<String?>(null)
         val encoderImplementation: StateFlow<String?> = _encoderImplementation.asStateFlow()
+
+        /**
+         * The virtual camera's UI state (ADR-007): driven by the desktop's
+         * vc-status pushes only — Hidden (no card) until one arrives with
+         * `available: true`. Reset to Hidden whenever the cast ends.
+         */
+        private val _vcState = MutableStateFlow(VirtualCameraUiState())
+        val vcState: StateFlow<VirtualCameraUiState> = _vcState.asStateFlow()
+
+        /** Turn the desktop's virtual camera on/off (no-op without a cast). */
+        fun requestToggleVirtualCamera(context: Context) {
+            context.startService(Intent(context, CastService::class.java).setAction(ACTION_TOGGLE_VIRTUAL_CAMERA))
+        }
 
         fun start(context: Context, args: StartArgs) {
             if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
@@ -336,6 +371,15 @@ class CastService : Service() {
     /** Kept from [StartArgs] for the notification the FGS type updates rebuild. */
     private var desktopName: String = ""
 
+    /**
+     * The virtual camera's event listener on the cast's signaling client
+     * (ADR-007): vc-status pushes update [CastService.vcState]; every (re)auth
+     * re-queries so the toggle stays truthful across reconnects. Removed and
+     * reset whenever the cast ends — the socket returns to ConnectedDesktop
+     * and must not keep touching cast-scoped state.
+     */
+    private var vcListener: ((SignalingClient.Event) -> Unit)? = null
+
     override fun onBind(intent: Intent?) = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -390,6 +434,13 @@ class CastService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_TOGGLE_VIRTUAL_CAMERA -> {
+                // The desktop owns the truth; the phone optimistically flips
+                // the switch and the next vc-status lands the honest state.
+                val currentSignaling = signaling ?: return START_NOT_STICKY
+                if (_vcState.value.active) currentSignaling.sendVcStop() else currentSignaling.sendVcStart()
+                return START_NOT_STICKY
+            }
         }
         val args = pendingStart ?: run {
             // Stopped by the system with nothing pending — nothing to resume.
@@ -439,6 +490,7 @@ class CastService : Service() {
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
         startThermalMonitoring()
+        wireVirtualCamera(args.signaling)
         // The STATUS readout's baseline: the cast starts at the user's
         // settings — published even when auto quality is off.
         _liveQuality.value = QualityLevel(
@@ -558,6 +610,33 @@ class CastService : Service() {
             gameAudio = _gameAudioState.value != GameAudioState.Off,
             mic = mic,
         )
+    }
+
+    /**
+     * The virtual camera's cast-scoped wiring (ADR-007): subscribe to
+     * vc-status pushes (the toggle's only truth) and query at cast start — an
+     * old desktop (proto 1) answers nothing recoverable and the card simply
+     * stays hidden. Every (re)auth re-queries, keeping the toggle truthful
+     * across mid-cast reconnects (the camera itself dies with each drop).
+     */
+    private fun wireVirtualCamera(client: SignalingClient) {
+        val listener: (SignalingClient.Event) -> Unit = { event ->
+            when (event) {
+                is SignalingClient.Event.Authorized -> client.sendVcQuery()
+                is SignalingClient.Event.VcStatusEvent -> _vcState.value = event.status.toUiState()
+                else -> {}
+            }
+        }
+        vcListener = listener
+        client.addListener(listener)
+        client.sendVcQuery()
+    }
+
+    private fun unwireVirtualCamera(client: SignalingClient?) {
+        val listener = vcListener
+        if (listener !== null && client !== null) client.removeListener(listener)
+        vcListener = null
+        _vcState.value = VirtualCameraUiState()
     }
 
     private fun hasRecordAudioPermission(): Boolean =
@@ -795,6 +874,7 @@ class CastService : Service() {
         _micRouting.value = null
         stopThermalMonitoring()
         stopAutoQuality()
+        unwireVirtualCamera(signaling)
         val currentSignaling = signaling
         val currentDesktopName = desktopName
         signaling = null
@@ -841,6 +921,7 @@ class CastService : Service() {
         _micRouting.value = null
         stopThermalMonitoring()
         stopAutoQuality()
+        unwireVirtualCamera(signaling)
         signaling?.let { current ->
             signaling = null
             current.disconnect()

@@ -12,9 +12,13 @@ import javax.crypto.spec.SecretKeySpec
  */
 object Handshake {
 
-    /** Protocol versions this app understands (webrtc.md `proto`). */
+    /**
+     * Protocol versions this app understands (webrtc.md `proto`). Proto 2 adds
+     * the vc-* virtual-camera control messages (ADR-007); an older desktop
+     * negotiates 1 and the phone simply never shows its virtual-camera toggle.
+     */
     const val PROTOCOL_MIN = 1
-    const val PROTOCOL_MAX = 1
+    const val PROTOCOL_MAX = 2
 
     fun computeMac(secret: ByteArray, sessionId: String, nonce: String): String {
         val mac = Mac.getInstance("HmacSHA256")

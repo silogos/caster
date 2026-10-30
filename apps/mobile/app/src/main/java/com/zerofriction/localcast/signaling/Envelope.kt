@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -40,6 +41,10 @@ data class Envelope(
         const val TYPE_SDP_ANSWER = "sdp-answer"
         const val TYPE_ICE = "ice"
         const val TYPE_SESSION_INFO = "session-info"
+        const val TYPE_VC_QUERY = "vc-query"
+        const val TYPE_VC_START = "vc-start"
+        const val TYPE_VC_STOP = "vc-stop"
+        const val TYPE_VC_STATUS = "vc-status"
         const val TYPE_PING = "ping"
         const val TYPE_PONG = "pong"
 
@@ -229,4 +234,28 @@ object Payloads {
      */
     fun iceCandidate(envelope: Envelope): JsonElement? =
         envelope.payload["candidate"]
+
+    // ---- virtual camera control (proto 2, ADR-007) ----
+
+    /** The three m→d vc messages carry empty payloads by spec. */
+    fun vcCommand(): JsonObject = JsonObject(emptyMap())
+
+    /**
+     * The desktop's virtual-camera state (d→m) — the toggle renders exactly
+     * this. Null when any field is missing or not a boolean (malformed frame).
+     */
+    fun vcStatus(envelope: Envelope): VcStatus? {
+        val payload = envelope.payload
+        val available = (payload["available"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val needsRegistration = (payload["needsRegistration"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val active = (payload["active"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        return VcStatus(available, needsRegistration, active)
+    }
 }
+
+/** `vc-status` payload (webrtc.md proto 2) — display-only state from the desktop. */
+data class VcStatus(
+    val available: Boolean,
+    val needsRegistration: Boolean,
+    val active: Boolean,
+)

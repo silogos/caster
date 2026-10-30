@@ -99,6 +99,8 @@ import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.service.MicRoutingUiState
+import com.zerofriction.localcast.service.VcCapability
+import com.zerofriction.localcast.service.VirtualCameraUiState
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.components.AnnuncTone
@@ -145,6 +147,7 @@ fun HomeScreen(
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
     val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
     val liveQuality by CastService.liveQuality.collectAsStateWithLifecycle()
+    val vcState by CastService.vcState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
 
     // No pairing session → nothing to show here: back to the scan screen.
@@ -258,6 +261,8 @@ fun HomeScreen(
         onSelectFps = settingsViewModel::selectFps,
         onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
         onApplyLiveQuality = { level -> CastService.requestSetLiveQuality(context, level) },
+        vcState = vcState,
+        onToggleVirtualCamera = { CastService.requestToggleVirtualCamera(context) },
         onShareScreen = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -307,6 +312,8 @@ fun HomeContent(
     onSelectFps: (Int) -> Unit = {},
     onSetManualBitrateMax: (Int) -> Unit = {},
     onApplyLiveQuality: (QualityLevel) -> Unit = {},
+    vcState: VirtualCameraUiState = VirtualCameraUiState(),
+    onToggleVirtualCamera: () -> Unit = {},
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
@@ -590,6 +597,26 @@ fun HomeContent(
                 CardFoot(text = stringResource(R.string.mic_headphones_hint))
             }
         }
+
+        // ---- Virtual camera (ADR-007): visible only while casting AND the
+        // desktop announced the capability (proto 2 + vc-status available) —
+        // the switch is the phone's control; the desktop shows state only. ----
+        if (casting && vcState.capability != VcCapability.Hidden) {
+            SilkscreenLabel(stringResource(R.string.home_virtual_camera))
+            CastCard {
+                IconListRow(
+                    iconRes = R.drawable.ic_cast,
+                    title = stringResource(R.string.home_virtual_camera),
+                    sub = stringResource(vcSublineRes(vcState)),
+                    right = {
+                        CastSwitch(
+                            checked = vcState.active,
+                            onCheckedChange = { onToggleVirtualCamera() },
+                        )
+                    },
+                )
+            }
+        }
         Spacer(Modifier.height(28.dp))
         }
     }
@@ -662,6 +689,16 @@ internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) 
 }
 
 /** Idle-with-a-pairing reads STANDBY — Home is only shown while connected. */
+/**
+ * The virtual camera row's honest subline (ADR-007): what turning it on does
+ * right now — setup pending, publishing, or plain ready. Pure — JVM-tested.
+ */
+internal fun vcSublineRes(state: VirtualCameraUiState): Int = when {
+    state.active -> R.string.vc_hint_active
+    state.capability == VcCapability.NeedsSetup -> R.string.vc_hint_needs_setup
+    else -> R.string.vc_hint_ready
+}
+
 internal fun annunciatorFor(castState: CastState): ConsoleAnnunciator = when (castState) {
     is CastState.Starting -> ConsoleAnnunciator.STARTING
     is CastState.Casting -> ConsoleAnnunciator.ON_AIR

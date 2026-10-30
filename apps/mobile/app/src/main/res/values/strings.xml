@@ -136,6 +136,14 @@
     <string name="home_game_audio_hint">Off silences the game audio, but its track stays part of the cast.</string>
     <string name="home_mic_hint">Off removes the microphone from the cast and frees it for the game\'s own voice chat.</string>
 
+    <!-- Virtual camera (ADR-007): shown while casting on a desktop that
+         announced the capability; the toggle publishes the cast as a webcam
+         there. The setup subline names the one-time UAC moment plainly. -->
+    <string name="home_virtual_camera">Virtual camera</string>
+    <string name="vc_hint_ready">Show this cast as a camera on the desktop (OBS, Zoom, calls).</string>
+    <string name="vc_hint_needs_setup">Turning it on asks for a one-time administrator setup on the desktop.</string>
+    <string name="vc_hint_active">Publishing as a camera — the desktop\'s preview is off.</string>
+
     <!-- Advanced settings (designs/mobile-app.html) — Settings is Advanced
          ONLY (the profile/share-screen sections live on Home's quality
          console). Encoder-level knobs; defaults reproduce today's cast

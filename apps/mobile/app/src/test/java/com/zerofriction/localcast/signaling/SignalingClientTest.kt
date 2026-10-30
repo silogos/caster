@@ -7,6 +7,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import com.zerofriction.localcast.signaling.VcStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -244,6 +245,58 @@ class SignalingClientTest {
         val info = parseFrame(fake.sentFrames.removeFirstOrNull())
         assertEquals(Envelope.TYPE_SESSION_INFO, info.type)
         assertEquals("balanced", info.payload["profile"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+    }
+
+    @Test
+    fun `emits vc-status events and ignores malformed ones`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 10, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", true)
+                    put("active", false)
+                },
+            ),
+        )
+        // Malformed (missing `active`) — recoverable ignore, not a failure.
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 11, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", false)
+                },
+            ),
+        )
+
+        val vcEvents = events.filterIsInstance<SignalingClient.Event.VcStatusEvent>()
+        assertEquals(1, vcEvents.size)
+        assertEquals(VcStatus(available = true, needsRegistration = true, active = false), vcEvents[0].status)
+    }
+
+    @Test
+    fun `sends vc control messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendVcQuery()
+        client.sendVcStart()
+        client.sendVcStop()
+
+        val query = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_QUERY, query.type)
+        val start = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_START, start.type)
+        val stop = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_STOP, stop.type)
+        // The three m→d vc commands carry empty payloads by spec (webrtc.md).
+        assertEquals(0, query.payload.size)
+        assertEquals(0, start.payload.size)
+        assertEquals(0, stop.payload.size)
     }
 
     private fun parseFrame(raw: String?): Envelope {
