@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)).
+Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)). The **virtual camera** (ADR-007, 2026-10-30) adds the `vc/` modules and a fourth receiver stage — see §Virtual camera.
 
 ## Role
 
@@ -32,16 +32,21 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
 │  SignalingServer: WebSocket (ws), auth, message routing │
 │  NetworkInfo: enumerate LAN IPs (multi-interface aware) │
 │  WindowManager: window lifecycle, powerSaveBlocker      │
+│  vc/: VirtualCameraController (state machine, ADR-007)  │
+│      + softcamLibrary (koffi FFI), registration (UAC)   │
 └───────────────┬─────────────────────────────────────────┘
                 │ Electron IPC (thin, typed events only)
 ┌───────────────▼─────────────────────────────────────────┐
 │  Renderer (Chromium)                                    │
 │  PairingView: QR hero (no session); "No input video"   │
 │             stage (paired, no video — noInputView.ts);  │
-│             friendly session-error (pairingHero.ts)     │
+│             friendly session-error (pairingHero.ts);    │
+│             VC-active placeholder (vcActiveView.ts)     │
 │  ReceiverSession: RTCPeerConnection ×2, ICE/SDP glue    │
 │  VideoView: <video> letterboxes into the user-shaped    │
 │             window (`contain`; Match-to-video on ask)   │
+│  vc/FramePump: MediaStreamTrackProcessor → WebGL BGR    │
+│             canvas → raw IPC frames (ADR-007)           │
 │  AudioMixer: MediaStreamAudioSourceNode → GainNode ×2   │
 │             → AudioContext.destination                  │
 │  CastOverlay: hover-revealed status + settings trigger; │
@@ -73,6 +78,18 @@ The receiver window is the product's "output device" for streamers: OBS Window C
 - **Stay-awake** (Phase14): `powerSaveBlocker` (`prevent-display-sleep`) is started when a cast goes live and stopped when it ends — a 30-minute session must not stall on display sleep or a screensaver firing into the captured feed. Closing the receiver window mid-cast releases the blocker and the session-info window with it.
 
 Remaining: the acceptance itself — the 30+ min OBS Window Capture session on real hardware ([features/obs-streaming.md](../features/obs-streaming.md)).
+
+## Virtual camera (ADR-007, 2026-10-30)
+
+The desktop can re-publish the incoming cast as a **system webcam** (Windows today — softcam DirectShow filter via koffi FFI; the same controller seam will carry the Linux PipeWire and macOS Syphon adapters). Full decision record: [ADR-007](../decisions/ADR-007-virtual-camera.md); protocol: [webrtc.md](webrtc.md) proto 2.
+
+- **Control**: the phone's toggle (`vc-start`/`vc-stop`), the desktop's state (`vc-status {available, needsRegistration, active}`); the desktop displays state only — never a cast setting. Capability is per-platform honest: `available:false` on non-Windows-x64 desktops (or a missing DLL) hides the phone's card entirely.
+- **One-time registration**: the first `vc-start` on an unregistered desktop runs `softcam_installer.exe` elevated (UAC via PowerShell `Start-Process -Verb RunAs`); detection is a registry CLSID query. A declined UAC is an honest retry state, not an error.
+- **Frame path (no preview while active)**: the renderer consumes **decoded frames directly** via `MediaStreamTrackProcessor` (works hidden/minimized — `requestVideoFrameCallback` would not, being presentation-driven), draws each frame into a **WebGL canvas whose shader letterboxes to the camera's fixed dims and byte-packs BGR24 on the GPU**, and ships the raw buffer over IPC (`vc:frame`); the main process does zero per-pixel work — `scSendFrame` receives the exact buffer. Output follows the cast 1:1 (30/60/120 fps — no cap; the phone's quality console remains the only fps control). softcam runs **unpaced** (`framerate 0`) so it never sleeps inside `scSendFrame`.
+- **Camera dims** are fixed at creation from the stream size (`vcDims`: ≤1920×1080, multiples of 4); rotation/quality steps afterwards letterbox inside them.
+- **Receiver stage**: while the camera publishes, the video preview is replaced by the **VC-active placeholder** (`vcActiveView.ts` — the no-input stage's language; mixer still reachable via the hover overlay). Stage map: QR hero → no-input → live video ⇄ VC-active placeholder.
+- **Lifecycle**: the camera is deleted on **every** exit path — `vc-stop`, cast end, mobile gone/bye/waiting, app quit — no DLL leak. Closing the receiver window still ends the app and session as before (tray/windowless mode is a recorded follow-up).
+- Packaging: `softcam.dll` + installer + LICENSE ride as **win-only `extraResources`** (`resources/softcam/`); koffi is `asarUnpack`ed.
 
 ## Lifecycle states
 
