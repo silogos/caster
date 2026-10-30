@@ -92,6 +92,13 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Feature 2026-10b — Persistent Pairing Session (reconnect without QR) ✅
+*(Not a numbered phase: a user-requested feature shipped off-phase like the broadcast-console v3; Phase 19 stays earmarked for #53.)*
+**Scope:** one QR pairing establishes a persistent session on both sides ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)); HKDF-derived trustKey (never transmitted), `hello {resume}` handshake, `bye forget` revocation, phone-side Keystore-sealed store + one-tap **Connect** hero, desktop-side trust store + "No input video" startup stage with Disconnect; QR payload `v` and `proto` stay 1 (documented optional fields only). Trust ends only via Disconnect — everything else (kills, drops, restarts, stopped casts) keeps it.
+**Accept:** desktop vitest + mobile JVM green incl. cross-platform HKDF vectors and loopback resume/revocation/rotation tests; on device: pair → relaunch desktop → phone reconnects with one tap and no QR; Disconnect on either side returns both to the QR flow; notification Stop keeps the session. Commit `feat: persistent pairing session — reconnect without qr`. *(Implemented 2026-10-30: desktop 136/136 + build, mobile JVM 207/207 + `assembleDebug`; the on-device matrix is pending the phone in hand — [features/pairing.md](../features/pairing.md) §Persistent pairing session.)*
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

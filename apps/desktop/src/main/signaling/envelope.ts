@@ -38,6 +38,13 @@ export interface HelloPayload {
    * it and the handshake must still succeed.
    */
   deviceId?: string
+  /**
+   * Optional (pairing.md §Persistent sessions, ADR-006): true when the phone
+   * is resuming a trusted pairing without a QR — the envelope `sid` then
+   * carries the phone's `deviceId` and the auth MAC is keyed by the stored
+   * trustKey instead of a QR session secret. Absent on the QR path.
+   */
+  resume?: boolean
   protoMin: number
   protoMax: number
 }
@@ -54,6 +61,18 @@ export interface AuthOkPayload {
   name: string
   /** Negotiated protocol version. */
   proto: number
+  /**
+   * Optional (pairing.md §Persistent sessions): the desktop's persistent UUID
+   * — the phone keys its saved-desktop entry on it. Absent on older desktops.
+   */
+  desktopId?: string
+  /**
+   * Optional (pairing.md §Persistent sessions): the desktop's current LAN
+   * IPv4 candidates, so the phone refreshes its saved entry on every
+   * successful connection (QR or resume) — it survives desktop IP changes
+   * that happen while the two can still reach each other.
+   */
+  hosts?: string[]
 }
 export interface ErrorPayload {
   code: string

@@ -31,11 +31,16 @@ class SignalingClient(
      * hello's optional `deviceId` (pairing.md, ADR-005): the persistent
      * install-scoped UUID the desktop's device registry keys on — never an
      * auth secret; null omits the field (the unidentified-client shape the
-     * desktop must accept).
+     * desktop must accept). On [resume] it doubles as the envelope `sid`: the
+     * desktop looks the trust entry up by it.
      */
     private val deviceId: String?,
-    /** Expiry `e` from the QR payload, Unix seconds — reconnects stop at it (webrtc.md). */
-    private val expiresAtUnixSeconds: Long,
+    /**
+     * Expiry `e` from the QR payload, Unix seconds — reconnects stop at it
+     * (webrtc.md). Null on the resume path (ADR-006): a trusted session has
+     * no expiry, so reconnects run a bounded ladder instead and then stop.
+     */
+    private val expiresAtUnixSeconds: Long?,
     private val transport: SignalingTransport,
     private val scheduler: SignalingScheduler,
     /** Injected clock (epoch ms) — drives heartbeat silence and expiry checks. */
@@ -43,6 +48,12 @@ class SignalingClient(
     /** Named defaults (webrtc.md); injectable so unit tests use tight values. */
     private val heartbeatIntervalMs: Long = HEARTBEAT_INTERVAL_MS,
     private val heartbeatTimeoutMs: Long = HEARTBEAT_TIMEOUT_MS,
+    /**
+     * Persistent-session resume (pairing.md §Persistent sessions, ADR-006):
+     * hello carries `resume: true`, the envelope `sid` is the phone's
+     * deviceId and [secret] is the stored trustKey — no QR session involved.
+     */
+    private val resume: Boolean = false,
 ) {
     enum class State {
         CONNECTING,
@@ -57,8 +68,22 @@ class SignalingClient(
     sealed interface Event {
         data object Authenticating : Event
 
+        /**
+         * What auth-ok revealed about the desktop (pairing.md §Persistent
+         * sessions, ADR-006) — the phone persists/refreshes its saved entry
+         * from it. [trustKey] is present only on the QR path (both sides
+         * derive it there); a resume re-auth carries the identity fields
+         * without a key.
+         */
+        data class TrustGrant(
+            val desktopId: String?,
+            val hosts: List<String>,
+            val port: Int,
+            val trustKey: ByteArray?,
+        )
+
         /** Fired on every successful auth — the initial one and every re-auth. */
-        data class Authorized(val desktopName: String, val proto: Int) : Event
+        data class Authorized(val desktopName: String, val proto: Int, val trust: TrustGrant?) : Event
 
         /** An authorized connection dropped; a reconnect is scheduled after `delayMs`. */
         data class Reconnecting(val delayMs: Long) : Event
@@ -97,6 +122,9 @@ class SignalingClient(
     private var reconnectAttempt = 0
     private var heartbeatHandle: (() -> Unit)? = null
     private var reconnectHandle: (() -> Unit)? = null
+
+    /** Handshake watchdog — armed while a socket is open but auth-ok hasn't arrived. */
+    private var handshakeTimeoutHandle: (() -> Unit)? = null
     /** Epoch ms of the last inbound frame — heartbeat silence is measured from it. */
     private var lastInboundAtMs = 0L
 
@@ -104,8 +132,9 @@ class SignalingClient(
         override fun onTransportOpen() {
             _state.value = State.AUTHENTICATING
             Log.i(TAG, "connected, sending hello")
+            armHandshakeTimeout()
             emit(Event.Authenticating)
-            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX))
+            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX, resume))
         }
 
         override fun onTransportText(message: String) {
@@ -156,11 +185,13 @@ class SignalingClient(
 
     /**
      * Graceful end: `bye` invalidates the session on the desktop (fresh QR
-     * there). No reconnect is scheduled afterwards.
+     * there). No reconnect is scheduled afterwards. The reserved `forget`
+     * reason (ADR-006) additionally revokes the persistent trust on both
+     * sides — that is what Disconnect sends.
      */
-    fun disconnect() {
+    fun disconnect(reason: String = ByeReasons.USER_ENDED) {
         if (_state.value == State.AUTHORIZED) {
-            sendEnvelope(Envelope.TYPE_BYE, Payloads.bye("user-ended"))
+            sendEnvelope(Envelope.TYPE_BYE, Payloads.bye(reason))
         }
         cancelTimers()
         transport.close(1000, "bye")
@@ -194,6 +225,7 @@ class SignalingClient(
     }
 
     private fun onConnectionLost(why: String) {
+        cancelHandshakeTimeout()
         when (_state.value) {
             State.AUTHORIZED, State.RECONNECTING -> {
                 Log.i(TAG, "authorized connection lost: $why")
@@ -220,7 +252,16 @@ class SignalingClient(
     private fun initiateReconnect() {
         if (_state.value == State.CLOSED || _state.value == State.FAILED) return
         cancelTimers()
-        if (nowMs() / 1000 >= expiresAtUnixSeconds) {
+        if (expiresAtUnixSeconds == null) {
+            // Trusted session (ADR-006): no expiry — reconnects run a bounded
+            // ladder instead, then stop with an unreachable failure (the
+            // desktop may simply be off; the saved entry stays).
+            if (reconnectAttempt >= TRUSTED_RECONNECT_MAX_ATTEMPTS) {
+                Log.i(TAG, "trusted reconnect ladder exhausted — no auto-retry")
+                fail(SignalingError.CONNECT_UNREACHABLE)
+                return
+            }
+        } else if (nowMs() / 1000 >= expiresAtUnixSeconds) {
             Log.i(TAG, "session expired — no auto-retry, user must re-scan")
             fail(SignalingError.EXPIRED)
             return
@@ -258,12 +299,24 @@ class SignalingClient(
                     fail(SignalingError.BAD_AUTH)
                     return
                 }
-                Log.i(TAG, "authorized by desktop")
+                // Persistent session (ADR-006): newer desktops identify
+                // themselves and their LAN candidates — and on the QR path
+                // both sides derive the trustKey locally from this session.
+                val desktopId = Payloads.authOkDesktopId(envelope)
+                val hosts = Payloads.authOkHosts(envelope)
+                val trust = if (desktopId == null && hosts.isEmpty()) {
+                    null
+                } else {
+                    val key = if (!resume && desktopId != null) Handshake.deriveTrustKey(secret, sessionId) else null
+                    Event.TrustGrant(desktopId, hosts, port, key)
+                }
+                Log.i(TAG, if (resume) "authorized by desktop (resumed session)" else "authorized by desktop")
                 hasAuthorizedOnce = true
                 reconnectAttempt = 0
+                cancelHandshakeTimeout()
                 _state.value = State.AUTHORIZED
                 startHeartbeat()
-                emit(Event.Authorized(name, proto))
+                emit(Event.Authorized(name, proto, trust))
             }
             Envelope.TYPE_ERROR -> {
                 val code = Payloads.errorCode(envelope)
@@ -357,7 +410,34 @@ class SignalingClient(
     private fun fail(error: SignalingError) {
         cancelTimers()
         _state.value = State.FAILED
+        // A terminal error ends the connection from this side too — the peer
+        // sends error-then-close, but this side must not *wait* for the close
+        // (found live 2026-10-30: an unknown-device answer left the socket —
+        // and the desktop's handshake timer — hanging for the full window).
+        transport.close(1000, "error-$error")
         emit(Event.Failed(error))
+    }
+
+    /**
+     * The handshake watchdog (found live 2026-10-30): a peer that answers
+     * nothing — or with frames this client cannot parse (an older desktop
+     * sent sid-less handshake errors) — must not leave the UI on
+     * "Connecting…" forever. Mirrors pairing.md's desktop-side 10 s rule.
+     */
+    private fun armHandshakeTimeout() {
+        cancelHandshakeTimeout()
+        handshakeTimeoutHandle = scheduler.postDelayed(HANDSHAKE_TIMEOUT_MS) {
+            handshakeTimeoutHandle = null
+            if (_state.value != State.AUTHORIZED) {
+                Log.w(TAG, "handshake did not complete in ${HANDSHAKE_TIMEOUT_MS} ms — giving up")
+                fail(SignalingError.BAD_AUTH)
+            }
+        }
+    }
+
+    private fun cancelHandshakeTimeout() {
+        handshakeTimeoutHandle?.invoke()
+        handshakeTimeoutHandle = null
     }
 
     private fun cancelTimers() {
@@ -365,6 +445,7 @@ class SignalingClient(
         heartbeatHandle = null
         reconnectHandle?.invoke()
         reconnectHandle = null
+        cancelHandshakeTimeout()
     }
 
     companion object {
@@ -377,8 +458,18 @@ class SignalingClient(
         /** webrtc.md: a peer silent > 15 s is considered gone. */
         const val HEARTBEAT_TIMEOUT_MS = 15000L
 
+        /** pairing.md: the full handshake must complete within 10 s — the phone enforces its own half. */
+        const val HANDSHAKE_TIMEOUT_MS = 10_000L
+
         /** webrtc.md: 1 s → 2 s → 5 s → 10 s → 30 s cap. */
         val RECONNECT_BACKOFF_MS = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
+
+        /**
+         * Trusted reconnects (no expiry, ADR-006) stop after this many ladder
+         * steps (10 × backoff ≈ a 3.3-minute window) — the desktop may just be
+         * off; the user retries with one tap or rescans.
+         */
+        const val TRUSTED_RECONNECT_MAX_ATTEMPTS = 10
     }
 }
 
@@ -389,6 +480,9 @@ enum class SignalingError {
     BAD_AUTH,
     BUSY,
     BAD_VERSION,
+
+    /** The desktop no longer trusts this phone (ADR-006) — forget the saved entry and re-scan. */
+    UNKNOWN_DEVICE,
     ;
 
     companion object {
@@ -398,6 +492,7 @@ enum class SignalingError {
             ErrorCodes.BAD_AUTH -> BAD_AUTH
             ErrorCodes.BUSY -> BUSY
             ErrorCodes.BAD_VERSION -> BAD_VERSION
+            ErrorCodes.UNKNOWN_DEVICE -> UNKNOWN_DEVICE
             else -> BAD_AUTH // unrecognized terminal error: safest generic pairing failure
         }
     }

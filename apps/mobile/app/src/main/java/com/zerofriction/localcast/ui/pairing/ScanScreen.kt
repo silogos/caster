@@ -81,6 +81,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.pairing.DeviceIdentity
+import com.zerofriction.localcast.pairing.KeystoreTrustVault
+import com.zerofriction.localcast.pairing.SavedDesktops
+import com.zerofriction.localcast.pairing.applyGrant
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
 import com.zerofriction.localcast.pairing.defaultSignalingScheduler
@@ -130,7 +133,8 @@ fun ScanScreen(
 
 /**
  * The scan VM's pairing machine needs the app context for the persistent
- * device identity (ADR-005, `hello.deviceId`) — injected here like the
+ * device identity (ADR-005, `hello.deviceId`) and — since ADR-006 — for the
+ * saved-desktop store its grants are written into. Injected here like the
  * settings screen injects its store; the VM itself stays JVM-testable.
  */
 @Composable
@@ -140,11 +144,14 @@ private fun scanViewModelFactory(): ViewModelProvider.Factory {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val appContext = context.applicationContext
+                val store = SavedDesktops(appContext, KeystoreTrustVault())
                 val pairing = PairingClient(
                     ::defaultTransportFactory,
                     ::defaultSignalingScheduler,
                     ::defaultUserAgent,
-                    deviceIdProvider = { DeviceIdentity.id(context.applicationContext) },
+                    deviceIdProvider = { DeviceIdentity.id(appContext) },
+                    onDesktopIdentity = { name, grant -> store.applyGrant(grant, name) },
                 )
                 return ScanViewModel(pairing) as T
             }
@@ -612,6 +619,7 @@ private fun pairingErrorMessage(error: PairingError): String = when (error) {
     PairingError.BAD_AUTH -> stringResource(R.string.pairing_error_bad_auth)
     PairingError.BUSY -> stringResource(R.string.pairing_error_busy)
     PairingError.BAD_VERSION -> stringResource(R.string.pairing_error_bad_version)
+    PairingError.DESKTOP_FORGOT -> stringResource(R.string.pairing_error_desktop_forgotten)
 }
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 640)

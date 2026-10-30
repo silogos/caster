@@ -24,6 +24,7 @@
 | `architecture/` | How the system is built: boundaries, protocols, constraints, limitations |
 | `features/` | Feature-level behavior docs, added as features land (Phase 3+) |
 | `decisions/` | Architecture Decision Records (ADRs) — *why* choices were made |
+| `proposals/` | Draft feature directions under discussion — **not decided, not a phase**; accepted proposals become ADRs + roadmap phases |
 | `development/` | Setup, per-app dev guides, roadmap, risk register, release process |
 
 ## Rules
@@ -35,4 +36,4 @@
 
 ## Current documentation status
 
-Phase 0 (architecture) is complete: the documents above describe the **planned** system. The applications themselves are not implemented yet (see roadmap). Docs describing implemented behavior (`development/mobile.md`, `development/desktop.md`, `features/*`) will be added as phases complete.
+Phases 0–14 are implemented (14 awaiting on-device review); Phases 15–18 are in progress or remaining; the persistent pairing session (reconnect without QR, [ADR-006](decisions/ADR-006-persistent-trust-sessions.md)) shipped 2026-10-30 as an unnumbered feature and awaits on-device review (see roadmap). `architecture/` describes the planned-and-evolving system; `features/*` and `development/*` describe implemented behavior and are added as phases complete.

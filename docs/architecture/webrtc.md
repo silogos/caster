@@ -42,17 +42,17 @@ Until `auth-ok` succeeds, the desktop accepts **only** `hello`, `auth` — anyth
 
 | Type | Direction | Payload | Purpose |
 |---|---|---|---|
-| `hello` | m→d | `{ua, deviceId?, protoMin, protoMax}` | Start auth; `ua` = app/platform string for logs; `deviceId` = the mobile's persistent install-scoped UUID for the desktop's device registry ([pairing.md](pairing.md), [ADR-005](../decisions/ADR-005-device-identity-and-registry.md)) — optional (older clients omit it), never an auth secret. |
+| `hello` | m→d | `{ua, deviceId?, resume?, protoMin, protoMax}` | Start auth; `ua` = app/platform string for logs; `deviceId` = the mobile's persistent install-scoped UUID ([pairing.md](pairing.md), [ADR-005](../decisions/ADR-005-device-identity-and-registry.md)) — optional (older clients omit it), never an auth secret. `resume: true` (optional, [ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)): reconnect without a QR — the envelope `sid` carries the phone's `deviceId` and the auth MAC is keyed by the stored trustKey ([pairing.md](pairing.md) §Persistent sessions). |
 | `challenge` | d→m | `{n}` | 16-byte base64url nonce. |
 | `auth` | m→d | `{mac}` | HMAC-SHA256(k, s‖n), base64url ([pairing.md](pairing.md)). |
-| `auth-ok` | d→m | `{name, proto}` | Desktop name (for "Connected to *MacBook*") and negotiated protocol version. |
-| `error` | both | `{code, msg?}` | Terminal (`bad-version`, `unknown-session`, `expired`, `bad-auth`, `busy`) or recoverable (`bad-message`). Terminal errors close the socket after send. |
+| `auth-ok` | d→m | `{name, proto, desktopId?, hosts?}` | Desktop name (for "Connected to *MacBook*") and negotiated protocol version. Optional since ADR-006: `desktopId` = the desktop's persistent UUID (the phone keys its saved-desktop entry on it) and `hosts` = the desktop's current LAN candidates, so the phone refreshes its entry on every successful connection. |
+| `error` | both | `{code, msg?}` | Terminal (`bad-version`, `unknown-session`, `expired`, `bad-auth`, `busy`, `unknown-device`) or recoverable (`bad-message`). Terminal errors close the socket after send. `unknown-device` (ADR-006): a resume hello from a phone this desktop no longer trusts. |
 | `sdp-offer` | m→d | `{pc, sdp}` | SDP offer. `pc` ∈ `"media"` \| `"mic"`. |
 | `sdp-answer` | d→m | `{pc, sdp}` | SDP answer. |
 | `ice` | both | `{pc, candidate}` | Trickled candidate; `candidate: null` marks end-of-gathering for that `pc`. The candidate value is the platform candidate object serialized as JSON (RTCIceCandidateInit-shaped on the desktop, the libwebrtc equivalent on mobile); signaling treats it as **opaque** and relays it verbatim — the concrete shape is exercised from Phase 5 on. |
 | `session-info` | m→d | `{profile, width, height, fps, gameAudio, mic}` | Display-only summary for the desktop status line. **Not** configuration — the desktop never acts on it beyond showing text. |
 | `ping` / `pong` | both | `{t}` | App-level heartbeat every 5 s; a peer silent > 15 s is considered gone. |
-| `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. |
+| `bye` | both | `{reason}` | Graceful end; invalidates the session; desktop returns to fresh QR. The reserved reason `forget` (ADR-006) additionally revokes the persistent trust on both sides — what the desktop's Disconnect and the mobile's Terminate send; any other reason (the mobile's Disconnect, stopped casts) keeps it (the phone's next Connect is one tap, the desktop stays on its no-input stage). |
 
 ## Media transport
 
@@ -103,7 +103,8 @@ States (both sides): pairing → connecting → negotiating → connecting(ICE) 
 | ICE `disconnected` | Wait up to 10 s for recovery (Wi-Fi blips); then ICE restart on the affected PC. |
 | WebSocket drop while session valid | Mobile retries with backoff 1s → 2s → 5s → 10s → 30s cap, while `e` not passed; PC objects are rebuilt on re-auth. Desktop keeps the session and shows "Waiting for mobile…". |
 | Heartbeat timeout (>15 s) | Treated as WebSocket drop (above). |
-| Session expired | No auto-retry; mobile prompts re-scan; desktop regenerates QR. |
+| Session expired | No auto-retry; mobile prompts re-scan; desktop regenerates QR. **Not applicable to a trusted session** (ADR-006): its reconnects are bounded by attempt count (~3 min), not expiry, and end in `connect-unreachable` with the saved entry kept. |
+| Trusted session's ladder exhausted | Mobile shows the unreachable failure + "Scan QR code"/"Forget this desktop" escapes; the saved entry stays (the desktop may be off). |
 | `bye` from either side | Immediate, clean teardown of PCs + socket; desktop to fresh QR. |
 | Mobile app killed / service stopped | OS-level socket close → desktop heartbeat timeout path. |
 

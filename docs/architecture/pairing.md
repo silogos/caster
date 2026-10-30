@@ -72,6 +72,54 @@ Mobile                                   Desktop
 - Failed `auth` closes the connection; repeated failures from one address are rate-limited (1 s, doubling, capped 30 s).
 - **`deviceId` (optional, defined 2026-10-10 — additive per the versioning rules below, `proto` stays 1):** a random UUID the mobile generates once per install and never changes. It exists so the desktop can keep an `adb devices`-style registry of the devices it has seen (name + state + last seen) — it is **not** an authentication secret (auth remains the HMAC above, ADR-002) and carries no user identity beyond what the install itself chose. Absent field = an older client; the desktop must accept the handshake and treat the device as unidentified. Validation: when present it must be a non-empty string (≤ 128 chars) — a malformed one is `bad-message`. Rationale and rejected alternatives: [ADR-005](../decisions/ADR-005-device-identity-and-registry.md).
 
+## Persistent sessions (trusted reconnect without a QR)
+
+Since 2026-10-30 ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)): one QR pairing establishes a **persistent session** between this phone and this desktop. Both sides remember it — the phone reconnects with one tap (`hello {resume}`) and no camera — until either side presses **Disconnect** (`bye` with the reserved reason `forget`). Everything else (app kills, Wi-Fi drops, restarts, a stopped cast) keeps it. The QR payload and `proto` stay at `1`; everything below is additive-optional per the versioning rules.
+
+### Trust establishment — derived, never transmitted
+
+After a successful QR handshake, **both sides locally derive** the resume key from that session's own material:
+
+```text
+trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "zfc-trust-v1", L = 32)
+```
+
+No protocol message carries it; a passive sniffer sees only HMAC outputs and cannot compute the key (the same property that protects the handshake itself, ADR-002). A **re-pair rotates the key** (fresh `k` per QR session) — regenerating the QR and re-pairing evicts any trust derived from a photographed older code.
+
+- **Desktop** persists `{deviceId, name, trustKey, createdAt, lastConnectedAt}` (single entry — the last phone that paired while nothing was trusted) in `trust.json` under the Electron userData dir, plus its own persistent `desktopId` UUID.
+- **Phone** persists `{desktopId, name, hosts, port, trustKey}` (single entry) in SharedPreferences, the key sealed with an Android Keystore AES-GCM vault (`pairing/TrustVault`) — the app allows OS backups, and the sealed document alone cannot yield the key.
+- Both stores degrade to empty on anything unreadable (logged) — the honest fallback is one QR re-scan, never a session on guessed values.
+
+### Resume handshake
+
+The phone reconnects to `ws://<host>:<port>/zfc/v1` using its saved hosts/port (no QR):
+
+```text
+Mobile                                   Desktop
+  │ ── hello {ua, deviceId, resume: true, proto…} ──▶ │   (envelope sid = the phone's deviceId)
+  │ ◀─ challenge {n} ─────────────────────────────── │   or error: unknown-device
+  │ ── auth {mac = HMAC(trustKey, sid‖n)} ─────────▶ │
+  │ ◀─ auth-ok {name, proto, desktopId?, h?} ──────── │
+```
+
+- `hello.resume: true` + `sid = deviceId` selects the trust store instead of the QR session; the MAC is the same construction with the trustKey as key. An older desktop (no resume support) answers `unknown-session` for the unknown sid — the phone falls back to the QR flow automatically.
+- **`unknown-device`** (new error code, terminal): the desktop no longer trusts this phone (Disconnected there) — the phone shows the failure ("This desktop no longer remembers this phone…") with the two escapes, **Scan QR code** and **Terminate**; the saved entry stays until the user picks (retrying Connect is allowed and harmless).
+- A successful resume closes the bypassed QR session and stages a fresh pending one underneath — a photographed old QR can never piggyback on a trusted reconnect.
+- **`auth-ok` gains `desktopId`** (the desktop's persistent UUID — the phone keys its saved entry on it) **and `h`** (the desktop's current LAN candidates) so the phone refreshes its entry on *every* successful connection, QR or resume.
+
+### `bye forget` — the only way trust ends
+
+`bye {reason: "forget"}` (reserved value) ends the session **and revokes the persistent trust on both sides**; that is what the **desktop's Disconnect** and the **mobile's Terminate** send. Everything else is connection-level: the mobile's **Disconnect** sends a plain `bye user-ended` — the session survives, the phone's next Connect is one tap, and the desktop stays on its no-input stage — as do stopped casts and dead connections. A **revocation while the other side is offline** revokes silently — the phone learns it on its next Connect attempt (`unknown-device`) and falls back to the QR flow.
+
+### Reconnect rules for a trusted session
+
+The phone's reconnects are **not bounded by the QR's expiry** (there is none to read). They run the same backoff ladder with a bounded attempt count (`TRUSTED_RECONNECT_MAX_ATTEMPTS`, 10 steps ≈ 3 min), then fail `connect-unreachable` with the saved entry **kept** (the desktop may simply be off) — retry with one tap, or scan a QR / forget from the failure card.
+
+### Threat model, honestly revised
+
+The ADR-002 row "someone photographing the desktop's QR" changes: physical presence at the desktop used to buy ≤ 10 minutes of authority; with persistent sessions it buys **trust until revoked** (Disconnect or a re-pair). This is the accepted WhatsApp-like trade the feature exists for ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)); the desktop's no-input stage carries the Disconnect that revokes, and re-pairing rotates the key.
+
+
 ### Why challenge–response (and the honest threat model)
 
 Plain `ws://` on LAN is sniffable. If the phone just *sent* `k`, any passive listener could later impersonate the phone. With HMAC challenge–response, the secret never crosses the wire, and each handshake needs a fresh nonce — replaying a captured `mac` fails.
@@ -95,6 +143,7 @@ Errors shown to users stay non-technical (spec §11); codes are for logs.
 | HMAC rejected | `bad-auth` | "Couldn't pair with this desktop. Scan the QR code shown on the desktop." |
 | Another phone already paired | `busy` | "The desktop is already connected to another device." |
 | QR of wrong app | parse `t`/`v` mismatch | "This isn't a Zero-Friction Cast QR code." |
+| Reconnect, but the desktop Disconnected first | `unknown-device` | "This desktop no longer remembers this phone. Scan the QR code to pair again." — with Scan QR / Terminate escapes; nothing is dropped until the user chooses |
 
 ## Versioning rules
 

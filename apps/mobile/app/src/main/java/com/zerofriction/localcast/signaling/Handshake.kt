@@ -27,4 +27,45 @@ object Handshake {
     /** Decode the base64url pairing secret from the QR payload. */
     fun decodeSecret(secretBase64Url: String): ByteArray =
         Base64.getUrlDecoder().decode(secretBase64Url)
+
+    // ---- Persistent session (pairing.md §Persistent sessions, ADR-006) ----
+
+    /** HKDF info string — must match the desktop's TRUST_INFO byte-for-byte. */
+    const val TRUST_INFO = "zfc-trust-v1"
+
+    /** HKDF output length: a 256-bit resume key. */
+    const val TRUST_KEY_BYTES = 32
+
+    /**
+     * trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "zfc-trust-v1").
+     * Both endpoints derive this locally after a successful QR handshake — it
+     * is never transmitted, so a passive sniffer cannot compute it. Verified
+     * byte-for-byte against the desktop's node:crypto hkdfSync by mirrored
+     * test vectors. Re-pairing (fresh k) rotates the key.
+     */
+    fun deriveTrustKey(secret: ByteArray, sessionId: String): ByteArray {
+        // RFC 5869 extract: PRK = HMAC-SHA256(salt, IKM)
+        val extract = Mac.getInstance("HmacSHA256")
+        extract.init(SecretKeySpec(sessionId.toByteArray(Charsets.US_ASCII), "HmacSHA256"))
+        val prk = extract.doFinal(secret)
+
+        // RFC 5869 expand: T(i) = HMAC-SHA256(PRK, T(i-1) || info || i)
+        val expand = Mac.getInstance("HmacSHA256")
+        expand.init(SecretKeySpec(prk, "HmacSHA256"))
+        val info = TRUST_INFO.toByteArray(Charsets.US_ASCII)
+        var t = ByteArray(0)
+        val okm = ArrayList<Byte>(TRUST_KEY_BYTES)
+        var counter = 1
+        while (okm.size < TRUST_KEY_BYTES) {
+            expand.update(t)
+            expand.update(info)
+            expand.update(counter.toByte())
+            t = expand.doFinal()
+            for (b in t) {
+                if (okm.size < TRUST_KEY_BYTES) okm.add(b)
+            }
+            counter++
+        }
+        return okm.toByteArray()
+    }
 }

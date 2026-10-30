@@ -70,6 +70,18 @@ export type MobileStateEvent =
   | { state: 'session-info'; info: CastSessionInfo }
 
 /**
+ * Display-only view of the trusted phone (ADR-006) — the renderer
+ * decides its startup stage on it (no-input receiver vs QR hero). Deliberately
+ * carries no online/offline claim: it states what the trust *grants*, never
+ * a second source of truth about the phone's state.
+ */
+export interface TrustedDeviceView {
+  name: string
+  /** Unix seconds of the last successful (re)connection. */
+  lastConnectedAt: number
+}
+
+/**
  * Display-only summary pushed by the mobile's `session-info` message
  * (docs/architecture/webrtc.md) — shown on the status line, never acted on.
  */

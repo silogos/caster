@@ -1,5 +1,6 @@
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { PairingServer } from '../pairing/pairingServer'
+import type { TrustStore, TrustedDevice } from '../pairing/trustStore'
 import {
   encodeEnvelope,
   isPcId,
@@ -7,13 +8,14 @@ import {
   type Envelope,
   type EnvelopePayload,
   type EnvelopeType,
+  type AuthOkPayload,
   type HelloPayload,
   type IcePayload,
   type PcId,
   type SessionInfoPayload,
   type SdpPayload
 } from './envelope'
-import { computeMac, createNonce, negotiateProtocol, verifyMac } from './handshake'
+import { computeMac, createNonce, deriveTrustKey, negotiateProtocol, verifyMac } from './handshake'
 import { deviceNameFromUa } from './ua'
 import { logger } from '../log'
 
@@ -46,8 +48,18 @@ export const ERROR_CODES = {
   expired: 'expired',
   badAuth: 'bad-auth',
   busy: 'busy',
-  badMessage: 'bad-message'
+  badMessage: 'bad-message',
+  /** Resume with a deviceId this desktop no longer trusts (pairing.md §Persistent sessions). */
+  unknownDevice: 'unknown-device'
 } as const
+
+/**
+ * Reserved `bye` reason (pairing.md §Persistent sessions): end the cast AND
+ * revoke the persistent trust on both sides — what both Disconnect buttons
+ * send. Every other reason (e.g. `user-ended`) ends the session but keeps
+ * the trust, so the phone reconnects with one tap.
+ */
+export const BYE_FORGET = 'forget'
 
 /** pairing.md: `deviceId` is an install-scoped UUID — anything longer is malformed. */
 const MAX_DEVICE_ID_LENGTH = 128
@@ -66,12 +78,23 @@ export interface IceCandidateEvent {
 export interface SignalingServerOptions {
   /** Shown in auth-ok; the mobile displays "Connected to <name>". */
   desktopName: string
+  /**
+   * Persistent trust for the paired phone (pairing.md §Persistent sessions):
+   * written on the first QR pairing with a `deviceId`, consulted for resume
+   * hellos, revoked by `bye forget` / the desktop Disconnect. Optional —
+   * without it the server behaves exactly as before (QR pairing only).
+   */
+  trustStore?: TrustStore
+  /** The desktop's persistent UUID — sent as `auth-ok.desktopId` when present. */
+  desktopId?: string
+  /** Current LAN IPv4 candidates for `auth-ok.hosts` — injectable for tests. */
+  currentHosts?: () => string[]
   /** Injected clock for tests. */
   now?: () => number
   /** Heartbeat cadence/timeout — injectable so tests use tight values (webrtc.md). */
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
-  onMobileConnected?: (event: { sid: string; ua: string; name: string; deviceId?: string; remote: string }) => void
+  onMobileConnected?: (event: { sid: string; ua: string; name: string; deviceId?: string; remote: string; resume: boolean }) => void
   onMobileDisconnected?: (event: { sid: string; deviceId?: string; remote: string }) => void
   /** `bye` from either side — the coordinator invalidates the session and shows a fresh QR. */
   onBye?: (reason?: string) => void
@@ -90,6 +113,12 @@ interface ConnectionState {
   sid: string | null
   nonce: string | null
   hello: HelloPayload | null
+  /**
+   * The trusted phone this connection is resuming (pairing.md §Persistent
+   * sessions), or null on the QR path — decides which key verifies `auth`
+   * and skips the QR session bookkeeping.
+   */
+  resumeDevice: TrustedDevice | null
   /** Server-side outbound seq counter (webrtc.md: per-sender, from 1). */
   sendSeq: number
   lastReceivedSeq: number
@@ -102,6 +131,9 @@ interface ConnectionState {
 export class SignalingServer {
   private pairing: PairingServer | null = null
   private readonly desktopName: string
+  private readonly trustStore: TrustStore | undefined
+  private readonly desktopId: string | undefined
+  private readonly currentHosts: (() => string[]) | undefined
   private readonly now: () => number
   private readonly heartbeatIntervalMs: number
   private readonly heartbeatTimeoutMs: number
@@ -115,6 +147,9 @@ export class SignalingServer {
 
   constructor(options: SignalingServerOptions) {
     this.desktopName = options.desktopName
+    this.trustStore = options.trustStore
+    this.desktopId = options.desktopId
+    this.currentHosts = options.currentHosts
     this.now = options.now ?? Date.now
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS
@@ -217,9 +252,11 @@ export class SignalingServer {
   /**
    * Desktop-initiated graceful end: `bye` invalidates the session immediately
    * (webrtc.md), so this sends bye, closes the socket, and fires onBye for the
-   * coordinator to show a fresh QR.
+   * coordinator to show a fresh QR. The reserved `forget` reason (the desktop
+   * Disconnect button) additionally revokes the persistent trust first.
    */
   sendBye(reason: string): void {
+    if (reason === BYE_FORGET) this.trustStore?.clear()
     this.withAuthorized((conn) => {
       logger.info(LOG_SCOPE, `bye to ${conn.remote}`, { reason })
       this.send(conn, 'bye', { reason })
@@ -261,6 +298,7 @@ export class SignalingServer {
       sid: null,
       nonce: null,
       hello: null,
+      resumeDevice: null,
       sendSeq: 0,
       lastReceivedSeq: 0,
       handshakeTimer: setTimeout(() => {
@@ -357,8 +395,58 @@ export class SignalingServer {
   }
 
   private onHello(conn: ConnectionState, envelope: Envelope): void {
+    // Payload shape first — both the QR and the resume path need a well-formed
+    // hello before anything is revealed about sessions or trusted devices.
+    const hello = envelope.payload as HelloPayload
+    if (typeof hello.ua !== 'string' || typeof hello.protoMin !== 'number' || typeof hello.protoMax !== 'number') {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello payload')
+      conn.socket.close(1002, ERROR_CODES.badMessage)
+      return
+    }
+    // deviceId is hello's optional field (pairing.md, ADR-005): absent
+    // = unidentified older client — accepted; present but malformed = the
+    // same bad-message treatment as any other malformed payload.
+    if (hello.deviceId !== undefined && (typeof hello.deviceId !== 'string' || hello.deviceId.length === 0 || hello.deviceId.length > MAX_DEVICE_ID_LENGTH)) {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello deviceId')
+      conn.socket.close(1002, ERROR_CODES.badMessage)
+      return
+    }
+    if (hello.resume !== undefined && typeof hello.resume !== 'boolean') {
+      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello resume')
+      conn.socket.close(1002, ERROR_CODES.badMessage)
+      return
+    }
+    // The envelope's sid is known the moment hello validates — own it now so
+    // every reply below (challenge *or* any handshake failure) carries it.
+    // Frames with an empty sid are malformed on the mobile side, and replies
+    // used to go out sid-less exactly on the failure paths (found live
+    // 2026-10-30: the phone ignored its own unknown-device error and sat on
+    // "Connecting…" until the desktop's handshake timeout closed the socket).
+    conn.sid = envelope.sid
+
     const session = this.store.lookup(envelope.sid)
     if (session === null) {
+      // Not the live QR session: either a stale QR (unknown-session, as
+      // before) or a trusted phone resuming without one (pairing.md
+      // §Persistent sessions — the envelope sid then IS the phone deviceId).
+      // A server wired without a trust store never answers resume — it stays
+      // on the plain QR behavior (older desktops answer unknown-session).
+      if (hello.resume === true && this.trustStore !== undefined) {
+        const trust = this.trustStore.get()
+        if (trust === null || trust.deviceId !== envelope.sid) {
+          logger.info(LOG_SCOPE, `resume from ${conn.remote}: no trusted device matches`)
+          this.failHandshake(conn, ERROR_CODES.unknownDevice)
+          return
+        }
+        conn.resumeDevice = trust
+        conn.sid = envelope.sid
+        conn.hello = hello
+        conn.nonce = createNonce()
+        conn.phase = 'awaiting-auth'
+        logger.info(LOG_SCOPE, `resume hello from ${conn.remote}`, { ua: hello.ua })
+        this.send(conn, 'challenge', { n: conn.nonce })
+        return
+      }
       logger.info(LOG_SCOPE, `hello from ${conn.remote}: unknown session`)
       this.failHandshake(conn, ERROR_CODES.unknownSession)
       return
@@ -366,20 +454,6 @@ export class SignalingServer {
     if (this.store.isExpired(session)) {
       logger.info(LOG_SCOPE, `hello from ${conn.remote}: session expired`)
       this.failHandshake(conn, ERROR_CODES.expired)
-      return
-    }
-    const hello = envelope.payload as HelloPayload
-    if (typeof hello.ua !== 'string' || typeof hello.protoMin !== 'number' || typeof hello.protoMax !== 'number') {
-      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello payload')
-      conn.socket.close(1002, ERROR_CODES.badMessage)
-      return
-    }
-    // deviceId is the registry's optional field (pairing.md, ADR-005): absent
-    // = unidentified older client — accepted; present but malformed = the
-    // same bad-message treatment as any other malformed payload.
-    if (hello.deviceId !== undefined && (typeof hello.deviceId !== 'string' || hello.deviceId.length === 0 || hello.deviceId.length > MAX_DEVICE_ID_LENGTH)) {
-      this.sendError(conn, ERROR_CODES.badMessage, 'malformed hello deviceId')
-      conn.socket.close(1002, ERROR_CODES.badMessage)
       return
     }
     conn.sid = envelope.sid
@@ -392,18 +466,22 @@ export class SignalingServer {
 
   private onAuth(conn: ConnectionState, envelope: Envelope): void {
     const sid = conn.sid ?? ''
-    const session = this.store.lookup(sid)
-    if (session === null || conn.nonce === null || conn.hello === null) {
+    if (conn.nonce === null || conn.hello === null) {
       this.failHandshake(conn, ERROR_CODES.unknownSession)
       return
     }
-    if (this.store.isExpired(session)) {
-      this.failHandshake(conn, ERROR_CODES.expired)
+    // Which key verifies the mac: the stored trustKey on the resume path, the
+    // QR session secret otherwise (pairing.md §Authentication / §Persistent sessions).
+    const resume = conn.resumeDevice
+    const session = resume === null ? this.store.lookup(sid) : null
+    if (resume === null && (session === null || this.store.isExpired(session))) {
+      this.failHandshake(conn, session === null ? ERROR_CODES.unknownSession : ERROR_CODES.expired)
       return
     }
+    const authKey = resume !== null ? resume.key : session!.secret
 
     const mac = (envelope.payload as { mac?: unknown }).mac
-    const expected = computeMac(session.secret, sid, conn.nonce)
+    const expected = computeMac(authKey, sid, conn.nonce)
     if (typeof mac !== 'string' || !verifyMac(expected, mac)) {
       this.recordAuthFailure(conn)
       logger.warn(LOG_SCOPE, `auth rejected from ${conn.remote}`)
@@ -418,8 +496,11 @@ export class SignalingServer {
       this.failHandshake(conn, ERROR_CODES.badVersion)
       return
     }
-    const result = this.store.authorize(sid, conn.socketId)
-    if (result === 'busy') {
+    // One authorized connection at a time — across QR sessions *and* the
+    // resume path (which bypasses the session bookkeeping entirely).
+    const alreadyAuthorized = this.hasAuthorizedConnection()
+    const result = resume !== null ? 'authorized' : this.store.authorize(sid, conn.socketId)
+    if (alreadyAuthorized || result === 'busy') {
       logger.warn(LOG_SCOPE, `second device attempted to pair (${conn.remote})`)
       this.failHandshake(conn, ERROR_CODES.busy)
       return
@@ -428,15 +509,43 @@ export class SignalingServer {
     conn.phase = 'authorized'
     this.clearHandshakeTimer(conn)
     this.startHeartbeat(conn)
-    this.send(conn, 'auth-ok', { name: this.desktopName, proto })
+    const authOk: AuthOkPayload = { name: this.desktopName, proto }
+    if (this.desktopId !== undefined) {
+      authOk.desktopId = this.desktopId
+    }
+    const hosts = this.currentHosts?.()
+    if (hosts !== undefined && hosts.length > 0) {
+      authOk.hosts = hosts
+    }
+    this.send(conn, 'auth-ok', authOk)
     const name = deviceNameFromUa(conn.hello.ua)
-    logger.info(LOG_SCOPE, `mobile authorized`, { name })
+
+    if (resume !== null) {
+      // A resume bypasses the QR session: stamp the trust and close the QR
+      // session it never used — a fresh pending one is staged underneath so a
+      // photographed old QR cannot piggyback while the trusted phone casts.
+      this.trustStore?.touch()
+      this.store.invalidate()
+      void this.pairing
+        ?.createSession()
+        .catch((error) => logger.warn(LOG_SCOPE, 'staging a fresh QR session after resume failed', { error: String(error) }))
+      logger.info(LOG_SCOPE, `mobile re-authorized via saved session`, { name })
+    } else if (conn.hello.deviceId !== undefined && this.trustStore !== undefined && session !== null) {
+      // First trust grant (or a re-pair rotating the key): both sides derive
+      // the same trustKey from this QR session's secret (ADR-006).
+      const key = deriveTrustKey(session.secret, sid)
+      this.trustStore.save(conn.hello.deviceId, name, key)
+      logger.info(LOG_SCOPE, `mobile authorized — persistent session saved`, { name })
+    } else {
+      logger.info(LOG_SCOPE, `mobile authorized`, { name })
+    }
     this.options.onMobileConnected?.({
       sid,
       ua: conn.hello.ua,
       name,
       deviceId: conn.hello.deviceId,
       remote: conn.remote,
+      resume: resume !== null
     })
   }
 
@@ -503,6 +612,9 @@ export class SignalingServer {
 
   private onBye(conn: ConnectionState, envelope: Envelope): void {
     const reason = (envelope.payload as { reason?: unknown }).reason
+    // `bye forget` (the phone's Disconnect) revokes the persistent trust —
+    // cleared *before* onBye so the coordinator already sees the empty store.
+    if (reason === BYE_FORGET) this.trustStore?.clear()
     logger.info(LOG_SCOPE, `bye from ${conn.remote}`, {
       reason: typeof reason === 'string' ? reason : undefined
     })
@@ -545,9 +657,10 @@ export class SignalingServer {
     }
   }
 
-  /** Terminal error: send, then close (webrtc.md). */
+  /** Terminal error: send, then close (webrtc.md). Nothing else is expected. */
   private failHandshake(conn: ConnectionState, code: string): void {
     this.sendError(conn, code)
+    this.clearHandshakeTimer(conn)
     conn.socket.close(1008, code)
   }
 

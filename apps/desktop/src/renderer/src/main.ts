@@ -30,9 +30,12 @@ const sessionInfoOverlayEl = document.getElementById('session-info-overlay') as 
 const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 // Phase15 "no input" stage: the monitor-without-signal view shown while the
 // pairing session is alive but no video flows (noInputView.ts — pure copy).
+// ADR-006: the stage's Disconnect button revokes the persistent
+// session — the only way trust ends.
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
+const noInputDisconnectEl = document.getElementById('no-input-disconnect') as HTMLButtonElement
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -381,6 +384,32 @@ window.desktopApi
   .then((session) => (session === null ? showSessionError() : showSession(session)))
   .catch(showSessionError)
 
+// ADR-006 startup stage: a trusted phone means the receiver leads —
+// the no-input stage waits for the phone's one-tap Connect; the QR hero is
+// for a desktop with nothing trusted. Pulled once at load; later stage flips
+// arrive as mobile-state pushes ('waiting' clears the name and shows the QR).
+window.desktopApi
+  .getTrustedDevice()
+  .then((trusted) => {
+    if (trusted !== null && connectedName === null && !document.body.classList.contains('receiving')) {
+      connectedName = trusted.name
+      reconnecting = true
+      renderHero()
+    }
+  })
+  .catch(() => undefined)
+
+// The trusted session's only exit (ADR-006): revoke — bye 'forget' to a
+// connected phone, a silent revoke when it is offline — then the QR hero.
+noInputDisconnectEl.addEventListener('click', () => {
+  noInputDisconnectEl.disabled = true
+  window.desktopApi.disconnectDesktop()
+})
+// 'waiting' after the revoke re-enables the button for any future session.
+const unsubscribeSessionForButton = window.desktopApi.onMobileStateChanged((state) => {
+  if (state.state === 'waiting') noInputDisconnectEl.disabled = false
+})
+
 const unsubscribeSession = window.desktopApi.onPairingSessionUpdated((session) =>
   session === null ? showSessionError() : showSession(session)
 )
@@ -396,6 +425,7 @@ const unsubscribeIce = window.desktopApi.onSignalingIceCandidate((candidate) => 
 window.addEventListener('beforeunload', () => {
   receiver.close()
   unsubscribeSession()
+  unsubscribeSessionForButton()
   unsubscribeMobile()
   unsubscribeOffers()
   unsubscribeIce()

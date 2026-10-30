@@ -29,10 +29,14 @@
            device is paired; its socket may be down inside the reconnect
            window) but no video flows, the desktop behaves like a monitor
            without a signal (noInputView.ts) — never the QR hero, which is
-           only for a session that is truly gone (bye/expiry/regenerate). -->
+           only for a session that is truly gone (bye/expiry/regenerate).
+           Phase19 (ADR-006): with a trusted phone this stage is also the
+           startup screen, and Disconnect revokes the persistent session —
+           the only way trust ends (bye 'forget'). -->
       <div class="no-input" id="no-input-stage" hidden>
         <h2 class="no-input-heading" id="no-input-heading">No input video</h2>
         <p class="no-input-subline" id="no-input-subline"></p>
+        <button class="button no-input-disconnect" id="no-input-disconnect" type="button">Disconnect</button>
       </div>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).

@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
+import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -14,7 +15,9 @@ import {
   stopCastKeepAwake
 } from './window'
 import { PairingServer } from './pairing/pairingServer'
-import { SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
+import { TrustStore, loadOrCreateDesktopId } from './pairing/trustStore'
+import { getLanIpv4Hosts } from './pairing/networkInfo'
+import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -27,6 +30,10 @@ const EXPIRY_SWEEP_INTERVAL_MS = 1_000
 
 let mainWindow: BrowserWindow | null = null
 let pairing: PairingServer | null = null
+// Persistent session (ADR-006): the trust outlives every QR session —
+// a trusted phone reconnects with one tap on its Connect button, and the
+// desktop opens on the receiver's no-input stage instead of the QR hero.
+let trust: TrustStore | null = null
 // Phase14 receiver-window state, owned here because windows are main-process
 // domain (desktop.md process model):
 // - whether a cast is live (drives keep-awake, the relaxed minimums, and the
@@ -127,16 +134,27 @@ app.whenReady().then(async () => {
   // A duplicate copy: quit was already requested — never bind sockets or
   // compete for the pairing port.
   if (!gotInstanceLock) return
+  // Read the persistent trust before anything can serve a resume (ADR-006):
+  // corrupt/unreadable degrades to "no trusted device" (trustStore.load).
+  const userData = app.getPath('userData')
+  trust = new TrustStore({ file: () => join(userData, 'trust.json') })
+  trust.load()
+  const desktopId = loadOrCreateDesktopId(() => join(userData, 'desktop-id'))
   // Order matters: bind the signaling port first (the QR must carry the actual
   // port), then build the pairing store around it, then publish the first QR.
   const signaling = new SignalingServer({
     desktopName: hostname(),
-    onMobileConnected: ({ name }) => {
+    trustStore: trust,
+    desktopId,
+    currentHosts: getLanIpv4Hosts,
+    onMobileConnected: ({ name, resume }) => {
+      logger.info(LOG_SCOPE, resume ? 'trusted phone re-connected (resume)' : 'phone paired via QR')
       pushMobileState({ state: 'connected', name })
     },
     // Phase15: the authorized socket dropped — the pairing session is still
     // live (reconnect window open until expiry), so the receiver keeps
-    // showing the device instead of falling back to the QR hero.
+    // showing the device instead of falling back to the QR hero. With a
+    // trusted phone the no-input stage now stays up for good (ADR-006).
     onMobileDisconnected: () => {
       if (pairedMobileName !== null) {
         pushMobileState({ state: 'disconnected', name: pairedMobileName })
@@ -146,9 +164,19 @@ app.whenReady().then(async () => {
     },
     onBye: (reason) => {
       logger.info(LOG_SCOPE, 'session ended', { reason })
+      const trustedName = trust?.get()?.name ?? null
       pairing
         ?.createSession()
-        .then(() => pushWaiting())
+        .then(() => {
+          // `bye forget` (the phone's Disconnect) revoked the trust — fresh QR.
+          // A plain end with trust intact keeps the no-input stage (the phone
+          // reconnects with one tap); only an untrusted end returns to the QR.
+          if (reason === BYE_FORGET || trustedName === null) {
+            pushWaiting()
+          } else {
+            pushMobileState({ state: 'disconnected', name: pairedMobileName ?? trustedName })
+          }
+        })
         .catch((error) => logger.error(LOG_SCOPE, 'regeneration after bye failed', { error: String(error) }))
     },
     // Media plumbing (webrtc.md): the main process relays SDP/ICE frames
@@ -172,17 +200,42 @@ app.whenReady().then(async () => {
 
   // Regenerate the QR once the session has expired (the desktop clock is
   // authoritative, pairing.md) or after a failed creation attempt. A fresh
-  // session means no device is paired anymore — 'waiting' (QR hero) follows.
+  // session means no device is paired anymore — 'waiting' (QR hero) follows,
+  // unless a trusted phone keeps the receiver on the no-input stage (ADR-006).
   setInterval(() => {
     pairing
       ?.ensureFreshSession()
       .then((regenerated) => {
-        if (regenerated) pushWaiting()
+        if (!regenerated) return
+        const trustedName = trust?.get()?.name ?? null
+        if (trustedName === null) {
+          pushWaiting()
+        } else {
+          pushMobileState({ state: 'disconnected', name: pairedMobileName ?? trustedName })
+        }
       })
       .catch((error) => logger.error(LOG_SCOPE, 'expiry sweep failed', { error: String(error) }))
   }, EXPIRY_SWEEP_INTERVAL_MS)
 
   ipcMain.handle(IPC.pairing.getSession, () => pairing!.currentView())
+  ipcMain.handle(IPC.pairing.getTrustedDevice, (): TrustedDeviceView | null => {
+    const device = trust?.get() ?? null
+    return device === null ? null : { name: device.name, lastConnectedAt: device.lastConnectedAt }
+  })
+  // The desktop Disconnect (the no-input stage's button, ADR-006): revoke the
+  // persistent trust and return to the QR hero — bye 'forget' to a connected
+  // phone, a silent revoke when it is offline.
+  ipcMain.handle(IPC.pairing.disconnect, () => {
+    if (signaling.hasAuthorizedConnection()) {
+      signaling.sendBye(BYE_FORGET)
+      return
+    }
+    trust?.clear()
+    pairing
+      ?.createSession()
+      .then(() => pushWaiting())
+      .catch((error) => logger.error(LOG_SCOPE, 'regeneration after disconnect failed', { error: String(error) }))
+  })
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
     return pairing!

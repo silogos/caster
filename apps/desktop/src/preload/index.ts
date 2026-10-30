@@ -16,6 +16,10 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const desktopApi: DesktopApi = {
   getPairingSession: () => ipcRenderer.invoke(IPC.pairing.getSession),
+  getTrustedDevice: () => ipcRenderer.invoke(IPC.pairing.getTrustedDevice),
+  disconnectDesktop: () => {
+    ipcRenderer.invoke(IPC.pairing.disconnect)
+  },
   regeneratePairingSession: () => ipcRenderer.invoke(IPC.pairing.regenerate),
   onPairingSessionUpdated: (listener) => subscribe<PairingSessionView | null>(IPC.pairing.sessionUpdated, listener),
   onMobileStateChanged: (listener) => subscribe<MobileStateEvent>(IPC.pairing.mobileState, listener),
