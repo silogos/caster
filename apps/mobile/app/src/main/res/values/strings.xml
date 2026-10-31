@@ -144,6 +144,15 @@
     <string name="vc_hint_needs_setup">Turning it on asks for a one-time administrator setup on the desktop.</string>
     <string name="vc_hint_active">Publishing as a camera — the desktop\'s preview is off.</string>
 
+    <!-- Audio output routing (proto 2): the phone's mirror of the desktop's
+         receiver setting — where the desktop's mix plays. -->
+    <string name="audio_routing_title">Desktop audio output</string>
+    <string name="audio_routing_hint">Where the desktop plays this cast. Cable = recording apps only, speakers stay silent.</string>
+    <string name="audio_routing_no_cable">Only speakers — the desktop has no virtual cable device installed.</string>
+    <string name="audio_routing_speakers">Speakers</string>
+    <string name="audio_routing_cable">Cable</string>
+    <string name="audio_routing_both">Both</string>
+
     <!-- Advanced settings (designs/mobile-app.html) — Settings is Advanced
          ONLY (the profile/share-screen sections live on Home's quality
          console). Encoder-level knobs; defaults reproduce today's cast

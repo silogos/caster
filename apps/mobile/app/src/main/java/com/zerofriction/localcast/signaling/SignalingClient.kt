@@ -92,6 +92,12 @@ class SignalingClient(
          */
         data class VcStatusEvent(val status: VcStatus) : Event
 
+        /**
+         * The desktop's audio output routing state (proto 2) — where its mix
+         * plays. The query reply and every change; drives the phone's mirror.
+         */
+        data class AudioRoutingStatusEvent(val status: AudioRoutingStatus) : Event
+
         /** An authorized connection dropped; a reconnect is scheduled after `delayMs`. */
         data class Reconnecting(val delayMs: Long) : Event
 
@@ -236,6 +242,18 @@ class SignalingClient(
     /** Turn the desktop's virtual camera off. */
     fun sendVcStop() {
         sendEnvelope(Envelope.TYPE_VC_STOP, Payloads.vcCommand())
+    }
+
+    // ---- Audio output routing control (proto 2): the phone's mirror of the desktop setting ----
+
+    /** Ask the desktop to re-send its audio-routing status (cast start, re-auth). */
+    fun sendAudioRoutingQuery() {
+        sendEnvelope(Envelope.TYPE_AUDIO_ROUTING_QUERY, Payloads.vcCommand())
+    }
+
+    /** Pick the desktop's output route; the next status carries the effective mode. */
+    fun sendAudioRoutingSet(mode: String) {
+        sendEnvelope(Envelope.TYPE_AUDIO_ROUTING_SET, Payloads.audioRoutingSet(mode))
     }
 
     // ---- Connection lifecycle ----
@@ -394,6 +412,16 @@ class SignalingClient(
             }
             Envelope.TYPE_VC_QUERY, Envelope.TYPE_VC_START, Envelope.TYPE_VC_STOP ->
                 // m→d only (webrtc.md) — the desktop never sends them.
+                Log.w(TAG, "unexpected ${envelope.type} from desktop — ignoring")
+            Envelope.TYPE_AUDIO_ROUTING_STATUS -> {
+                val status = Payloads.audioRoutingStatus(envelope)
+                if (status == null) {
+                    Log.w(TAG, "malformed audio-routing-status — ignoring")
+                } else {
+                    emit(Event.AudioRoutingStatusEvent(status))
+                }
+            }
+            Envelope.TYPE_AUDIO_ROUTING_QUERY, Envelope.TYPE_AUDIO_ROUTING_SET ->
                 Log.w(TAG, "unexpected ${envelope.type} from desktop — ignoring")
             Envelope.TYPE_BYE -> {
                 val reason = Payloads.byeReason(envelope)

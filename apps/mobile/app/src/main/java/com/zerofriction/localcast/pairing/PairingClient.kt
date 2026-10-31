@@ -136,6 +136,7 @@ class PairingClient(
                 is SignalingClient.Event.IceCandidate,
                 -> Unit // media plumbing — consumed by the webrtc module
                 is SignalingClient.Event.VcStatusEvent -> Unit // cast-scoped (ADR-007) — consumed by CastService
+                is SignalingClient.Event.AudioRoutingStatusEvent -> Unit // cast-scoped (proto 2) — consumed by CastService
                 is SignalingClient.Event.SessionEnded -> {
                     lastDesktopName = null
                     _state.value = State.Ended
@@ -190,6 +191,7 @@ class PairingClient(
                 is SignalingClient.Event.IceCandidate,
                 -> Unit // media plumbing — consumed by the webrtc module
                 is SignalingClient.Event.VcStatusEvent -> Unit // cast-scoped (ADR-007) — consumed by CastService
+                is SignalingClient.Event.AudioRoutingStatusEvent -> Unit // cast-scoped (proto 2) — consumed by CastService
                 is SignalingClient.Event.SessionEnded -> {
                     lastDesktopName = null
                     _state.value = State.Ended
