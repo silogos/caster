@@ -62,7 +62,11 @@ export function createMainWindow(options: { frameless?: boolean; bounds?: Electr
     // Dev: load the vite dev server (openDevTools alone leaves the window
     // blank — the URL must actually be loaded; found during Phase6 verification).
     window.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    window.webContents.openDevTools({ mode: 'detach' })
+    // DevTools only when explicitly asked for (a detached window on every
+    // launch is noise). Set ZFC_DEVTOOLS=1 or use the tray to open it.
+    if (process.env['ZFC_DEVTOOLS'] === '1') {
+      window.webContents.openDevTools({ mode: 'detach' })
+    }
   } else {
     window.loadFile(join(__dirname, '../renderer/index.html'))
   }
