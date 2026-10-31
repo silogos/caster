@@ -1,9 +1,15 @@
 import type {
+  AudioRoutingMode,
+  AudioRoutingReport,
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
   SignalingSdpMessage,
-  TrustedDeviceView
+  TrustedDeviceView,
+  VcDesktopState,
+  VcPumpCommand,
+  VirtualAudioInstallResult,
+  VirtualAudioState
 } from './types'
 
 /**
@@ -38,8 +44,7 @@ export const IPC = {
   },
   window: {
     /** Renderer → main: a cast is live/over — cast-window vs waiting-window minimums. */
-    castActive: 'window:cast-active',
-    /**
+    castActive: 'window:cast-active',    /**
      * Renderer → main: the stream's size changed (first metadata, rotation,
      * quality steps). The window's shape is the user's — the video letterboxes
      * via CSS; the size is only cached for the on-demand "Match window to
@@ -53,7 +58,44 @@ export const IPC = {
      */
     sessionInfoOverlay: 'window:session-info-overlay',
     /** Renderer → main: re-fit the window to the current stream's aspect. */
-    fitToStream: 'window:fit-to-stream'
+    fitToStream: 'window:fit-to-stream',
+    /**
+     * Renderer → main: the frameless preference (ADR-007 addendum). Frame is
+     * set at creation, so the main process recreates the window (bounds kept)
+     * and pushes the effective state back — same pattern as sessionInfoOverlay.
+     */
+    frameless: 'window:frameless'
+  },
+  vc: {
+    /**
+     * Push: the virtual camera's renderer pump command (ADR-007) — `frames`
+     * pumps at the fixed dims, `no-signal` publishes the "No input video"
+     * still (Syphon stays up between casts), `off` stops. Also drives the
+     * receiver's VC-active placeholder and its toggle state.
+     */
+    pump: 'vc:pump',
+    /** Renderer → main: one packed frame (width×height×{3|4} bytes, top-down). */
+    frame: 'vc:frame',
+    /** Renderer → main: the pump gave up (e.g. repeated context loss) — stop the camera honestly. */
+    pumpFailed: 'vc:pump-failed',
+    /** Push: whether this desktop can do the virtual camera (the settings section's visibility). */
+    state: 'vc:state',
+    /** Renderer → main: the desktop's own toggle (receiver-environment control, ADR-007 addendum). */
+    toggle: 'vc:toggle',
+    /** Renderer → main / push: the always-on preference — the camera follows the app, capture-card-style. */
+    autoStart: 'vc:auto-start'
+  },
+  audioRouting: {
+    /** Renderer → main: the effective routing state changed (mode + cable presence). */
+    report: 'audio-routing:report',
+    /** Push: the phone asked to change the mode — the renderer applies it. */
+    set: 'audio-routing:set'
+  },
+  virtualAudio: {
+    /** Push: whether this desktop can install the Zero-Friction audio devices (ADR-008). */
+    state: 'virtual-audio:state',
+    /** Renderer → main: run the one-time elevated install (admin prompt on screen). */
+    install: 'virtual-audio:install'
   }
 } as const
 
@@ -86,4 +128,30 @@ export interface DesktopApi {
   onSessionInfoOverlayChanged(listener: (enabled: boolean) => void): () => void
   /** Re-fits the window to the current stream's aspect (undoes a manual resize). */
   fitWindowToStream(): void
+  /** Subscribes to the virtual camera's pump commands; returns an unsubscribe function. */
+  onVcPump(listener: (command: VcPumpCommand) => void): () => void
+  /** Sends one packed frame to the virtual camera (ADR-007 frame path). */
+  sendVcFrame(data: Uint8Array, width: number, height: number): void
+  /** Reports the renderer pump gave up — the main process stops the camera. */
+  reportVcPumpFailed(): void
+  /** Subscribes to the desktop's virtual camera capability; returns an unsubscribe function. */
+  onVcState(listener: (state: VcDesktopState) => void): () => void
+  /** The desktop's own virtual camera toggle (receiver-environment control). */
+  toggleVirtualCamera(): void
+  /** Sets the always-on preference (camera starts with every cast, capture-card-style). */
+  setVcAutoStart(enabled: boolean): void
+  /** Subscribes to the always-on preference's effective state; returns an unsubscribe function. */
+  onVcAutoStartChanged(listener: (enabled: boolean) => void): () => void
+  /** Renderer → main: the effective audio routing state changed (mode + cable presence). */
+  reportAudioRouting(report: AudioRoutingReport): void
+  /** Subscribes to routing sets arriving from the phone; returns an unsubscribe function. */
+  onAudioRoutingSet(listener: (mode: AudioRoutingMode) => void): () => void
+  /** Subscribes to the virtual audio install capability; returns an unsubscribe function. */
+  onVirtualAudioState(listener: (state: VirtualAudioState) => void): () => void
+  /** Runs the one-time elevated install of the Zero-Friction audio devices (ADR-008). */
+  installVirtualAudio(): Promise<VirtualAudioInstallResult>
+  /** Turns the frameless preference on/off (the window is recreated, bounds kept). */
+  setFrameless(enabled: boolean): void
+  /** Subscribes to the frameless preference's effective state; returns an unsubscribe function. */
+  onFramelessChanged(listener: (enabled: boolean) => void): () => void
 }

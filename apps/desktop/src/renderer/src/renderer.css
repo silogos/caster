@@ -27,6 +27,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Frameless receiver (ADR-007 addendum, a Settings toggle): the whole window
+   becomes a drag surface — grab anywhere (video included) to move it; edges
+   still resize. Interactive controls opt out. A framed window ignores this. */
+body.frameless {
+  -webkit-app-region: drag;
+}
+
+body.frameless button,
+body.frameless input,
+body.frameless select,
+body.frameless textarea,
+body.frameless .cast-overlay,
+body.frameless .modal {
+  -webkit-app-region: no-drag;
+}
+
 .stage {
   height: 100%;
   display: flex;
@@ -137,15 +153,87 @@ body {
   color: var(--fg-muted);
 }
 
-.no-input-subline {
+/* The no-input stage's controls — literally the cast overlay (same class,
+   so same fixed layer, padding, and reveal transition): status chip left,
+   controls right, Disconnect to the right of Settings. Reveal trigger below;
+   visibility rides the parent .no-input[hidden]. */
+.no-input-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* The subline is a status sentence now — a chip, not a wrapping paragraph:
+   ellipsize like the session-info line rather than push the buttons away. */
+.no-input-overlay .cast-status {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* body:hover — the cast overlay's own trigger (body.receiving:hover there):
+   the cursor anywhere inside the window, including over the settings modal's
+   backdrop. The overlay sits inside .no-input (display:none when not in this
+   state), so the rule only fires when the no-input stage is actually shown. */
+body:hover .no-input-overlay {
+  opacity: 1;
+}
+
+/* The VC placeholder's own off switch — same quiet button language. */
+.vc-turn-off {
+  margin-top: 4px;
+}
+
+/*
+  The virtual camera's placeholder (ADR-007): the same monitor-language stage
+  as no-input, shown while the camera publishes instead of the video preview.
+  `body.vc-active` hides the video (the pump reads decoded frames directly —
+  the element keeps holding the stream, it just stops being shown) and lifts
+  this stage over the receiving rules below.
+*/
+.vc-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.vc-stage[hidden] {
+  display: none;
+}
+
+.vc-heading {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+
+.vc-subline,
+.vc-status {
   font-size: 15px;
   color: var(--fg-muted);
 }
 
-/* Phase19 (ADR-006): the trusted session's only exit — revoke and return to
-   the QR hero. Same quiet button language as "New QR code". */
-.no-input-disconnect {
-  margin-top: 4px;
+.vc-status {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+/* While the virtual camera publishes: no preview — the placeholder owns the
+   window (the receiving rules would otherwise tuck every non-video child
+   away); the video element itself is hidden. */
+body.receiving.vc-active .stage > *:not(.vc-stage) {
+  display: none;
+}
+
+body.receiving.vc-active .stage .vc-stage {
+  display: flex;
+}
+
+body.vc-active .video {
+  visibility: hidden;
 }
 
 /* Receiver/environment control only (overview.md) — the desktop exposes no
@@ -334,6 +422,19 @@ body.receiving:hover .cast-overlay {
   width: 16px;
   height: 16px;
   accent-color: var(--fg);
+  cursor: pointer;
+}
+
+/* Issue #54 audio routing — the select in the settings modal, styled like
+   the other modal controls. */
+.window-row select.window-select {
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg, transparent);
+  border: 1px solid var(--fg);
+  border-radius: 6px;
+  padding: 4px 8px;
+  max-width: 260px;
   cursor: pointer;
 }
 

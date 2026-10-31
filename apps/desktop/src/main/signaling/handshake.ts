@@ -8,9 +8,9 @@ import type { HelloPayload } from './envelope'
 
 /** Fresh random bytes per handshake, base64url-encoded (pairing.md `n`). */
 export const NONCE_BYTES = 16
-/** Protocol versions this desktop understands (webrtc.md `proto`). */
+/** Protocol versions this desktop understands (webrtc.md `proto`). Proto 2 adds the vc-* virtual-camera messages (ADR-007). */
 export const DESKTOP_PROTO_MIN = 1
-export const DESKTOP_PROTO_MAX = 1
+export const DESKTOP_PROTO_MAX = 2
 
 /** 16 fresh random bytes, base64url — one per handshake. */
 export function createNonce(): string {

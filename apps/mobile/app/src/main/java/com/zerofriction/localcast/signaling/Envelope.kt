@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -40,8 +41,20 @@ data class Envelope(
         const val TYPE_SDP_ANSWER = "sdp-answer"
         const val TYPE_ICE = "ice"
         const val TYPE_SESSION_INFO = "session-info"
+        const val TYPE_VC_QUERY = "vc-query"
+        const val TYPE_VC_START = "vc-start"
+        const val TYPE_VC_STOP = "vc-stop"
+        const val TYPE_VC_STATUS = "vc-status"
+        const val TYPE_AUDIO_ROUTING_QUERY = "audio-routing-query"
+        const val TYPE_AUDIO_ROUTING_SET = "audio-routing-set"
+        const val TYPE_AUDIO_ROUTING_STATUS = "audio-routing-status"
         const val TYPE_PING = "ping"
         const val TYPE_PONG = "pong"
+
+        /** Audio output routing modes (webrtc.md proto 2) — mirrors the desktop's receiver setting. */
+        const val AUDIO_ROUTING_SPEAKERS = "speakers"
+        const val AUDIO_ROUTING_CABLE = "cable"
+        const val AUDIO_ROUTING_BOTH = "both"
 
         /** PeerConnection discriminators — both PCs share one channel (ADR-003). */
         const val PC_MEDIA = "media"
@@ -229,4 +242,51 @@ object Payloads {
      */
     fun iceCandidate(envelope: Envelope): JsonElement? =
         envelope.payload["candidate"]
+
+    // ---- virtual camera control (proto 2, ADR-007) ----
+
+    /** The three m→d vc messages carry empty payloads by spec. */
+    fun vcCommand(): JsonObject = JsonObject(emptyMap())
+
+    /**
+     * The desktop's virtual-camera state (d→m) — the toggle renders exactly
+     * this. Null when any field is missing or not a boolean (malformed frame).
+     */
+    fun vcStatus(envelope: Envelope): VcStatus? {
+        val payload = envelope.payload
+        val available = (payload["available"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val needsRegistration = (payload["needsRegistration"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val active = (payload["active"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        return VcStatus(available, needsRegistration, active)
+    }
+
+    // ---- audio output routing control (proto 2) ----
+
+    /** `audio-routing-set` (m→d) — the phone's pick of the desktop's output route. */
+    fun audioRoutingSet(mode: String): JsonObject = buildJsonObject { put("mode", mode) }
+
+    /**
+     * `audio-routing-status` (d→m) — the desktop's effective state. Null when
+     * the mode is unknown or `cableAvailable` missing/not boolean.
+     */
+    fun audioRoutingStatus(envelope: Envelope): AudioRoutingStatus? {
+        val payload = envelope.payload
+        val mode = (payload["mode"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+        if (mode != Envelope.AUDIO_ROUTING_SPEAKERS && mode != Envelope.AUDIO_ROUTING_CABLE && mode != Envelope.AUDIO_ROUTING_BOTH) return null
+        val cableAvailable = (payload["cableAvailable"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        return AudioRoutingStatus(mode, cableAvailable)
+    }
 }
+
+/** `vc-status` payload (webrtc.md proto 2) — display-only state from the desktop. */
+data class VcStatus(
+    val available: Boolean,
+    val needsRegistration: Boolean,
+    val active: Boolean,
+)
+
+/** `audio-routing-status` payload (webrtc.md proto 2) — the desktop's effective output route. */
+data class AudioRoutingStatus(
+    val mode: String,
+    val cableAvailable: Boolean,
+)

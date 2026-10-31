@@ -7,6 +7,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import com.zerofriction.localcast.signaling.AudioRoutingStatus
+import com.zerofriction.localcast.signaling.VcStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -244,6 +246,96 @@ class SignalingClientTest {
         val info = parseFrame(fake.sentFrames.removeFirstOrNull())
         assertEquals(Envelope.TYPE_SESSION_INFO, info.type)
         assertEquals("balanced", info.payload["profile"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+    }
+
+    @Test
+    fun `emits vc-status events and ignores malformed ones`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 10, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", true)
+                    put("active", false)
+                },
+            ),
+        )
+        // Malformed (missing `active`) — recoverable ignore, not a failure.
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 11, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", false)
+                },
+            ),
+        )
+
+        val vcEvents = events.filterIsInstance<SignalingClient.Event.VcStatusEvent>()
+        assertEquals(1, vcEvents.size)
+        assertEquals(VcStatus(available = true, needsRegistration = true, active = false), vcEvents[0].status)
+    }
+
+    @Test
+    fun `sends vc control messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendVcQuery()
+        client.sendVcStart()
+        client.sendVcStop()
+
+        val query = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_QUERY, query.type)
+        val start = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_START, start.type)
+        val stop = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_STOP, stop.type)
+        // The three m→d vc commands carry empty payloads by spec (webrtc.md).
+        assertEquals(0, query.payload.size)
+        assertEquals(0, start.payload.size)
+        assertEquals(0, stop.payload.size)
+    }
+
+    @Test
+    fun `emits audio-routing-status events and ignores malformed ones`() {
+        setUp()
+        authorize()
+
+        fun statusFrame(mode: String?, cableAvailable: Boolean? = true): String = EnvelopeCodec.encode(
+            Envelope.TYPE_AUDIO_ROUTING_STATUS, 10, VECTOR_SID,
+            buildJsonObject {
+                mode?.let { put("mode", it) }
+                cableAvailable?.let { put("cableAvailable", it) }
+            },
+        )
+        fake.listener?.onTransportText(statusFrame("cable", cableAvailable = true))
+        fake.listener?.onTransportText(statusFrame("hologram"))       // unknown mode — ignored
+        fake.listener?.onTransportText(statusFrame(null))             // missing mode — ignored
+        fake.listener?.onTransportText(statusFrame("both", cableAvailable = null)) // missing flag — ignored
+
+        val events = events.filterIsInstance<SignalingClient.Event.AudioRoutingStatusEvent>()
+        assertEquals(1, events.size)
+        assertEquals(AudioRoutingStatus("cable", cableAvailable = true), events[0].status)
+    }
+
+    @Test
+    fun `sends audio-routing control messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendAudioRoutingQuery()
+        client.sendAudioRoutingSet(Envelope.AUDIO_ROUTING_BOTH)
+
+        val query = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_AUDIO_ROUTING_QUERY, query.type)
+        assertEquals(0, query.payload.size)
+        val set = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_AUDIO_ROUTING_SET, set.type)
+        assertEquals(Envelope.AUDIO_ROUTING_BOTH, (set.payload["mode"] as JsonPrimitive).content)
     }
 
     private fun parseFrame(raw: String?): Envelope {

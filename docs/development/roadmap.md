@@ -99,6 +99,13 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Feature 2026-11 — Virtual Camera (Windows + macOS) ✅ implemented — awaiting manual review (macOS: phone in hand; Windows: rig)
+*(Not a numbered phase: a user-requested feature shipped off-phase like the broadcast console and the persistent pairing session; accepts the draft [proposals/virtual-camera.md](../proposals/virtual-camera.md) as [ADR-007](../decisions/ADR-007-virtual-camera.md). Tracking: issue #69.)*
+**Scope:** the desktop re-publishes the incoming cast as a **system webcam** (softcam DirectShow filter, MIT, via koffi FFI — zero custom native code), toggled **from the phone** over proto-2 `vc-*` signaling messages (`vc-query/start/stop` m→d, `vc-status {available, needsRegistration, active}` d→m; envelope v stays 1, old peers degrade to no-UI). User refinements baked in: **game-grade output — no fps cap, follows the cast 1:1** (30/60/120); **no preview while active** — frames come from `MediaStreamTrackProcessor` (decode-side, works minimized), R/B-swapped on the GPU by a WebGL shader, raw-BGRA IPC, `scSendFrame` (main process does zero per-pixel work); the receiver window swaps to a **VC-active placeholder** (the no-input stage's language) with the mixer still reachable. One-time UAC registration (`softcam_installer.exe`, registry-CLSID detection, honest declined-UAC state). Camera deleted on every exit path (no DLL leak). Platform map decided with the user: **Windows softcam (this feature) · macOS Syphon OBS/VJ-only (shipped 2026-10-31 — a vendored native helper built with the BSD-3 framework from source; the discovery-runloop finding is in the ADR addendum) · Linux PipeWire kernel-free (follow-up)** — akvirtualcamera (GPL) evaluated and rejected; all sit behind the same `vc/VirtualCameraController` seam.
+**Accept:** desktop vitest + mobile JVM green (protocol loopback incl. proto gating, state machine, dims, registration runner, frame pump, placeholder view); `dist:win` cross-build packages DLL+koffi; on Windows x64: UAC once → cast appears as a camera in OBS (60 fps game feed), minimized window keeps publishing, rotation letterboxes, every teardown path removes the camera, numbers recorded. *(Implemented 2026-10-30 — verification record in [features/virtual-camera.md](../features/virtual-camera.md).)*
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

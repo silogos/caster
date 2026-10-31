@@ -24,15 +24,24 @@ export const CAST_MIN_HEIGHT = 240
  * Window lifecycle for the receiver. In later phases this module also owns the
  * powerSaveBlocker during an active cast (docs/architecture/desktop.md).
  */
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(options: { frameless?: boolean; bounds?: Electron.Rectangle } = {}): BrowserWindow {
+  const frameless = options.frameless === true
   const window = new BrowserWindow({
-    width: WINDOW_DEFAULT_WIDTH,
-    height: WINDOW_DEFAULT_HEIGHT,
+    width: options.bounds?.width ?? WINDOW_DEFAULT_WIDTH,
+    height: options.bounds?.height ?? WINDOW_DEFAULT_HEIGHT,
+    x: options.bounds?.x,
+    y: options.bounds?.y,
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
     backgroundColor: WINDOW_BACKGROUND_COLOR,
     show: false,
     autoHideMenuBar: true,
+    // The frameless preference (ADR-007 addendum): a pure video surface — no
+    // title bar, no traffic lights, square corners — nothing for a capture to
+    // crop. Off by default; toggling recreates the window (frame can't change
+    // live). The renderer CSS makes a frameless window one big drag surface.
+    frame: !frameless,
+    roundedCorners: !frameless,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       spellcheck: false,
@@ -53,7 +62,11 @@ export function createMainWindow(): BrowserWindow {
     // Dev: load the vite dev server (openDevTools alone leaves the window
     // blank — the URL must actually be loaded; found during Phase6 verification).
     window.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    window.webContents.openDevTools({ mode: 'detach' })
+    // DevTools only when explicitly asked for (a detached window on every
+    // launch is noise). Set ZFC_DEVTOOLS=1 or use the tray to open it.
+    if (process.env['ZFC_DEVTOOLS'] === '1') {
+      window.webContents.openDevTools({ mode: 'detach' })
+    }
   } else {
     window.loadFile(join(__dirname, '../renderer/index.html'))
   }

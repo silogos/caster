@@ -94,3 +94,56 @@ export interface CastSessionInfo {
   mic: boolean
 }
 
+/**
+ * The virtual camera's renderer pump command (ADR-007): `frames` pumps decoded
+ * frames at the fixed camera dims in the backend's pixel format; `no-signal`
+ * publishes one "No input video" still (the cast dropped but the camera stays
+ * published — Syphon consumers see the placeholder instead of a frozen last
+ * frame); `off` stops everything (the camera itself is torn down).
+ */
+export type VcPumpCommand =
+  | { mode: 'frames'; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
+  | { mode: 'no-signal'; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
+  | { mode: 'off' }
+
+/**
+ * The desktop's virtual camera capability + runtime state, pushed to the
+ * renderer for its own controls (settings section, placeholder button) —
+ * display/control only; the phone's toggle is unaffected (ADR-007 addendum).
+ */
+export interface VcDesktopState {
+  /** False when the platform/files are unsupported — the renderer hides its controls. */
+  supported: boolean
+}
+
+/**
+ * Audio output routing (proto 2): where the desktop's mix goes. A receiver-
+ * environment setting, mirrored on the phone by user decision (ADR-007
+ * addendum pattern — the desktop owns the truth).
+ */
+export type AudioRoutingMode = 'speakers' | 'cable' | 'both'
+
+/** The renderer's report of the effective routing state (main caches + relays to the phone). */
+export interface AudioRoutingReport {
+  mode: AudioRoutingMode
+  cableAvailable: boolean
+}
+
+/**
+ * The desktop's virtual audio capability (ADR-008): whether this machine can
+ * install the Zero-Friction loopback devices — macOS with the bundled driver
+ * present. Pushed to the renderer for the settings modal's Install row.
+ */
+export interface VirtualAudioState {
+  /** False on other platforms or when the bundled .driver is missing — the row hides. */
+  supported: boolean
+}
+
+/**
+ * The Install button's outcome (ADR-008 install UX): 'installed' verified on
+ * disk, 'declined' = the admin prompt was cancelled (a user decision, not an
+ * error), 'failed' = the elevated copy did not land, 'unsupported' = this
+ * desktop can't install at all (non-macOS).
+ */
+export type VirtualAudioInstallResult = 'installed' | 'declined' | 'failed' | 'unsupported'
+

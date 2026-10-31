@@ -18,6 +18,13 @@ export type EnvelopeType =
   | 'sdp-answer'
   | 'ice'
   | 'session-info'
+  | 'vc-query'
+  | 'vc-start'
+  | 'vc-stop'
+  | 'vc-status'
+  | 'audio-routing-query'
+  | 'audio-routing-set'
+  | 'audio-routing-status'
   | 'ping'
   | 'pong'
 
@@ -106,6 +113,36 @@ export interface SessionInfoPayload {
   gameAudio: boolean
   mic: boolean
 }
+/**
+ * The desktop's virtual-camera state (webrtc.md proto 2, ADR-007) — the phone's
+ * toggle renders exactly this, nothing inferred.
+ */
+export interface VcStatusPayload {
+  /** False on non-Windows-x64 desktops or when the DLL is missing — the phone hides its UI. */
+  available: boolean
+  /** True when the one-time (UAC) DirectShow registration has not happened yet. */
+  needsRegistration: boolean
+  /** True while the camera exists and frames are being published. */
+  active: boolean
+}
+/**
+ * Audio output routing control (webrtc.md proto 2): the phone's mirror of the
+ * desktop's receiver-environment setting — where the desktop's mix goes
+ * (speakers / virtual cable / both). The desktop owns the truth; a `set` the
+ * mixer must refuse (cable mode without a device) simply results in the next
+ * status carrying the effective mode.
+ */
+export type AudioRoutingMode = 'speakers' | 'cable' | 'both'
+
+export interface AudioRoutingSetPayload {
+  mode: AudioRoutingMode
+}
+
+export interface AudioRoutingStatusPayload {
+  mode: AudioRoutingMode
+  /** False when no virtual cable device exists — the phone disables those options. */
+  cableAvailable: boolean
+}
 export interface HeartbeatPayload {
   /** Sender's epoch milliseconds; echoed unchanged in the pong. */
   t: number
@@ -121,6 +158,9 @@ export type EnvelopePayload =
   | SdpPayload
   | IcePayload
   | SessionInfoPayload
+  | VcStatusPayload
+  | AudioRoutingSetPayload
+  | AudioRoutingStatusPayload
   | HeartbeatPayload
 
 export interface Envelope<P extends EnvelopePayload = EnvelopePayload> {
@@ -148,6 +188,13 @@ const ENVELOPE_TYPES: ReadonlySet<string> = new Set<EnvelopeType>([
   'sdp-answer',
   'ice',
   'session-info',
+  'vc-query',
+  'vc-start',
+  'vc-stop',
+  'vc-status',
+  'audio-routing-query',
+  'audio-routing-set',
+  'audio-routing-status',
   'ping',
   'pong'
 ])

@@ -1,10 +1,14 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { findCableOutputDevice, findPerTrackDevices, isRoutingMode, type RoutingMode } from './audio/routing'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
+import { FramePump, type PumpFrame, type PumpFrameSource } from './vc/framePump'
+import { createBgrCanvas } from './vc/webglBgrCanvas'
+import { vcActiveView } from './vc/vcActiveView'
 
 const statusEl = document.getElementById('status') as HTMLParagraphElement
 const heroHeadingEl = document.getElementById('hero-heading') as HTMLHeadingElement
@@ -34,8 +38,23 @@ const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 // session — the only way trust ends.
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
-const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
+// The subline lives in the stage overlay's status chip now (cast-overlay
+// language: status left, controls right) — the center keeps the heading only.
+const noInputStatusEl = document.getElementById('no-input-status') as HTMLParagraphElement
 const noInputDisconnectEl = document.getElementById('no-input-disconnect') as HTMLButtonElement
+const noInputSettingsEl = document.getElementById('no-input-settings') as HTMLButtonElement
+// The virtual camera's placeholder stage (ADR-007): shown instead of the video
+// while the camera publishes (no preview by design).
+const vcStageEl = document.getElementById('vc-stage') as HTMLDivElement
+const vcHeadingEl = document.getElementById('vc-heading') as HTMLHeadingElement
+const vcSublineEl = document.getElementById('vc-subline') as HTMLParagraphElement
+const vcStatusEl = document.getElementById('vc-status') as HTMLParagraphElement
+const vcTurnOffEl = document.getElementById('vc-turn-off') as HTMLButtonElement
+// The desktop's own toggle (ADR-007 addendum): the settings modal's row.
+const vcSettingsRowEl = document.getElementById('vc-settings-row') as HTMLDivElement
+const vcToggleEl = document.getElementById('vc-toggle') as HTMLInputElement
+const vcAutoStartRowEl = document.getElementById('vc-autostart-row') as HTMLDivElement
+const vcAutoStartEl = document.getElementById('vc-autostart') as HTMLInputElement
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -56,12 +75,22 @@ const createPeerConnection = (): PeerConnectionLike =>
 // Phase9's mixer (audio.md): each remote stream → its own GainNode → the one
 // AudioContext.destination. The receiver's only allowed audio control — no
 // further processing. Levels persist via localStorage; the context is created
-// lazily on the first stream (mixer.ts).
+// lazily on the first stream (mixer.ts). Issue #54: the destination can be
+// re-routed (speakers / virtual cable / both) — the cable context is built
+// with a sinkId pointing at the detected BlackHole device.
 const mixer = new AudioMixer({
-  createAudioContext: () => new AudioContext(),
+  createAudioContext: (options) =>
+    options?.sinkId !== undefined
+      ? new AudioContext({ sinkId: options.sinkId } as AudioContextOptions)
+      : new AudioContext(),
   storage: window.localStorage,
   log
 })
+
+// The media pc's stream, held for the virtual camera pump (ADR-007): the pump
+// consumes the DECODED video frames straight from the track, so it needs the
+// track, not the rendered <video>.
+let currentMediaStream: MediaStream | null = null
 
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
@@ -73,6 +102,7 @@ const receiver = new ReceiverSession({
   sink: {
     show: (stream) => {
       videoEl.srcObject = stream as MediaStream
+      currentMediaStream = stream as MediaStream
       videoEl.hidden = false
       // The element stays muted (also in the markup): the stream's game
       // audio plays through the mixer now — an unmuted element would play
@@ -93,6 +123,7 @@ const receiver = new ReceiverSession({
     },
     clear: () => {
       videoEl.srcObject = null
+      currentMediaStream = null
       videoEl.hidden = true
       releaseVideoWindow()
       mixer.detachStream('game')
@@ -211,7 +242,7 @@ function renderHero(): void {
     const view = noInputView(connectedName, reconnecting)
     noInputStageEl.hidden = false
     noInputHeadingEl.textContent = view.heading
-    noInputSublineEl.textContent = view.subline
+    noInputStatusEl.textContent = view.subline
     heroHeadingEl.hidden = true
     statusEl.hidden = true
     qrCardEl.hidden = true
@@ -319,6 +350,151 @@ const wireMixerChannel = (channel: MixerChannel, sliderId: string, muteButtonId:
 wireMixerChannel('game', 'game-volume', 'game-mute')
 wireMixerChannel('mic', 'mic-volume', 'mic-mute')
 
+// Issue #54 — audio output routing: where the mixed cast audio goes. The
+// cable target is a virtual cable device (BlackHole on macOS); without one,
+// the cable options are disabled with install guidance. Detection re-runs
+// every time the settings modal opens — the device can appear after an
+// install without a receiver restart.
+const audioOutputEl = document.getElementById('audio-output') as HTMLSelectElement
+const audioOutputNoteEl = document.getElementById('audio-output-note') as HTMLParagraphElement
+
+const CABLE_GUIDANCE =
+  'For send-only audio, install a virtual cable: brew install blackhole-2ch (then restart).'
+
+let cableDeviceId: string | null = null
+let labelsUnlocked = false
+
+const renderRoutingUi = (device: { deviceId: string; label: string } | null): void => {
+  cableDeviceId = device?.deviceId ?? null
+  for (const option of Array.from(audioOutputEl.options)) {
+    if (option.dataset.route === 'cable' || option.dataset.route === 'both') {
+      option.disabled = cableDeviceId === null
+    }
+  }
+  if (device === null) {
+    audioOutputNoteEl.textContent = CABLE_GUIDANCE
+    // A mode stored by a previous session whose device is now gone falls
+    // back to speakers — refusing beats a silent cast.
+    if (mixer.getRoutingMode() !== 'speakers') mixer.setRoutingMode('speakers')
+  } else {
+    audioOutputNoteEl.textContent = `Cable: ${device.label}`
+  }
+  audioOutputEl.value = mixer.getRoutingMode()
+  reportRouting()
+}
+
+/** The effective state reaches the main process (cached for the phone's mirror, proto 2). */
+const reportRouting = (): void => {
+  window.desktopApi.reportAudioRouting({
+    mode: mixer.getRoutingMode(),
+    cableAvailable: cableDeviceId !== null
+  })
+}
+
+// ADR-008 install UX: the Zero-Friction loopback devices as a one-click
+// install — one administrator password, once, and OBS/Zoom can pick game
+// audio and the mic as two separate input devices forever after. The row
+// appears only where the main process says installing is possible (macOS
+// with the bundled driver) AND the devices are missing.
+const virtualAudioRowEl = document.getElementById('virtual-audio-row') as HTMLDivElement
+const virtualAudioInstallButtonEl = document.getElementById('virtual-audio-install') as HTMLButtonElement
+const virtualAudioNoteEl = document.getElementById('virtual-audio-note') as HTMLParagraphElement
+
+const VIRTUAL_AUDIO_GUIDANCE =
+  'Adds two input devices — Zero-Friction Game Audio and Zero-Friction Mic — that OBS and Zoom can pick separately. One administrator password, once.'
+const VIRTUAL_AUDIO_INSTALLING = 'Installing — enter this Mac’s administrator password…'
+const VIRTUAL_AUDIO_DECLINED = 'Install cancelled — the devices were not installed.'
+const VIRTUAL_AUDIO_FAILED = 'Install failed — try again.'
+/** coreaudiod restarts asynchronously after the elevated copy — poll briefly. */
+const VIRTUAL_AUDIO_REDETECT_ATTEMPTS = 10
+const VIRTUAL_AUDIO_REDETECT_INTERVAL_MS = 500
+
+let virtualAudioSupported = false
+let perTrackMissing = true
+let virtualAudioNoteText = VIRTUAL_AUDIO_GUIDANCE
+
+const renderVirtualAudioRow = (): void => {
+  const visible = virtualAudioSupported && perTrackMissing
+  virtualAudioRowEl.hidden = !visible
+  virtualAudioNoteEl.hidden = !visible
+  if (visible) virtualAudioNoteEl.textContent = virtualAudioNoteText
+}
+
+const unsubscribeVirtualAudioState = window.desktopApi.onVirtualAudioState((state) => {
+  virtualAudioSupported = state.supported
+  renderVirtualAudioRow()
+})
+
+virtualAudioInstallButtonEl.addEventListener('click', () => {
+  if (virtualAudioInstallButtonEl.disabled) return
+  virtualAudioInstallButtonEl.disabled = true
+  virtualAudioNoteText = VIRTUAL_AUDIO_INSTALLING
+  renderVirtualAudioRow()
+  void window.desktopApi.installVirtualAudio().then(async (result) => {
+    if (result === 'installed') {
+      for (let attempt = 0; attempt < VIRTUAL_AUDIO_REDETECT_ATTEMPTS && perTrackMissing; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, VIRTUAL_AUDIO_REDETECT_INTERVAL_MS))
+        await detectCableDevice()
+      }
+      virtualAudioNoteText = perTrackMissing ? VIRTUAL_AUDIO_FAILED : VIRTUAL_AUDIO_GUIDANCE
+    } else {
+      // A cancelled password prompt is a user decision, not an error.
+      virtualAudioNoteText = result === 'declined' ? VIRTUAL_AUDIO_DECLINED : VIRTUAL_AUDIO_FAILED
+    }
+    virtualAudioInstallButtonEl.disabled = false
+    renderVirtualAudioRow()
+  })
+})
+
+const detectCableDevice = async (): Promise<void> => {
+  try {
+    // Output device labels/ids populate only after an audio permission was
+    // granted once; the receiver runs in Electron with media permissions
+    // granted by default, so this one-time probe unlocks them.
+    if (!labelsUnlocked) {
+      labelsUnlocked = true
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
+      probe.getTracks().forEach((track) => track.stop())
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    renderRoutingUi(findCableOutputDevice(devices))
+    // Per-track devices (batch A, ADR-008): game audio and mic each get
+    // their own input device — the two-track architecture end to end.
+    const perTrack = findPerTrackDevices(devices)
+    perTrackMissing = perTrack.gameAudio === null || perTrack.mic === null
+    if (!perTrackMissing) virtualAudioNoteText = VIRTUAL_AUDIO_GUIDANCE
+    mixer.setPerTrackCableDevices({
+      game: perTrack.gameAudio?.deviceId,
+      mic: perTrack.mic?.deviceId
+    })
+    renderVirtualAudioRow()
+  } catch (error) {
+    log('warn', 'audio output device detection failed', { error: String(error) })
+    renderRoutingUi(null)
+  }
+}
+
+audioOutputEl.addEventListener('change', () => {
+  const mode = audioOutputEl.value
+  if (!isRoutingMode(mode)) return
+  mixer.setRoutingMode(mode as RoutingMode, cableDeviceId ?? undefined)
+  reportRouting()
+})
+
+// The phone's mirror (proto 2): apply its pick through the same mixer call —
+// a cable route without a device is refused exactly like a local pick, and
+// the report above flows back as the honest status.
+const unsubscribeAudioRoutingSet = window.desktopApi.onAudioRoutingSet((mode) => {
+  if (!isRoutingMode(mode)) return
+  mixer.setRoutingMode(mode, cableDeviceId ?? undefined)
+  audioOutputEl.value = mixer.getRoutingMode()
+  reportRouting()
+})
+
+// Detect once at startup too (not just on modal open): the phone may query or
+// set the route during a cast before Settings was ever opened.
+void detectCableDevice()
+
 // The settings modal (receiver/environment controls only — overview.md):
 // opened from the hover overlay's trigger; closed via the button, Escape,
 // or a click on the backdrop outside the dialog.
@@ -328,6 +504,13 @@ function hideSettings(): void {
 }
 
 openSettingsEl.addEventListener('click', () => {
+  settingsBackdropEl.hidden = false
+  closeSettingsEl.focus()
+  void detectCableDevice()
+})
+// The no-signal stage's Settings (ADR-007 addendum): environment controls do
+// not need a live stream — same modal as the cast overlay's trigger.
+noInputSettingsEl.addEventListener('click', () => {
   settingsBackdropEl.hidden = false
   closeSettingsEl.focus()
 })
@@ -364,6 +547,174 @@ const unsubscribeOverlay = window.desktopApi.onSessionInfoOverlayChanged((enable
 // same reshape the cast start/rotation path applies, re-run on demand.
 fitWindowEl.addEventListener('click', () => {
   window.desktopApi.fitWindowToStream()
+})
+
+// The frameless preference (ADR-007 addendum): persisted like the overlay
+// checkbox; the main process recreates the window and pushes the effective
+// state back so this checkbox never lies after a toggle.
+const FRAMELESS_KEY = 'zfc.frameless.v1'
+const framelessEl = document.getElementById('frameless') as HTMLInputElement
+const applyFramelessClass = (enabled: boolean): void => {
+  framelessEl.checked = enabled
+  document.body.classList.toggle('frameless', enabled)
+}
+const storedFrameless = window.localStorage.getItem(FRAMELESS_KEY) === 'true'
+applyFramelessClass(storedFrameless)
+window.desktopApi.setFrameless(storedFrameless)
+framelessEl.addEventListener('change', () => {
+  window.localStorage.setItem(FRAMELESS_KEY, String(framelessEl.checked))
+  window.desktopApi.setFrameless(framelessEl.checked)
+})
+const unsubscribeFrameless = window.desktopApi.onFramelessChanged((enabled) => {
+  applyFramelessClass(enabled)
+  window.localStorage.setItem(FRAMELESS_KEY, String(enabled))
+})
+
+// The virtual camera pump (ADR-007): decoded frames (MSTP — works minimized,
+// no preview needed) → WebGL canvas (GPU scale + letterbox + BGR byte-packing)
+// → raw IPC → scSendFrame. One frame in, one buffer out, no cap — the cast's
+// fps is the pump's fps.
+interface MediaStreamTrackProcessorLike {
+  readable: ReadableStream<VideoFrame>
+}
+interface MediaStreamTrackProcessorCtor {
+  new (options: { track: MediaStreamTrack }): MediaStreamTrackProcessorLike
+}
+
+const createMstpSource = (track: unknown): PumpFrameSource => {
+  const ctor = (window as unknown as { MediaStreamTrackProcessor?: MediaStreamTrackProcessorCtor })
+    .MediaStreamTrackProcessor
+  if (ctor === undefined) {
+    throw new Error('MediaStreamTrackProcessor is unavailable in this Chromium')
+  }
+  const reader = new ctor({ track: track as MediaStreamTrack }).readable.getReader()
+  return {
+    start(onFrame) {
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done || value === undefined) return
+            onFrame(value as unknown as PumpFrame)
+          }
+        } catch (error) {
+          log('warn', 'vc pump source ended', { error: String(error) })
+        }
+      })()
+    },
+    stop() {
+      void reader.cancel().catch(() => undefined)
+    }
+  }
+}
+
+const vcPump = new FramePump({
+  createSource: createMstpSource,
+  createCanvas: (width, height, format) => createBgrCanvas(document.createElement('canvas'), width, height, format),
+  send: (bytes, width, height) => window.desktopApi.sendVcFrame(bytes, width, height),
+  reportFailure: () => window.desktopApi.reportVcPumpFailed(),
+  log
+})
+
+/**
+ * The "No input video" still (ADR-007 addendum): rendered once as a 2D canvas
+ * and pushed through the same GPU path — Syphon consumers (OBS) see a clean
+ * stage between casts instead of a frozen last frame.
+ */
+function noSignalStill(width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (ctx !== null) {
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, width, height)
+    ctx.fillStyle = '#8a8a8f'
+    ctx.font = `600 ${Math.round(height / 12)}px system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('No input video', width / 2, height / 2)
+  }
+  return canvas
+}
+
+/** The receiver's stage swap for VC mode (ADR-007): placeholder in, preview out. */
+function renderVcActive(active: boolean): void {
+  document.body.classList.toggle('vc-active', active)
+  vcStageEl.hidden = !active
+  if (active) {
+    const view = vcActiveView()
+    vcHeadingEl.textContent = view.heading
+    vcSublineEl.textContent = view.subline
+    vcStatusEl.textContent = sessionInfoLine(connectedName, sessionInfo)
+  }
+}
+
+// The desktop's own controls (ADR-007 addendum): published state follows the
+// pump commands; the toggle rides the same controller as the phone's.
+let vcSupported = false
+let vcPublished = false
+
+function renderVcControls(): void {
+  vcSettingsRowEl.hidden = !vcSupported
+  vcAutoStartRowEl.hidden = !vcSupported
+  vcToggleEl.checked = vcPublished
+  vcTurnOffEl.hidden = !vcPublished
+}
+
+const unsubscribeVcState = window.desktopApi.onVcState((state) => {
+  vcSupported = state.supported
+  renderVcControls()
+})
+
+const unsubscribeVcPump = window.desktopApi.onVcPump((command) => {
+  if (command.mode === 'frames') {
+    const track = currentMediaStream?.getVideoTracks()[0]
+    if (track === undefined) {
+      log('warn', 'vc pump start with no video track — ignoring (the camera dies with the cast)')
+      return
+    }
+    vcPublished = true
+    renderVcActive(true)
+    renderVcControls()
+    vcPump.start(track, command.width, command.height, command.pixelFormat)
+  } else if (command.mode === 'no-signal') {
+    // The cast dropped but the camera stays published: swap the live feed for
+    // the still, keep the placeholder (the desktop is still in VC mode).
+    vcPublished = true
+    renderVcActive(true)
+    renderVcControls()
+    vcPump.sendStill(noSignalStill(command.width, command.height), command.width, command.height, command.pixelFormat)
+  } else {
+    vcPump.stop()
+    vcPublished = false
+    renderVcActive(false)
+    renderVcControls()
+  }
+})
+
+vcToggleEl.addEventListener('change', () => window.desktopApi.toggleVirtualCamera())
+vcTurnOffEl.addEventListener('click', () => window.desktopApi.toggleVirtualCamera())
+
+// Always-on (batch B): persisted like the other receiver prefs; the pushed
+// effective state keeps the checkbox honest after recreates.
+const VC_AUTOSTART_KEY = 'zfc.vc-autostart.v1'
+vcAutoStartEl.checked = window.localStorage.getItem(VC_AUTOSTART_KEY) === 'true'
+window.desktopApi.setVcAutoStart(vcAutoStartEl.checked)
+vcAutoStartEl.addEventListener('change', () => {
+  window.localStorage.setItem(VC_AUTOSTART_KEY, String(vcAutoStartEl.checked))
+  window.desktopApi.setVcAutoStart(vcAutoStartEl.checked)
+})
+const unsubscribeVcAutoStart = window.desktopApi.onVcAutoStartChanged((enabled) => {
+  vcAutoStartEl.checked = enabled
+  window.localStorage.setItem(VC_AUTOSTART_KEY, String(enabled))
+})
+
+// The placeholder's status line follows session-info while publishing.
+const unsubscribeVcStatusLine = window.desktopApi.onMobileStateChanged((state) => {
+  if (state.state === 'session-info' && !vcStageEl.hidden) {
+    vcStatusEl.textContent = sessionInfoLine(connectedName, state.info)
+  }
 })
 
 function enableRegenerate(enabled: boolean): void {
@@ -424,10 +775,18 @@ const unsubscribeIce = window.desktopApi.onSignalingIceCandidate((candidate) => 
 
 window.addEventListener('beforeunload', () => {
   receiver.close()
+  vcPump.stop()
   unsubscribeSession()
   unsubscribeSessionForButton()
   unsubscribeMobile()
   unsubscribeOffers()
   unsubscribeIce()
   unsubscribeOverlay()
+  unsubscribeVcPump()
+  unsubscribeVcStatusLine()
+  unsubscribeVcState()
+  unsubscribeVcAutoStart()
+  unsubscribeAudioRoutingSet()
+  unsubscribeVirtualAudioState()
+  unsubscribeFrameless()
 })

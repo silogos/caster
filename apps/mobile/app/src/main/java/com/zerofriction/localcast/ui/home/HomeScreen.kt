@@ -99,12 +99,17 @@ import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.service.MicRoutingUiState
+import com.zerofriction.localcast.service.AudioRoutingUiState
+import com.zerofriction.localcast.service.VcCapability
+import com.zerofriction.localcast.service.VirtualCameraUiState
+import com.zerofriction.localcast.signaling.Envelope
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.components.AnnuncTone
 import com.zerofriction.localcast.ui.components.Annunciator
 import com.zerofriction.localcast.ui.components.BrandMark
 import com.zerofriction.localcast.ui.components.CardFoot
+import com.zerofriction.localcast.ui.components.CastSegRow
 import com.zerofriction.localcast.ui.components.CastCard
 import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.CastSwitch
@@ -145,6 +150,8 @@ fun HomeScreen(
     val thermalState by CastService.thermalState.collectAsStateWithLifecycle()
     val adaptiveState by CastService.adaptiveState.collectAsStateWithLifecycle()
     val liveQuality by CastService.liveQuality.collectAsStateWithLifecycle()
+    val vcState by CastService.vcState.collectAsStateWithLifecycle()
+    val audioRouting by CastService.audioRouting.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
 
     // No pairing session → nothing to show here: back to the scan screen.
@@ -258,6 +265,10 @@ fun HomeScreen(
         onSelectFps = settingsViewModel::selectFps,
         onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
         onApplyLiveQuality = { level -> CastService.requestSetLiveQuality(context, level) },
+        vcState = vcState,
+        onToggleVirtualCamera = { CastService.requestToggleVirtualCamera(context) },
+        audioRouting = audioRouting,
+        onSetAudioRouting = { mode -> CastService.requestSetAudioRouting(context, mode) },
         onShareScreen = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -307,6 +318,10 @@ fun HomeContent(
     onSelectFps: (Int) -> Unit = {},
     onSetManualBitrateMax: (Int) -> Unit = {},
     onApplyLiveQuality: (QualityLevel) -> Unit = {},
+    vcState: VirtualCameraUiState = VirtualCameraUiState(),
+    onToggleVirtualCamera: () -> Unit = {},
+    audioRouting: AudioRoutingUiState = AudioRoutingUiState(),
+    onSetAudioRouting: (String) -> Unit = {},
     onShareScreen: () -> Unit = {},
     onStopShareScreen: () -> Unit = {},
     onDisconnect: () -> Unit = {},
@@ -405,27 +420,29 @@ fun HomeContent(
         // ---- Hero: the destination plate — name only, both states; the
         // live timecode and quality readout live in the STATUS header. Saved
         // but offline (ADR-006): the Disconnect slot becomes Connect — the
-        // one-tap QR-less reconnect. ----
+        // one-tap QR-less reconnect. The hero STAYS when a cast failed (found
+        // live 2026-10-31: "The connection to the desktop…" used to replace
+        // it, leaving the failure without its destination plate — Connect and
+        // Terminate must stay reachable in that exact moment). ----
         if (castState is CastState.Failed) {
             Spacer(Modifier.height(12.dp))
             CastCard {
                 IconListRow(iconRes = R.drawable.ic_warning, title = castState.message, err = true)
             }
-        } else {
-            OnAirHero(
-                desktopName = when {
-                    casting -> (castState as CastState.Casting).desktopName
-                    connected -> (connection as ConnectedDesktop.State.Connected).desktopName
-                    saved != null -> saved.desktopName
-                    else -> stringResource(R.string.home_not_connected)
-                },
-                saved = saved,
-                connecting = reconnecting,
-                onConnect = onConnectSaved,
-                onDisconnect = onDisconnect,
-                onTerminate = if (connected) onTerminate else onTerminateSaved,
-            )
         }
+        OnAirHero(
+            desktopName = when {
+                casting -> (castState as CastState.Casting).desktopName
+                connected -> (connection as ConnectedDesktop.State.Connected).desktopName
+                saved != null -> saved.desktopName
+                else -> stringResource(R.string.home_not_connected)
+            },
+            saved = saved,
+            connecting = reconnecting,
+            onConnect = onConnectSaved,
+            onDisconnect = onDisconnect,
+            onTerminate = if (connected) onTerminate else onTerminateSaved,
+        )
 
         // ---- A failed reconnect (ADR-06): why it failed, plus the two
         // escapes — scan a QR instead, or forget this desktop entirely (the
@@ -582,12 +599,66 @@ fun HomeContent(
                     onSelect = onSetMicDevice,
                 )
             }
+            // ---- Audio output routing (proto 2): the phone's mirror of the
+            // desktop's receiver setting — speakers / virtual cable / both.
+            // Shown while casting on desktops that answer the query; without
+            // a cable device only Speakers stays pickable (honest hint). ----
+            if (casting && audioRouting.known) {
+                IconListRow(
+                    iconRes = R.drawable.ic_headphones,
+                    title = stringResource(R.string.audio_routing_title),
+                    sub = if (audioRouting.cableAvailable) {
+                        stringResource(R.string.audio_routing_hint)
+                    } else {
+                        stringResource(R.string.audio_routing_no_cable)
+                    },
+                    topDivider = true,
+                )
+                CastSegRow(
+                    options = buildList {
+                        add(stringResource(R.string.audio_routing_speakers) to (audioRouting.mode == Envelope.AUDIO_ROUTING_SPEAKERS))
+                        if (audioRouting.cableAvailable) {
+                            add(stringResource(R.string.audio_routing_cable) to (audioRouting.mode == Envelope.AUDIO_ROUTING_CABLE))
+                            add(stringResource(R.string.audio_routing_both) to (audioRouting.mode == Envelope.AUDIO_ROUTING_BOTH))
+                        }
+                    },
+                    onSelect = { index ->
+                        val modes = if (audioRouting.cableAvailable) {
+                            listOf(Envelope.AUDIO_ROUTING_SPEAKERS, Envelope.AUDIO_ROUTING_CABLE, Envelope.AUDIO_ROUTING_BOTH)
+                        } else {
+                            listOf(Envelope.AUDIO_ROUTING_SPEAKERS)
+                        }
+                        modes.getOrNull(index)?.let(onSetAudioRouting)
+                    },
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                )
+            }
             // The headphones tip is audio advice, not cast status — it lives
             // with the audio sources (card foot), only while both tracks run.
             if (casting && micState == MicState.Active &&
                 (gameAudioState == GameAudioState.Active || gameAudioState == GameAudioState.Silent)
             ) {
                 CardFoot(text = stringResource(R.string.mic_headphones_hint))
+            }
+        }
+
+        // ---- Virtual camera (ADR-007): visible only while casting AND the
+        // desktop announced the capability (proto 2 + vc-status available) —
+        // the switch is the phone's control; the desktop shows state only. ----
+        if (casting && vcState.capability != VcCapability.Hidden) {
+            SilkscreenLabel(stringResource(R.string.home_virtual_camera))
+            CastCard {
+                IconListRow(
+                    iconRes = R.drawable.ic_cast,
+                    title = stringResource(R.string.home_virtual_camera),
+                    sub = stringResource(vcSublineRes(vcState)),
+                    right = {
+                        CastSwitch(
+                            checked = vcState.active,
+                            onCheckedChange = { onToggleVirtualCamera() },
+                        )
+                    },
+                )
             }
         }
         Spacer(Modifier.height(28.dp))
@@ -662,6 +733,16 @@ internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) 
 }
 
 /** Idle-with-a-pairing reads STANDBY — Home is only shown while connected. */
+/**
+ * The virtual camera row's honest subline (ADR-007): what turning it on does
+ * right now — setup pending, publishing, or plain ready. Pure — JVM-tested.
+ */
+internal fun vcSublineRes(state: VirtualCameraUiState): Int = when {
+    state.active -> R.string.vc_hint_active
+    state.capability == VcCapability.NeedsSetup -> R.string.vc_hint_needs_setup
+    else -> R.string.vc_hint_ready
+}
+
 internal fun annunciatorFor(castState: CastState): ConsoleAnnunciator = when (castState) {
     is CastState.Starting -> ConsoleAnnunciator.STARTING
     is CastState.Casting -> ConsoleAnnunciator.ON_AIR

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -18,6 +18,11 @@ import { PairingServer } from './pairing/pairingServer'
 import { TrustStore, loadOrCreateDesktopId } from './pairing/trustStore'
 import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
+import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
+import { SoftcamRegistration, softcamDir } from './vc/registration'
+import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
+import { VirtualCameraController } from './vc/virtualCamera'
+import { ZfaudioInstaller, zfaudioDir } from './zfaudio/installer'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -43,6 +48,16 @@ let trust: TrustStore | null = null
 //   it opens and to a "fit window to video" request.
 let castActive = false
 let sessionInfoOverlayEnabled = false
+// The frameless preference (ADR-007 addendum): frame is fixed at window
+// creation, so changes recreate the window (bounds kept) — but NEVER while a
+// cast is live: the renderer owns the WebRTC pcs, and destroying it kills the
+// media (found live: the phone saw the cast drop on toggle). The pref applies
+// immediately when idle, else at the cast's end — the product's existing
+// "takes effect on next cast" semantics.
+let framelessEnabled = false
+/** What the LIVE window was created with; differs from the pref while deferred. */
+let windowIsFrameless = false
+let framelessRecreatePending = false
 let sessionInfoWindow: BrowserWindow | null = null
 let lastMobileState: MobileStateEvent | null = null
 let lastStreamSize: { width: number; height: number } | null = null
@@ -50,6 +65,33 @@ let lastStreamSize: { width: number; height: number } | null = null
 // mid-cast holds the latest session-info): 'disconnected' (Phase15) needs the
 // name after the socket is gone, and only a real session replacement clears it.
 let pairedMobileName: string | null = null
+// The virtual camera (ADR-007): created once the signaling server exists (it
+// owns the vc-status sender); null-checked in the signaling callbacks because
+// the server is constructed first.
+let virtualCamera: VirtualCameraController | null = null
+// The renderer's effective audio-routing state (mixer + cable presence) —
+// cached to answer the phone's queries and pushed on every change.
+let audioRouting: AudioRoutingReport | null = null
+// The always-on preference (ADR-007 addendum, batch B): the camera starts
+// with every cast by itself — capture-card-style, no per-cast ceremony.
+let vcAutoStart = false
+// The virtual audio installer (ADR-008): macOS-only — the one-time elevated
+// install of the Zero-Friction loopback devices. Null elsewhere.
+let zfaudio: ZfaudioInstaller | null = null
+// The last-pushed vc capability — a recreated window's fresh renderer missed
+// the live pushes, so the settings rows re-assert from this cache.
+let vcSupportedPush: boolean | null = null
+
+/** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
+function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { data, width, height } = raw as Record<string, unknown>
+  if (!(data instanceof Uint8Array)) return null
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
+  if ((width as number) <= 0 || (height as number) <= 0) return null
+  if (data.byteLength !== (width as number) * (height as number) * bytesPerPixel) return null
+  return { data, width: width as number, height: height as number }
+}
 function pushToRenderer(
   channel: string,
   payload:
@@ -58,7 +100,11 @@ function pushToRenderer(
     | MobileStateEvent
     | { pc: PcId; sdp: string }
     | { pc: PcId; candidate: unknown }
-): void {
+    | VcPumpCommand
+    | VcDesktopState
+    | AudioRoutingMode
+    | boolean
+  ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
   }
@@ -71,6 +117,12 @@ function pushToRenderer(
  * the current line into the freshly opened overlay.
  */
 function pushMobileState(state: MobileStateEvent): void {
+  // ADR-007 lifecycle: the camera dies with the cast — a dropped socket past
+  // recovery or a replaced session means media is dead (a returning mobile
+  // always re-offers), so the virtual camera must not outlive it.
+  if (state.state === 'waiting' || state.state === 'disconnected') {
+    virtualCamera?.onCastGone()
+  }
   lastMobileState = state.state === 'waiting' ? null : state
   if (state.state === 'connected') pairedMobileName = state.name
   pushToRenderer(IPC.pairing.mobileState, state)
@@ -184,9 +236,69 @@ app.whenReady().then(async () => {
     // offers or inspects SDP/candidates itself (desktop.md process split).
     onSdpOffer: (offer) => pushToRenderer(IPC.signaling.sdpOffer, offer),
     onIceCandidate: (event) => pushToRenderer(IPC.signaling.iceCandidate, event),
-    onSessionInfo: (info) => pushMobileState({ state: 'session-info', info })
+    onSessionInfo: (info) => pushMobileState({ state: 'session-info', info }),
+    // Virtual camera control (webrtc.md proto 2, ADR-007) — the controller
+    // owns the camera; the callbacks are async fire-and-forget by shape.
+    onVcQuery: () => void virtualCamera?.onVcQuery(),
+    onVcStart: () => void virtualCamera?.onVcStart(),
+    onVcStop: () => void virtualCamera?.onVcStop(),
+    // Audio output routing control (proto 2): the renderer owns the truth
+    // (mixer + persistence); the main process caches reports and relays.
+    onAudioRoutingQuery: () => {
+      const report = audioRouting
+      if (report !== null) signaling.sendAudioRoutingStatus(report)
+    },
+    onAudioRoutingSet: (mode) => pushToRenderer(IPC.audioRouting.set, mode)
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
+
+  // The virtual camera (ADR-007): one controller seam, per-platform backends —
+  // Windows = softcam (UAC registration), macOS = a Syphon publisher (helper
+  // process, no registration). Cast-scoped lifecycle: the camera dies with the
+  // cast (see the teardown hooks below — every exit path).
+  let vcBackend: VcCameraBackend
+  let vcRegistration: SoftcamRegistration
+  if (process.platform === 'darwin') {
+    const syphonDir = app.isPackaged ? join(process.resourcesPath, 'syphon') : join(app.getAppPath(), 'resources', 'syphon')
+    const syphon = loadSyphonBackend({ dir: syphonDir })
+    vcBackend = syphon
+    vcRegistration = syphonNoopRegistration(syphon.support === 'ok')
+  } else {
+    const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
+    vcBackend = loadSoftcam(softcamDirectory)
+    vcRegistration = new SoftcamRegistration({
+      installerPath: join(softcamDirectory, 'softcam_installer.exe'),
+      dllPath: join(softcamDirectory, 'softcam.dll')
+    })
+  }
+  virtualCamera = new VirtualCameraController({
+    backend: vcBackend,
+    registration: vcRegistration,
+    streamSize: () => lastStreamSize,
+    sendStatus: (status) => signaling.sendVcStatus(status),
+    onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
+  })
+  // Capability push for the renderer's own controls (settings section,
+  // placeholder button) — availability only, never cast state (ADR-007).
+  const vcController = virtualCamera
+  void vcController.ready().then(() => {
+    vcSupportedPush = vcController.available
+    pushToRenderer(IPC.vc.state, { supported: vcController.available })
+    pushToRenderer(IPC.vc.autoStart, vcAutoStart)
+  })
+
+  // The virtual audio installer (ADR-008): macOS-only, one-time. The
+  // capability push keys on the bundled driver being present — the renderer's
+  // Install row appears only where installing is possible.
+  if (process.platform === 'darwin') {
+    zfaudio = new ZfaudioInstaller({
+      dir: zfaudioDir(app.isPackaged, process.resourcesPath, app.getAppPath())
+    })
+  }
+  const pushVirtualAudioState = (): void => {
+    pushToRenderer(IPC.virtualAudio.state, { supported: zfaudio?.filesPresent === true })
+  }
+  pushVirtualAudioState()
 
   pairing = new PairingServer({
     port: signaling.actualPort,
@@ -265,6 +377,62 @@ app.whenReady().then(async () => {
     signaling.sendIceCandidate(message.pc, message.candidate)
   })
 
+  // The virtual camera's frame path (ADR-007): packed frames from the renderer
+  // pump → the backend camera. Fire-and-forget on purpose (30–120 Hz); the
+  // size check uses the active backend's pixel format (bgr24=3 / bgra=4).
+  ipcMain.on(IPC.vc.frame, (_event, raw) => {
+    const bytesPerPixel = (virtualCamera?.activePixelFormat ?? 'bgr24') === 'bgr24' ? 3 : 4
+    const frame = asVcFrame(raw, bytesPerPixel)
+    if (frame === null) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed vc frame — dropping')
+      return
+    }
+    virtualCamera?.onFrame(frame.data)
+  })
+  // The pump gave up (e.g. repeated WebGL context loss) — stop the camera
+  // honestly; the phone's toggle follows the vc-status push.
+  ipcMain.on(IPC.vc.pumpFailed, () => {
+    logger.warn(LOG_SCOPE, 'renderer vc pump failed — stopping the virtual camera')
+    virtualCamera?.onCastGone()
+  })
+  // The desktop's own toggle (receiver-environment control, ADR-007 addendum)
+  // — same controller the phone's toggle drives; both stay truthful via pushes.
+  ipcMain.handle(IPC.vc.toggle, () => {
+    virtualCamera?.toggle()
+  })
+  ipcMain.handle(IPC.vc.autoStart, (_event, raw) => {
+    if (typeof raw !== 'boolean') {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed vc auto-start state — dropping')
+      return
+    }
+    vcAutoStart = raw
+    pushToRenderer(IPC.vc.autoStart, raw)
+  })
+  // Audio routing: cache the renderer's reports and relay to the phone; a
+  // phone-initiated set arrives as a renderer push below (the mixer decides,
+  // and its next report flows back as audio-routing-status).
+  ipcMain.on(IPC.audioRouting.report, (_event, raw) => {
+    if (
+      typeof raw !== 'object' || raw === null ||
+      ((raw as { mode?: unknown }).mode !== 'speakers' && (raw as { mode?: unknown }).mode !== 'cable' && (raw as { mode?: unknown }).mode !== 'both') ||
+      typeof (raw as { cableAvailable?: unknown }).cableAvailable !== 'boolean'
+    ) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed audio-routing report — dropping')
+      return
+    }
+    const report = raw as AudioRoutingReport
+    const changed = audioRouting === null || audioRouting.mode !== report.mode || audioRouting.cableAvailable !== report.cableAvailable
+    audioRouting = report
+    if (changed) signaling.sendAudioRoutingStatus(report)
+  })
+  // The one-time elevated install (ADR-008): osascript puts the native admin
+  // password dialog on screen; the result is reported honestly — a declined
+  // prompt is a user decision, not an error.
+  ipcMain.handle(IPC.virtualAudio.install, async (): Promise<VirtualAudioInstallResult> => {
+    if (zfaudio === null) return 'unsupported'
+    return zfaudio.install()
+  })
+
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox
   // both funnel through setSessionInfoOverlayEnabled, so one state backs both.
@@ -273,6 +441,40 @@ app.whenReady().then(async () => {
       sessionInfoWindow.close()
     }
     sessionInfoWindow = null
+  }
+
+  /** Recreate the receiver in the new frame mode, keeping the user's bounds. */
+  const recreateMainWindow = (frameless: boolean): void => {
+    const bounds = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow.getBounds() : undefined
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      mainWindow.destroy() // a real teardown — bypasses the close-to-hide path
+    }
+    mainWindow = createMainWindow({ frameless, bounds })
+    windowIsFrameless = frameless
+    wireMainWindowLifecycle()
+    pushToRenderer(IPC.window.frameless, frameless)
+    // The fresh renderer lost every in-flight push — re-assert the live ones.
+    if (lastMobileState !== null) pushToRenderer(IPC.pairing.mobileState, lastMobileState)
+    virtualCamera?.reassertPump()
+    // The fresh renderer lost every in-flight push — re-assert the capability
+    // ones too (vc:state/autoStart were pushed once at ready; without this the
+    // settings rows vanished after a frameless toggle until restart).
+    if (vcSupportedPush !== null) pushToRenderer(IPC.vc.state, { supported: vcSupportedPush })
+    pushToRenderer(IPC.vc.autoStart, vcAutoStart)
+    pushVirtualAudioState()
+    logger.info(LOG_SCOPE, `receiver recreated ${frameless ? 'frameless' : 'framed'}`)
+  }
+
+  const applyFrameless = (enabled: boolean): void => {
+    framelessEnabled = enabled
+    pushToRenderer(IPC.window.frameless, enabled)
+    if (windowIsFrameless === enabled) return
+    if (castActive) {
+      framelessRecreatePending = true
+      logger.info(LOG_SCOPE, 'frameless change deferred — a live cast must not be interrupted (applies at cast end)')
+      return
+    }
+    recreateMainWindow(enabled)
   }
 
   const pushOverlayState = (enabled: boolean): void => {
@@ -313,6 +515,8 @@ app.whenReady().then(async () => {
       // 30+ min sessions: hold the display awake — sleep or a screensaver
       // firing mid-cast would stall or pollute the captured feed (Phase14).
       startCastKeepAwake()
+      // A cast went live — a no-signal-idling virtual camera resumes frames.
+      virtualCamera?.onCastActive()
       if (sessionInfoOverlayEnabled) {
         setSessionInfoOverlayEnabled(true)
       }
@@ -321,6 +525,13 @@ app.whenReady().then(async () => {
       stopCastKeepAwake()
       closeSessionInfoWindow()
       lastStreamSize = null
+      // The cast is over — the virtual camera dies with it (ADR-007).
+      virtualCamera?.onCastGone()
+      // A frameless change waited out the cast — now is safe to apply.
+      if (framelessRecreatePending) {
+        framelessRecreatePending = false
+        recreateMainWindow(framelessEnabled)
+      }
     }
   })
   // The stream's size (first metadata, every rotation, quality steps): the
@@ -335,10 +546,22 @@ app.whenReady().then(async () => {
     }
     lastStreamSize = size
     logger.info(LOG_SCOPE, 'stream size changed', { width: size.width, height: size.height })
+    // Always-on (batch B): a cast's first size is the moment the camera can
+    // be created — no per-cast toggle, exactly like a capture card coming up.
+    if (vcAutoStart && virtualCamera !== null && !virtualCamera.isActive) {
+      void virtualCamera.onVcStart()
+    }
   })
   // On-demand reshape (Phase14): after the user has sized the window for their
   // canvas, one click snaps it to the stream's aspect — the same geometry
   // math as before (current content area, stream aspect, work-area clamps).
+  ipcMain.handle(IPC.window.frameless, (_event, raw) => {
+    if (typeof raw !== 'boolean') {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed frameless state — dropping')
+      return
+    }
+    applyFrameless(raw)
+  })
   ipcMain.handle(IPC.window.fitToStream, () => {
     if (mainWindow === null || mainWindow.isDestroyed()) return
     if (!castActive || lastStreamSize === null) {
@@ -356,14 +579,16 @@ app.whenReady().then(async () => {
     setSessionInfoOverlayEnabled(raw)
   })
 
+  const wireMainWindowLifecycle = (): void => {
+    if (mainWindow === null) return
+    // The receiver window is the product: closing it ends the app.
+    mainWindow.on('closed', () => {
+      stopCastKeepAwake()
+      closeSessionInfoWindow()
+    })
+  }
   mainWindow = createMainWindow()
-  // The receiver window is the product: if it is closed mid-cast, the session
-  // is over even if the companion overlay is still open — release the blocker
-  // and the overlay with it (window-all-closed then quits as before).
-  mainWindow.on('closed', () => {
-    stopCastKeepAwake()
-    closeSessionInfoWindow()
-  })
+  wireMainWindowLifecycle()
 
   app.on('activate', () => {
     // macOS: re-create the window when the dock icon is clicked with no windows.
@@ -380,4 +605,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// App quit: delete the camera without protocol chatter — the socket may be
+// gone (softcam also cleans up on process death, but we never rely on it).
+app.on('will-quit', () => {
+  virtualCamera?.dispose()
 })

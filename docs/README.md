@@ -36,4 +36,4 @@
 
 ## Current documentation status
 
-Phases 0–14 are implemented (14 awaiting on-device review); Phases 15–18 are in progress or remaining; the persistent pairing session (reconnect without QR, [ADR-006](decisions/ADR-006-persistent-trust-sessions.md)) shipped 2026-10-30 as an unnumbered feature and awaits on-device review (see roadmap). `architecture/` describes the planned-and-evolving system; `features/*` and `development/*` describe implemented behavior and are added as phases complete.
+Phases 0–14 are implemented (14 awaiting on-device review); Phases 15–18 are in progress or remaining; the persistent pairing session (reconnect without QR, [ADR-006](decisions/ADR-006-persistent-trust-sessions.md)) shipped 2026-10-30 as an unnumbered feature and awaits on-device review (see roadmap). The virtual camera ([ADR-007](decisions/ADR-007-virtual-camera.md)) shipped 2026-10-30/31 as an unnumbered feature (Windows softcam + macOS Syphon) and awaits manual review. `architecture/` describes the planned-and-evolving system; `features/*` and `development/*` describe implemented behavior and are added as phases complete.

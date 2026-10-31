@@ -62,9 +62,12 @@ describe('handshake crypto (pairing.md / ADR-002)', () => {
 
   it('negotiates the highest mutually supported protocol version', () => {
     const hello = (protoMin: number, protoMax: number): HelloPayload => ({ ua: 'test', protoMin, protoMax })
+    // Desktop speaks 1..2 (proto 2 = the vc-* messages, ADR-007).
     expect(negotiateProtocol(hello(1, 1))).toBe(1)
-    expect(negotiateProtocol(hello(1, 9))).toBe(1)
-    expect(negotiateProtocol(hello(2, 9))).toBeNull()
+    expect(negotiateProtocol(hello(1, 9))).toBe(2)
+    expect(negotiateProtocol(hello(1, 2))).toBe(2)
+    expect(negotiateProtocol(hello(2, 9))).toBe(2)
+    expect(negotiateProtocol(hello(3, 9))).toBeNull()
     expect(negotiateProtocol(hello(0, 0))).toBeNull()
   })
 })

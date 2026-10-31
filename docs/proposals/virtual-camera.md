@@ -1,6 +1,8 @@
-# Proposal (DRAFT — not decided): Virtual Camera Output (desktop app)
+# Proposal: Virtual Camera Output (desktop app)
 
-**Status: draft for user review.** Not an ADR, not a roadmap phase. Shared context and the full evidence list are in [proposals/README.md](README.md); the optional phone-camera source that would make this a full "phone as webcam" story is a separate draft — [camera-source.md](camera-source.md).
+**Status: ACCEPTED 2026-10-30 — superseded by [ADR-007](../decisions/ADR-007-virtual-camera.md)** (tracking: issue #69), which records the user refinements that changed the draft: game-grade 60–120 fps output with **no cap**, **no preview while active** (MSTP + WebGL frame path, replacing the draft's rVFC+sharp sketch), the platform map (**Windows softcam · Linux PipeWire kernel-free · macOS Syphon**), and the WebSocket (not DataChannel) transport. Kept below as the original analysis.
+
+*Original draft (2026-10-28, pre-acceptance):* Shared context and the full evidence list are in [proposals/README.md](README.md); the optional phone-camera source that would make this a full "phone as webcam" story is a separate draft — [camera-source.md](camera-source.md).
 
 ## 1. What it is
 

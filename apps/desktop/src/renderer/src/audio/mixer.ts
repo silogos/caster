@@ -6,11 +6,27 @@
  * separate channels end to end (ADR-003): turning one down or muting it never
  * touches the other.
  *
+ * Audio output routing (issue #54, ADR-005 Phase D): the mix can leave the
+ * speakers. `speakers` is today's behavior; `cable` disconnects the gains
+ * from the speakers and plays the mix only into a second AudioContext whose
+ * sink is the virtual cable device (BlackHole); `both` does both. Gains stay
+ * shared, so volume/mute apply identically on every route. With no cable
+ * device known, a cable/both request is refused (logged) — the send branch
+ * is never built against a missing device, so "cable" can never degrade into
+ * an accidental return to the speakers.
+ *
  * The Web Audio and storage surfaces are injected, so the graph wiring, the
  * level math, and the persistence are unit-testable in plain Node (vitest
  * runs without Chromium; production wires Chromium's AudioContext and
  * localStorage).
  */
+
+import {
+  DEFAULT_ROUTING_MODE,
+  loadRoutingMode,
+  persistRoutingMode,
+  type RoutingMode
+} from './routing'
 
 export type MixerChannel = 'game' | 'mic'
 
@@ -32,12 +48,19 @@ export interface MediaStreamAudioSourceNodeLike {
   disconnect(): void
 }
 
+export interface MediaStreamAudioDestinationNodeLike {
+  readonly stream: unknown
+}
+
 export interface AudioContextLike {
   readonly destination: object
   readonly state: string
   createGain(): GainNodeLike
   createMediaStreamSource(stream: unknown): MediaStreamAudioSourceNodeLike
+  createMediaStreamDestination(): MediaStreamAudioDestinationNodeLike
   resume(): Promise<void>
+  setSinkId?(deviceId: string): Promise<void>
+  close?(): Promise<void>
 }
 
 /** localStorage satisfies this; injected so tests run in plain Node. */
@@ -53,8 +76,9 @@ export type MixerLogger = (
 ) => void
 
 export interface AudioMixerOptions {
-  createAudioContext: () => AudioContextLike
-  /** Persisted levels, restored on launch; omit for an in-memory mixer. */
+  /** Production passes `AudioContext`; the cable context is built with a sinkId. */
+  createAudioContext: (options?: { sinkId?: string }) => AudioContextLike
+  /** Persisted levels and routing mode, restored on launch; omit for an in-memory mixer. */
   storage?: MixerStorage
   log: MixerLogger
 }
@@ -87,10 +111,27 @@ export class AudioMixer {
     mic: { gain: null, source: null }
   }
   private context: AudioContextLike | null = null
+  private routingMode: RoutingMode = DEFAULT_ROUTING_MODE
+  private cableDeviceId: string | null = null
+  /** The mix tap in the main context; built once, fed by the gains on cable routes. */
+  private sendDestination: MediaStreamAudioDestinationNodeLike | null = null
+  private cableContext: AudioContextLike | null = null
+  private cableSource: MediaStreamAudioSourceNodeLike | null = null
+  /**
+   * Per-track cable routing (batch A, ADR-008): caster's own devices (from
+   * the ZeroFrictionAudio HAL plugin) — each channel gets its own cable
+   * context, so game audio and mic arrive as separate input devices. Null
+   * entries mean that channel falls back to the shared mix cable.
+   */
+  private perTrackDeviceIds: Partial<Record<MixerChannel, string>> = {}
+  private perTrackSend: Partial<Record<MixerChannel, MediaStreamAudioDestinationNodeLike>> = {}
+  private perTrackCableContexts: Partial<Record<MixerChannel, AudioContextLike>> = {}
+  private perTrackCableSources: Partial<Record<MixerChannel, MediaStreamAudioSourceNodeLike>> = {}
 
   constructor(options: AudioMixerOptions) {
     this.options = options
     this.levels = AudioMixer.loadLevels(options)
+    this.routingMode = loadRoutingMode(options.storage, options.log)
   }
 
   /** Current levels (UI init); a fresh copy — callers can't bypass the API. */
@@ -99,6 +140,10 @@ export class AudioMixer {
       game: { ...this.levels.game },
       mic: { ...this.levels.mic }
     }
+  }
+
+  getRoutingMode(): RoutingMode {
+    return this.routingMode
   }
 
   setVolume(channel: MixerChannel, volume: number): void {
@@ -111,6 +156,51 @@ export class AudioMixer {
     this.levels[channel] = { ...this.levels[channel], muted }
     this.applyGain(channel)
     this.persist()
+  }
+
+  /**
+   * Switch where the mix goes. `cableDeviceId` is resolved by the caller
+   * (audio/routing.ts device detection); omitting it keeps the last known
+   * device. A cable route without a device is refused with a log line —
+   * refusing beats silence and beats an accidental speaker return.
+   */
+  setRoutingMode(mode: RoutingMode, cableDeviceId?: string): void {
+    if (cableDeviceId !== undefined) this.cableDeviceId = cableDeviceId
+    const wantsCable = mode !== 'speakers'
+    if (wantsCable && this.cableDeviceId === null) {
+      this.options.log('warn', 'cable routing refused: no virtual cable device is known', { mode })
+      return
+    }
+    const previous = this.routingMode
+    this.routingMode = mode
+    try {
+      this.applyRouting()
+    } catch (error) {
+      this.routingMode = previous
+      this.options.log('error', 'routing change failed — staying on the previous route', {
+        mode,
+        error: String(error)
+      })
+      return
+    }
+    this.options.log('info', 'audio routing changed', { mode, cableDeviceId: this.cableDeviceId })
+    persistRoutingMode(this.options.storage, mode)
+  }
+
+  /**
+   * Per-track cable routing (batch A, ADR-008): assign each channel its own
+   * virtual cable device — "Zero-Friction Game Audio" and "Zero-Friction
+   * Mic" — so game audio and mic arrive as two independent input devices
+   * other apps can pick separately. Channels without a device fall back to
+   * the shared mix cable. Call with nulls to clear.
+   */
+  setPerTrackCableDevices(devices: Partial<Record<MixerChannel, string>>): void {
+    this.perTrackDeviceIds = devices
+    this.applyRouting() // rewire with the new per-track assignments
+    this.options.log('info', 'per-track cable devices updated', {
+      game: devices.game ?? '(shared)',
+      mic: devices.mic ?? '(shared)'
+    })
   }
 
   /**
@@ -129,6 +219,7 @@ export class AudioMixer {
     const source = context.createMediaStreamSource(stream)
     source.connect(gain)
     wiring.source = source
+    this.applyRouting()
   }
 
   /** Stop a channel's stream (mic toggled off, mobile gone). The stored level survives. */
@@ -141,6 +232,121 @@ export class AudioMixer {
   private applyGain(channel: MixerChannel): void {
     const gain = this.wiring[channel].gain
     if (gain !== null) gain.gain.value = effectiveGain(this.levels[channel])
+  }
+
+  /**
+   * Rewire the gains for the current mode. disconnect() drops a gain's
+   * outgoing edges (its inbound source stays), so each route change is a
+   * full reconnection of the outgoing side only.
+   */
+  private applyRouting(): void {
+    const context = this.context
+    if (context === null) return
+    const wantsCable = this.routingMode !== 'speakers'
+
+    // Per-track path (batch A): each channel with its own device gets a
+    // dedicated send + cable context — its audio arrives at its own input
+    // device, not the shared mix cable.
+    for (const channel of CHANNELS) {
+      const gain = this.wiring[channel].gain
+      if (gain === null) continue
+      const deviceId = this.perTrackDeviceIds[channel]
+      gain.disconnect()
+      if (this.routingMode !== 'cable') gain.connect(context.destination)
+
+      if (wantsCable && deviceId !== undefined) {
+        // Per-track cable: send → own context with its device as sink
+        if (this.perTrackSend[channel] === undefined) {
+          this.perTrackSend[channel] = context.createMediaStreamDestination()
+        }
+        gain.connect(this.perTrackSend[channel]!)
+        this.applyPerTrackCableBridge(channel, deviceId)
+      } else if (wantsCable) {
+        // Shared cable (fallback / no per-track device for this channel)
+        if (this.sendDestination === null) {
+          this.sendDestination = context.createMediaStreamDestination()
+        }
+        gain.connect(this.sendDestination)
+      }
+    }
+
+    // Clean up per-track contexts whose channels lost their devices
+    for (const channel of CHANNELS) {
+      if (this.perTrackCableContexts[channel] !== undefined && this.perTrackDeviceIds[channel] === undefined) {
+        this.perTrackCableContexts[channel]?.close?.()
+        delete this.perTrackCableContexts[channel]
+        delete this.perTrackCableSources[channel]
+        delete this.perTrackSend[channel]
+      }
+    }
+
+    this.applyCableBridge(wantsCable)
+  }
+
+  /** Per-channel cable context: its own AudioContext with the track device as sink. */
+  private applyPerTrackCableBridge(channel: MixerChannel, deviceId: string): void {
+    const send = this.perTrackSend[channel]
+    if (send === undefined) return
+
+    if (this.perTrackCableContexts[channel] === undefined) {
+      try {
+        this.perTrackCableContexts[channel] = this.options.createAudioContext({ sinkId: deviceId })
+      } catch (error) {
+        this.options.log('error', `creating the ${channel} cable AudioContext failed`, {
+          error: String(error)
+        })
+        return
+      }
+    }
+    const cableContext = this.perTrackCableContexts[channel]!
+    if (cableContext.state !== 'running') {
+      cableContext.resume().catch((error: unknown) =>
+        this.options.log('warn', `${channel} cable AudioContext resume failed`, { error: String(error) })
+      )
+    }
+    if (this.perTrackCableSources[channel] === undefined) {
+      this.perTrackCableSources[channel] = cableContext.createMediaStreamSource(send.stream)
+      this.perTrackCableSources[channel]!.connect(cableContext.destination)
+    }
+  }
+
+  /**
+   * The cable side: a second AudioContext whose sink is the cable device,
+   * playing the main context's send tap. Built only when a device is known —
+   * a missing sinkId would fall back to the system default, which is the
+   * speakers (the exact collision this feature exists to avoid).
+   */
+  private applyCableBridge(wantsCable: boolean): void {
+    if (!wantsCable || this.cableDeviceId === null || this.sendDestination === null) {
+      if (this.cableContext !== null) {
+        this.cableContext.close?.().catch((error: unknown) =>
+          this.options.log('warn', 'closing the cable AudioContext failed', { error: String(error) })
+        )
+        this.cableContext = null
+        this.cableSource = null
+      }
+      return
+    }
+    if (this.cableContext === null) {
+      try {
+        this.cableContext = this.options.createAudioContext({ sinkId: this.cableDeviceId })
+      } catch (error) {
+        this.options.log('error', 'creating the cable AudioContext failed — no cable audio', {
+          error: String(error)
+        })
+        this.cableContext = null
+        return
+      }
+    }
+    if (this.cableContext.state !== 'running') {
+      this.cableContext.resume().catch((error: unknown) =>
+        this.options.log('warn', 'cable AudioContext resume failed', { error: String(error) })
+      )
+    }
+    if (this.cableSource === null) {
+      this.cableSource = this.cableContext.createMediaStreamSource(this.sendDestination.stream)
+      this.cableSource.connect(this.cableContext.destination)
+    }
   }
 
   private ensureContext(): AudioContextLike | null {
@@ -172,7 +378,6 @@ export class AudioMixer {
     const wiring = this.wiring[channel]
     if (wiring.gain === null) {
       const gain = context.createGain()
-      gain.connect(context.destination)
       wiring.gain = gain
     }
     return wiring.gain

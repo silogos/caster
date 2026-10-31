@@ -35,8 +35,35 @@
            the only way trust ends (bye 'forget'). -->
       <div class="no-input" id="no-input-stage" hidden>
         <h2 class="no-input-heading" id="no-input-heading">No input video</h2>
-        <p class="no-input-subline" id="no-input-subline"></p>
-        <button class="button no-input-disconnect" id="no-input-disconnect" type="button">Disconnect</button>
+        <!-- The stage's controls are the cast overlay's own structure
+             (class and all): status chip left, controls right — hover
+             reveals them, cursor anywhere in the window. The subline lives
+             in the chip now (overlay-language status); the center keeps only
+             the monitor heading. Receiver/environment controls stay
+             reachable while there is no signal (ADR-007 addendum) — the
+             mixer and window preferences do not depend on a live stream. -->
+        <div class="cast-overlay no-input-overlay">
+          <p class="cast-status" id="no-input-status"></p>
+          <div class="no-input-actions">
+            <button class="overlay-button" id="no-input-settings" type="button">Settings</button>
+            <button class="overlay-button" id="no-input-disconnect" type="button">Disconnect</button>
+          </div>
+        </div>
+      </div>
+      <!-- The virtual camera's placeholder (ADR-007): while the camera
+           publishes there is no preview (by design — the phone asked for
+           exactly that); this stage stands in for the video, in the no-input
+           stage's visual language. The frame pump behind it reads decoded
+           frames directly (MediaStreamTrackProcessor), so the window may be
+           minimized with the camera still publishing. The hover overlay (and
+           its Settings/mixer) stays reachable. -->
+      <div class="vc-stage" id="vc-stage" hidden>
+        <h2 class="vc-heading" id="vc-heading">Virtual camera active</h2>
+        <p class="vc-subline" id="vc-subline"></p>
+        <p class="vc-status" id="vc-status"></p>
+        <!-- The desktop's own off switch (receiver-environment control,
+             ADR-007 addendum); between casts the stage's still says so. -->
+        <button class="button vc-turn-off" id="vc-turn-off" type="button">Turn off virtual camera</button>
       </div>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
@@ -85,6 +112,29 @@
           </div>
         </div>
         <p class="modal-note">Volume is this computer's playback control — cast quality is set on the phone.</p>
+        <!-- Issue #54 — audio output routing: a receiver/environment control.
+             "Cable" sends the mix to a virtual cable device (BlackHole) so
+             recording apps can capture it while the speakers stay silent;
+             "Both" monitors locally at the same time. -->
+        <h3 class="modal-section-title">Audio output</h3>
+        <div class="window-row">
+          <label class="window-label" for="audio-output">Send audio to</label>
+          <select id="audio-output" class="window-select">
+            <option value="speakers" data-route="speakers">Speakers</option>
+            <option value="cable" data-route="cable">Virtual cable only (silent speakers)</option>
+            <option value="both" data-route="both">Speakers + virtual cable</option>
+          </select>
+        </div>
+        <p class="modal-note" id="audio-output-note"></p>
+        <!-- ADR-008 install UX: the Zero-Friction loopback devices as a
+             one-click install (macOS, once) — the last capture-card ceremony.
+             Shown only when this desktop can install and the devices are
+             missing; hidden once they exist. -->
+        <div class="window-row" id="virtual-audio-row" hidden>
+          <label class="window-label" for="virtual-audio-install">Virtual audio devices</label>
+          <button class="mixer-button" id="virtual-audio-install" type="button">Install</button>
+        </div>
+        <p class="modal-note" id="virtual-audio-note" hidden></p>
         <!-- Phase14 window controls — receiver window behavior, the desktop's
              own domain (overview.md): the optional session-info window lives
              OUTSIDE the receiver, so window capture (e.g. OBS) records a pure
@@ -100,7 +150,30 @@
           <label class="window-label" for="fit-window">Window should match the video?</label>
           <button class="mixer-button" id="fit-window" type="button">Match window to video</button>
         </div>
+        <!-- Frameless (ADR-007 addendum): a pure video surface — no title bar
+             or traffic lights, square corners; drag anywhere to move. The
+             window is recreated on toggle (its shape and position are kept). -->
+        <div class="window-row">
+          <label class="window-label" for="frameless">Frameless window</label>
+          <input type="checkbox" id="frameless" />
+        </div>
+        <p class="modal-note">While casting, the change applies when the cast ends — a live cast is never interrupted for a window change.</p>
         <p class="modal-note">The info window rides outside the receiver, keeping a captured feed clean.</p>
+        <!-- The desktop's virtual camera toggle (ADR-007 addendum): a
+             receiver-output control — publish the received feed for OBS/VJ
+             apps. Hidden when this desktop can't (non-supported platforms).
+             The phone keeps its own toggle; both drive the same state. -->
+        <div class="window-row" id="vc-settings-row" hidden>
+          <label class="window-label" for="vc-toggle">Virtual camera</label>
+          <input type="checkbox" id="vc-toggle" />
+        </div>
+        <!-- Always-on (batch B): capture-card-style — the camera starts with
+             every cast by itself and idles on "No input video" between them. -->
+        <div class="window-row" id="vc-autostart-row" hidden>
+          <label class="window-label" for="vc-autostart">Start with every cast</label>
+          <input type="checkbox" id="vc-autostart" />
+        </div>
+        <p class="modal-note" id="vc-settings-note">Publishes the cast as a camera (Windows) or Syphon source (macOS) for OBS and calls. It stays on between casts — the feed shows “No input video” while none flows.</p>
       </div>
     </div>
     <script type="module" src="./src/main.ts"></script>

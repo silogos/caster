@@ -2,10 +2,14 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { DesktopApi } from '../shared/ipc'
 import type {
+  AudioRoutingMode,
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
-  SignalingSdpMessage
+  SignalingSdpMessage,
+  VcDesktopState,
+  VcPumpCommand,
+  VirtualAudioState
 } from '../shared/types'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -43,7 +47,34 @@ const desktopApi: DesktopApi = {
   onSessionInfoOverlayChanged: (listener) => subscribe<boolean>(IPC.window.sessionInfoOverlay, listener),
   fitWindowToStream: () => {
     ipcRenderer.invoke(IPC.window.fitToStream)
-  }
+  },
+  setFrameless: (enabled) => {
+    ipcRenderer.invoke(IPC.window.frameless, enabled)
+  },
+  onFramelessChanged: (listener) => subscribe<boolean>(IPC.window.frameless, listener),
+  onVcPump: (listener) => subscribe<VcPumpCommand>(IPC.vc.pump, listener),
+  sendVcFrame: (data, width, height) => {
+    // Plain send (fire-and-forget): frames are 30–120 Hz — invoke()'s reply
+    // round-trips would only queue promises. Structured clone copies the bytes.
+    ipcRenderer.send(IPC.vc.frame, { data, width, height })
+  },
+  reportVcPumpFailed: () => {
+    ipcRenderer.send(IPC.vc.pumpFailed)
+  },
+  onVcState: (listener) => subscribe<VcDesktopState>(IPC.vc.state, listener),
+  toggleVirtualCamera: () => {
+    ipcRenderer.invoke(IPC.vc.toggle)
+  },
+  setVcAutoStart: (enabled) => {
+    ipcRenderer.invoke(IPC.vc.autoStart, enabled)
+  },
+  onVcAutoStartChanged: (listener) => subscribe<boolean>(IPC.vc.autoStart, listener),
+  reportAudioRouting: (report) => {
+    ipcRenderer.send(IPC.audioRouting.report, report)
+  },
+  onAudioRoutingSet: (listener) => subscribe<AudioRoutingMode>(IPC.audioRouting.set, listener),
+  onVirtualAudioState: (listener) => subscribe<VirtualAudioState>(IPC.virtualAudio.state, listener),
+  installVirtualAudio: () => ipcRenderer.invoke(IPC.virtualAudio.install)
 }
 
 contextBridge.exposeInMainWorld('desktopApi', desktopApi)

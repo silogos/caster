@@ -85,6 +85,19 @@ class SignalingClient(
         /** Fired on every successful auth — the initial one and every re-auth. */
         data class Authorized(val desktopName: String, val proto: Int, val trust: TrustGrant?) : Event
 
+        /**
+         * The desktop's virtual-camera state (webrtc.md proto 2, ADR-007) —
+         * pushed as the vc-query reply and on every change. Only a proto-2
+         * desktop ever sends it.
+         */
+        data class VcStatusEvent(val status: VcStatus) : Event
+
+        /**
+         * The desktop's audio output routing state (proto 2) — where its mix
+         * plays. The query reply and every change; drives the phone's mirror.
+         */
+        data class AudioRoutingStatusEvent(val status: AudioRoutingStatus) : Event
+
         /** An authorized connection dropped; a reconnect is scheduled after `delayMs`. */
         data class Reconnecting(val delayMs: Long) : Event
 
@@ -212,6 +225,35 @@ class SignalingClient(
     /** Display-only summary for the desktop status line (webrtc.md). */
     fun sendSessionInfo(profile: String, width: Int, height: Int, fps: Int, gameAudio: Boolean, mic: Boolean) {
         sendEnvelope(Envelope.TYPE_SESSION_INFO, Payloads.sessionInfo(profile, width, height, fps, gameAudio, mic))
+    }
+
+    // ---- Virtual camera control (proto 2, ADR-007): the phone's toggle ----
+
+    /** Ask the desktop to re-send its vc-status (cast start, every re-auth). */
+    fun sendVcQuery() {
+        sendEnvelope(Envelope.TYPE_VC_QUERY, Payloads.vcCommand())
+    }
+
+    /** Turn the desktop's virtual camera on (registers on first use). */
+    fun sendVcStart() {
+        sendEnvelope(Envelope.TYPE_VC_START, Payloads.vcCommand())
+    }
+
+    /** Turn the desktop's virtual camera off. */
+    fun sendVcStop() {
+        sendEnvelope(Envelope.TYPE_VC_STOP, Payloads.vcCommand())
+    }
+
+    // ---- Audio output routing control (proto 2): the phone's mirror of the desktop setting ----
+
+    /** Ask the desktop to re-send its audio-routing status (cast start, re-auth). */
+    fun sendAudioRoutingQuery() {
+        sendEnvelope(Envelope.TYPE_AUDIO_ROUTING_QUERY, Payloads.vcCommand())
+    }
+
+    /** Pick the desktop's output route; the next status carries the effective mode. */
+    fun sendAudioRoutingSet(mode: String) {
+        sendEnvelope(Envelope.TYPE_AUDIO_ROUTING_SET, Payloads.audioRoutingSet(mode))
     }
 
     // ---- Connection lifecycle ----
@@ -360,6 +402,27 @@ class SignalingClient(
             Envelope.TYPE_SESSION_INFO ->
                 // m→d only (webrtc.md) — the desktop never sends it.
                 Log.w(TAG, "unexpected session-info from desktop — ignoring")
+            Envelope.TYPE_VC_STATUS -> {
+                val status = Payloads.vcStatus(envelope)
+                if (status == null) {
+                    Log.w(TAG, "malformed vc-status — ignoring")
+                } else {
+                    emit(Event.VcStatusEvent(status))
+                }
+            }
+            Envelope.TYPE_VC_QUERY, Envelope.TYPE_VC_START, Envelope.TYPE_VC_STOP ->
+                // m→d only (webrtc.md) — the desktop never sends them.
+                Log.w(TAG, "unexpected ${envelope.type} from desktop — ignoring")
+            Envelope.TYPE_AUDIO_ROUTING_STATUS -> {
+                val status = Payloads.audioRoutingStatus(envelope)
+                if (status == null) {
+                    Log.w(TAG, "malformed audio-routing-status — ignoring")
+                } else {
+                    emit(Event.AudioRoutingStatusEvent(status))
+                }
+            }
+            Envelope.TYPE_AUDIO_ROUTING_QUERY, Envelope.TYPE_AUDIO_ROUTING_SET ->
+                Log.w(TAG, "unexpected ${envelope.type} from desktop — ignoring")
             Envelope.TYPE_BYE -> {
                 val reason = Payloads.byeReason(envelope)
                 Log.i(TAG, "bye from desktop: ${reason ?: "no reason"}")

@@ -7,7 +7,7 @@ Draft feature directions under discussion. **Nothing here is decided, nothing is
 | Draft | One line |
 |---|---|
 | [web-receiver.md](web-receiver.md) | Zero-install browser receiver on the LAN, served by the phone |
-| [virtual-camera.md](virtual-camera.md) | Desktop app re-publishes the cast as a virtual webcam (Windows first) |
+| [virtual-camera.md](virtual-camera.md) | **Accepted 2026-10-30** → [ADR-007](../decisions/ADR-007-virtual-camera.md), shipped on Windows (issue #69); Linux (PipeWire) and macOS (Syphon) are follow-ups |
 | [camera-source.md](camera-source.md) | *(optional)* Phone camera as an alternative capture source |
 
 Written 2026-10-28 after a teardown of a shipping competitor product ("the competitor": marketing site, browser-receiver JS, Android APK, and Windows desktop app — see [Sources](#sources)). The single biggest takeaway: **the competitor's desktop app is Electron, same as caster**, so its virtual-camera recipe transfers directly.
@@ -44,7 +44,7 @@ Caster today (Phases 0–18) vs the analyzed competitor (v1.0.0):
 ## Decision order (from the drafts)
 
 1. Web receiver fork: LAN-only phone-served page vs cloud signaling — blocks everything receiver-side ([web-receiver.md §2](web-receiver.md)).
-2. Virtual camera scope: screen-as-camera only vs also the camera source — ([virtual-camera.md](virtual-camera.md) / [camera-source.md](camera-source.md)).
+2. ~~Virtual camera scope~~ — **decided 2026-10-30**: accepted for Windows as [ADR-007](../decisions/ADR-007-virtual-camera.md) (screen-as-camera scope; the optional [camera-source.md](camera-source.md) stays a separate draft), with the platform map Windows-softcam / Linux-PipeWire / macOS-Syphon.
 3. Sequencing vs the remaining roadmap (Phase 15 reliability matrices, Phase 16/18 performance) — the user's call; these drafts do not preempt them.
 
 ## Sources
