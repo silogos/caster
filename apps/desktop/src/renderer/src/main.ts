@@ -363,7 +363,7 @@ const CABLE_GUIDANCE =
 const VBCABLE_GUIDANCE =
   'For send-only audio, install VB-Cable (vb-audio.com/cable/), then restart the app.'
 const LINUX_CABLE_PENDING =
-  'Send-only audio needs the PipeWire virtual devices (in development) — a third-party cable works if you have one.'
+  'Send-only audio uses the Zero-Friction devices — they are created automatically at startup (needs PipeWire/PulseAudio: pactl).'
 
 let cableDeviceId: string | null = null
 let labelsUnlocked = false
