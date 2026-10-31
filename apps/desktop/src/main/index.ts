@@ -21,6 +21,7 @@ import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling
 import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
 import { SoftcamRegistration, softcamDir } from './vc/registration'
 import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
+import { loadPipewireBackend, pipewireNoopRegistration } from './vc/pipewirePublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
 import { ZfaudioInstaller, zfaudioDir } from './zfaudio/installer'
 import { logger } from './log'
@@ -254,8 +255,9 @@ app.whenReady().then(async () => {
 
   // The virtual camera (ADR-007): one controller seam, per-platform backends —
   // Windows = softcam (UAC registration), macOS = a Syphon publisher (helper
-  // process, no registration). Cast-scoped lifecycle: the camera dies with the
-  // cast (see the teardown hooks below — every exit path).
+  // process, no registration), Linux = a PipeWire camera node via the system
+  // gst-launch-1.0 (no vendored helper, no registration). Cast-scoped
+  // lifecycle: the camera dies with the cast (see the teardown hooks below).
   let vcBackend: VcCameraBackend
   let vcRegistration: SoftcamRegistration
   if (process.platform === 'darwin') {
@@ -263,6 +265,10 @@ app.whenReady().then(async () => {
     const syphon = loadSyphonBackend({ dir: syphonDir })
     vcBackend = syphon
     vcRegistration = syphonNoopRegistration(syphon.support === 'ok')
+  } else if (process.platform === 'linux') {
+    const pipewire = loadPipewireBackend()
+    vcBackend = pipewire
+    vcRegistration = pipewireNoopRegistration(pipewire.support === 'ok')
   } else {
     const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
     vcBackend = loadSoftcam(softcamDirectory)
