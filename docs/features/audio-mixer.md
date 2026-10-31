@@ -71,3 +71,7 @@ The mixer lives in the receiver's **settings modal** (review-time restructure af
 - *Drift check over a long session* ([audio.md](../architecture/audio.md) predicts no drift-accumulation problem — per-stream pull, Chromium resampling into the output clock): a 30+ min session with both streams while watching/leveling (Phase15's matrix is the formal record; Phase9's is the first pass).
 
 Phase8's pending audible mic listen now doubles as this phase's listen: the mic stream that was live-but-silent in the quiet room will be routed through the mic gain node from the start.
+
+## Routing + per-track live verification (2026-11-01)
+
+The issue #54 acceptance listen, on the user's machine, with the ADR-008 devices installed: **cast live, routing Cable → both "Zero-Friction Game Audio" and "Zero-Friction Mic" verified working as two independent inputs** — the consumer app picks each separately, exactly the capture-card shape (and beyond it: a physical card carries one mix, not two pickable tracks). This closes #54's "live verification with OBS" item and the per-track walkthrough pending on #69; desktop suite 220/220 at the time (9 installer + routing tests added by the series).
