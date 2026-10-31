@@ -115,3 +115,11 @@ The user's framing: with Window Capture they had to crop the letterboxed window 
 ### The recovered phase-19 branch (2026-10-31): prior art found and its audio half ported
 
 The user remembered an audio switch that "disappeared" — investigation found the first virtual-camera effort (local branch `phase-19/virtual-camera`, Oct 2026, never merged; its ADR-005 slot was later renumbered on main). That branch had already investigated the macOS camera paths independently (DAL plugins rejected on macOS 26, free CMIO path closed — corroborating this ADR's platform map) and shipped **audio output routing** (speakers / cable / both via `AudioContext.setSinkId` → BlackHole, refusing a cable route with no device — issue #54). Nothing was ever removed from a released app; the work was stranded. The routing feature is ported onto this branch (commit message names the original); its per-track-routing follow-up (game audio and mic as separate cables) is exactly the "virtual mic/sound" direction discussed for a future batch.
+
+
+### Batch B — "the device just exists" (2026-10-31, the capture-card north star)
+
+The user framed the product goal: *the caster experience should feel like using a hardware capture card* — devices that are simply there, no ceremony. Two changes:
+
+- **Always-on preference** (Settings → Virtual camera → "Start with every cast", default off): the camera starts itself with each cast's first stream size — no per-cast toggle — and idles on the no-input still between casts. Persisted like the other receiver prefs (renderer localStorage → main via `vc:auto-start`); the phone's card stays truthful through the same vc-status pushes.
+- **softcam adopts idle-no-signal** — this **reverses** the earlier "dies with the cast (a stale OS device entry is worse)" judgment: a device that honestly shows "No input video" between casts is more capture-card-like than one that appears and disappears from the OS device list. The controller already had the machinery (`idleNoSignal`); only the Windows flag flips. Windows-rig verification of the still in the OS camera list remains on the pending matrix.

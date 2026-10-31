@@ -150,6 +150,12 @@
           <label class="window-label" for="vc-toggle">Virtual camera</label>
           <input type="checkbox" id="vc-toggle" />
         </div>
+        <!-- Always-on (batch B): capture-card-style — the camera starts with
+             every cast by itself and idles on "No input video" between them. -->
+        <div class="window-row" id="vc-autostart-row" hidden>
+          <label class="window-label" for="vc-autostart">Start with every cast</label>
+          <input type="checkbox" id="vc-autostart" />
+        </div>
         <p class="modal-note" id="vc-settings-note">Publishes the cast as a camera (Windows) or Syphon source (macOS) for OBS and calls. It stays on between casts — the feed shows “No input video” while none flows.</p>
       </div>
     </div>

@@ -79,7 +79,9 @@ export const IPC = {
     /** Push: whether this desktop can do the virtual camera (the settings section's visibility). */
     state: 'vc:state',
     /** Renderer → main: the desktop's own toggle (receiver-environment control, ADR-007 addendum). */
-    toggle: 'vc:toggle'
+    toggle: 'vc:toggle',
+    /** Renderer → main / push: the always-on preference — the camera follows the app, capture-card-style. */
+    autoStart: 'vc:auto-start'
   },
   audioRouting: {
     /** Renderer → main: the effective routing state changed (mode + cable presence). */
@@ -128,6 +130,10 @@ export interface DesktopApi {
   onVcState(listener: (state: VcDesktopState) => void): () => void
   /** The desktop's own virtual camera toggle (receiver-environment control). */
   toggleVirtualCamera(): void
+  /** Sets the always-on preference (camera starts with every cast, capture-card-style). */
+  setVcAutoStart(enabled: boolean): void
+  /** Subscribes to the always-on preference's effective state; returns an unsubscribe function. */
+  onVcAutoStartChanged(listener: (enabled: boolean) => void): () => void
   /** Renderer → main: the effective audio routing state changed (mode + cable presence). */
   reportAudioRouting(report: AudioRoutingReport): void
   /** Subscribes to routing sets arriving from the phone; returns an unsubscribe function. */

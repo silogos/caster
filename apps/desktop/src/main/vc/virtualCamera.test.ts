@@ -248,7 +248,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     expect(pumps.at(-1)).toEqual({ mode: 'off' })
   })
 
-  it('a non-idle backend (Windows softcam) still dies with the cast', async () => {
+  it('a non-idle backend (hypothetical) still dies with the cast — both shapes are supported', async () => {
     const { controller, pumps, backend } = makeController()
     await controller.onVcStart()
     controller.onCastGone()

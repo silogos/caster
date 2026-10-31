@@ -38,10 +38,9 @@ export interface VcCameraBackend {
   /** What the renderer must produce for sendFrame. */
   pixelFormat: VcPixelFormat
   /**
-   * True when the camera is a long-lived publisher that should stay up (with a
-   * "No input video" still) while the cast is gone — Syphon's shape, where a
-   * vanished server leaves OBS frozen on the last frame. softcam's camera
-   * instead dies with the cast (the OS device list must not go stale).
+   * True when the camera is a long-lived publisher that stays up (with a
+   * "No input video" still) while the cast is gone — the capture-card shape:
+   * devices don't vanish when idle, they say they have no signal.
    */
   idleNoSignal: boolean
   /** Null when the platform is unsupported, files are missing, or creation failed. */
@@ -91,7 +90,11 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
     return {
       support: 'ok',
       pixelFormat: 'bgr24',
-      idleNoSignal: false,
+      // Capture-card north star (ADR-007 addendum, batch B): the camera
+      // STAYS present between casts, publishing the "No input video" still —
+      // a device that comes and goes is worse than one that honestly says it
+      // has no signal. (This reverses the earlier dies-with-cast choice.)
+      idleNoSignal: true,
       createCamera(width, height) {
         const handle = exports.scCreateCamera(width, height, SOFTCAM_FRAMERATE_UNPACED)
         if (handle === null || handle === undefined) {

@@ -64,6 +64,10 @@ const desktopApi: DesktopApi = {
   toggleVirtualCamera: () => {
     ipcRenderer.invoke(IPC.vc.toggle)
   },
+  setVcAutoStart: (enabled) => {
+    ipcRenderer.invoke(IPC.vc.autoStart, enabled)
+  },
+  onVcAutoStartChanged: (listener) => subscribe<boolean>(IPC.vc.autoStart, listener),
   reportAudioRouting: (report) => {
     ipcRenderer.send(IPC.audioRouting.report, report)
   },

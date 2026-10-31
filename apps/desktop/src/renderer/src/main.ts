@@ -51,6 +51,8 @@ const vcTurnOffEl = document.getElementById('vc-turn-off') as HTMLButtonElement
 // The desktop's own toggle (ADR-007 addendum): the settings modal's row.
 const vcSettingsRowEl = document.getElementById('vc-settings-row') as HTMLDivElement
 const vcToggleEl = document.getElementById('vc-toggle') as HTMLInputElement
+const vcAutoStartRowEl = document.getElementById('vc-autostart-row') as HTMLDivElement
+const vcAutoStartEl = document.getElementById('vc-autostart') as HTMLInputElement
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -588,6 +590,7 @@ let vcPublished = false
 
 function renderVcControls(): void {
   vcSettingsRowEl.hidden = !vcSupported
+  vcAutoStartRowEl.hidden = !vcSupported
   vcToggleEl.checked = vcPublished
   vcTurnOffEl.hidden = !vcPublished
 }
@@ -625,6 +628,20 @@ const unsubscribeVcPump = window.desktopApi.onVcPump((command) => {
 
 vcToggleEl.addEventListener('change', () => window.desktopApi.toggleVirtualCamera())
 vcTurnOffEl.addEventListener('click', () => window.desktopApi.toggleVirtualCamera())
+
+// Always-on (batch B): persisted like the other receiver prefs; the pushed
+// effective state keeps the checkbox honest after recreates.
+const VC_AUTOSTART_KEY = 'zfc.vc-autostart.v1'
+vcAutoStartEl.checked = window.localStorage.getItem(VC_AUTOSTART_KEY) === 'true'
+window.desktopApi.setVcAutoStart(vcAutoStartEl.checked)
+vcAutoStartEl.addEventListener('change', () => {
+  window.localStorage.setItem(VC_AUTOSTART_KEY, String(vcAutoStartEl.checked))
+  window.desktopApi.setVcAutoStart(vcAutoStartEl.checked)
+})
+const unsubscribeVcAutoStart = window.desktopApi.onVcAutoStartChanged((enabled) => {
+  vcAutoStartEl.checked = enabled
+  window.localStorage.setItem(VC_AUTOSTART_KEY, String(enabled))
+})
 
 // The placeholder's status line follows session-info while publishing.
 const unsubscribeVcStatusLine = window.desktopApi.onMobileStateChanged((state) => {
@@ -701,6 +718,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeVcPump()
   unsubscribeVcStatusLine()
   unsubscribeVcState()
+  unsubscribeVcAutoStart()
   unsubscribeAudioRoutingSet()
   unsubscribeFrameless()
 })

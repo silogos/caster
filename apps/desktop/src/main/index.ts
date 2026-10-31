@@ -72,6 +72,9 @@ let virtualCamera: VirtualCameraController | null = null
 // The renderer's effective audio-routing state (mixer + cable presence) —
 // cached to answer the phone's queries and pushed on every change.
 let audioRouting: AudioRoutingReport | null = null
+// The always-on preference (ADR-007 addendum, batch B): the camera starts
+// with every cast by itself — capture-card-style, no per-cast ceremony.
+let vcAutoStart = false
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
 function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
@@ -277,6 +280,7 @@ app.whenReady().then(async () => {
   const vcController = virtualCamera
   void vcController.ready().then(() => {
     pushToRenderer(IPC.vc.state, { supported: vcController.available })
+    pushToRenderer(IPC.vc.autoStart, vcAutoStart)
   })
 
   pairing = new PairingServer({
@@ -378,6 +382,14 @@ app.whenReady().then(async () => {
   // — same controller the phone's toggle drives; both stay truthful via pushes.
   ipcMain.handle(IPC.vc.toggle, () => {
     virtualCamera?.toggle()
+  })
+  ipcMain.handle(IPC.vc.autoStart, (_event, raw) => {
+    if (typeof raw !== 'boolean') {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed vc auto-start state — dropping')
+      return
+    }
+    vcAutoStart = raw
+    pushToRenderer(IPC.vc.autoStart, raw)
   })
   // Audio routing: cache the renderer's reports and relay to the phone; a
   // phone-initiated set arrives as a renderer push below (the mixer decides,
@@ -512,6 +524,11 @@ app.whenReady().then(async () => {
     }
     lastStreamSize = size
     logger.info(LOG_SCOPE, 'stream size changed', { width: size.width, height: size.height })
+    // Always-on (batch B): a cast's first size is the moment the camera can
+    // be created — no per-cast toggle, exactly like a capture card coming up.
+    if (vcAutoStart && virtualCamera !== null && !virtualCamera.isActive) {
+      void virtualCamera.onVcStart()
+    }
   })
   // On-demand reshape (Phase14): after the user has sized the window for their
   // canvas, one click snaps it to the stream's aspect — the same geometry
