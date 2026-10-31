@@ -158,18 +158,36 @@ body.frameless .modal {
   color: var(--fg-muted);
 }
 
-/* The no-input stage's buttons — hover-revealed like the cast overlay's
-   controls: the stage is clean by default, controls appear on approach. */
+/* The no-input stage's buttons — hover-revealed at the TOP of the window,
+   the same position and interaction language as the cast overlay's controls
+   (status left, settings right → here: disconnect left, settings right).
+   Fixed positioning lifts them out of the centered stage flow. */
+.no-input-disconnect {
+  position: fixed;
+  top: 16px;
+  left: 20px;
+  margin: 0;
+}
+
+.no-input-settings {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  margin: 0;
+}
+
 .no-input-disconnect,
 .no-input-settings {
-  margin-top: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.no-input:hover .no-input-disconnect,
-.no-input:hover .no-input-settings {
+/* .stage fills the window; its :hover covers the whole viewport. The buttons
+   are inside .no-input which is display:none when not in this state, so the
+   rule only fires when the no-input stage is actually shown. */
+.stage:hover .no-input-disconnect,
+.stage:hover .no-input-settings {
   opacity: 1;
   pointer-events: auto;
 }
