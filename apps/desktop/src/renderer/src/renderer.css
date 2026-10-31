@@ -158,15 +158,20 @@ body.frameless .modal {
   color: var(--fg-muted);
 }
 
-/* Phase19 (ADR-006): the trusted session's only exit — revoke and return to
-   the QR hero. Same quiet button language as "New QR code". */
-.no-input-disconnect {
+/* The no-input stage's buttons — hover-revealed like the cast overlay's
+   controls: the stage is clean by default, controls appear on approach. */
+.no-input-disconnect,
+.no-input-settings {
   margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
 }
 
-/* ADR-007 addendum: environment controls stay reachable with no signal. */
-.no-input-settings {
-  margin-top: 0;
+.no-input:hover .no-input-disconnect,
+.no-input:hover .no-input-settings {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* The VC placeholder's own off switch — same quiet button language. */
