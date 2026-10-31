@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -22,6 +22,7 @@ import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
 import { SoftcamRegistration, softcamDir } from './vc/registration'
 import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
+import { createCastTray, isQuitting, refreshTrayMenu, requestQuit } from './tray'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -58,6 +59,9 @@ let pairedMobileName: string | null = null
 // owns the vc-status sender); null-checked in the signaling callbacks because
 // the server is constructed first.
 let virtualCamera: VirtualCameraController | null = null
+// The renderer's effective audio-routing state (mixer + cable presence) —
+// cached to answer the phone's queries and pushed on every change.
+let audioRouting: AudioRoutingReport | null = null
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
 function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
@@ -79,6 +83,7 @@ function pushToRenderer(
     | { pc: PcId; candidate: unknown }
     | VcPumpCommand
     | VcDesktopState
+    | AudioRoutingMode
   ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -216,7 +221,14 @@ app.whenReady().then(async () => {
     // owns the camera; the callbacks are async fire-and-forget by shape.
     onVcQuery: () => void virtualCamera?.onVcQuery(),
     onVcStart: () => void virtualCamera?.onVcStart(),
-    onVcStop: () => void virtualCamera?.onVcStop()
+    onVcStop: () => void virtualCamera?.onVcStop(),
+    // Audio output routing control (proto 2): the renderer owns the truth
+    // (mixer + persistence); the main process caches reports and relays.
+    onAudioRoutingQuery: () => {
+      const report = audioRouting
+      if (report !== null) signaling.sendAudioRoutingStatus(report)
+    },
+    onAudioRoutingSet: (mode) => pushToRenderer(IPC.audioRouting.set, mode)
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
 
@@ -244,7 +256,10 @@ app.whenReady().then(async () => {
     registration: vcRegistration,
     streamSize: () => lastStreamSize,
     sendStatus: (status) => signaling.sendVcStatus(status),
-    onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
+    onPumpCommand: (command) => {
+      pushToRenderer(IPC.vc.pump, command)
+      refreshTrayMenu(command.mode !== 'off')
+    }
   })
   // Capability push for the renderer's own controls (settings section,
   // placeholder button) — availability only, never cast state (ADR-007).
@@ -353,6 +368,23 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.vc.toggle, () => {
     virtualCamera?.toggle()
   })
+  // Audio routing: cache the renderer's reports and relay to the phone; a
+  // phone-initiated set arrives as a renderer push below (the mixer decides,
+  // and its next report flows back as audio-routing-status).
+  ipcMain.on(IPC.audioRouting.report, (_event, raw) => {
+    if (
+      typeof raw !== 'object' || raw === null ||
+      ((raw as { mode?: unknown }).mode !== 'speakers' && (raw as { mode?: unknown }).mode !== 'cable' && (raw as { mode?: unknown }).mode !== 'both') ||
+      typeof (raw as { cableAvailable?: unknown }).cableAvailable !== 'boolean'
+    ) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed audio-routing report — dropping')
+      return
+    }
+    const report = raw as AudioRoutingReport
+    const changed = audioRouting === null || audioRouting.mode !== report.mode || audioRouting.cableAvailable !== report.cableAvailable
+    audioRouting = report
+    if (changed) signaling.sendAudioRoutingStatus(report)
+  })
 
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox
@@ -450,19 +482,43 @@ app.whenReady().then(async () => {
   })
 
   mainWindow = createMainWindow()
-  // The receiver window is the product: if it is closed mid-cast, the session
-  // is over even if the companion overlay is still open — release the blocker
-  // and the overlay with it (window-all-closed then quits as before).
+  // Windowless mode (ADR-007 follow-up): closing the receiver hides it — the
+  // cast and the virtual camera keep running; the tray owns the app's life.
+  // The renderer stays alive hidden (backgroundThrottling off), so decode,
+  // the mixer, and the VC pump never notice the window being gone.
+  mainWindow.on('close', (event) => {
+    if (!isQuitting()) {
+      event.preventDefault()
+      mainWindow?.hide()
+      app.dock?.hide()
+      logger.info(LOG_SCOPE, 'receiver hidden — running from the menu bar (cast/virtual camera unaffected)')
+    }
+  })
+  // The receiver window is the product: at a real quit (tray/OS), release the
+  // blocker and the overlay with it.
   mainWindow.on('closed', () => {
     stopCastKeepAwake()
     closeSessionInfoWindow()
   })
 
-  app.on('activate', () => {
-    // macOS: re-create the window when the dock icon is clicked with no windows.
-    if (BrowserWindow.getAllWindows().length === 0) {
+  const showReceiver = (): void => {
+    app.dock?.show()
+    if (mainWindow === null || mainWindow.isDestroyed()) {
       mainWindow = createMainWindow()
+    } else {
+      mainWindow.show()
+      mainWindow.focus()
     }
+  }
+  createCastTray({
+    onShowReceiver: showReceiver,
+    onToggleVirtualCamera: () => virtualCamera?.toggle(),
+    onQuit: () => requestQuit()
+  })
+
+  app.on('activate', () => {
+    // macOS: the dock icon re-creates/shows the window with no windows up.
+    showReceiver()
   })
 }).catch((error) => {
   logger.error(LOG_SCOPE, 'startup failed', { error: String(error) })
@@ -470,9 +526,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // The tray owns quitting now (windowless mode, ADR-007) — closing windows
+  // never ends the app on any platform.
 })
 
 // App quit: delete the camera without protocol chatter — the socket may be

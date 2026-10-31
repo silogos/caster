@@ -376,6 +376,15 @@ const renderRoutingUi = (device: { deviceId: string; label: string } | null): vo
     audioOutputNoteEl.textContent = `Cable: ${device.label}`
   }
   audioOutputEl.value = mixer.getRoutingMode()
+  reportRouting()
+}
+
+/** The effective state reaches the main process (cached for the phone's mirror, proto 2). */
+const reportRouting = (): void => {
+  window.desktopApi.reportAudioRouting({
+    mode: mixer.getRoutingMode(),
+    cableAvailable: cableDeviceId !== null
+  })
 }
 
 const detectCableDevice = async (): Promise<void> => {
@@ -400,7 +409,22 @@ audioOutputEl.addEventListener('change', () => {
   const mode = audioOutputEl.value
   if (!isRoutingMode(mode)) return
   mixer.setRoutingMode(mode as RoutingMode, cableDeviceId ?? undefined)
+  reportRouting()
 })
+
+// The phone's mirror (proto 2): apply its pick through the same mixer call —
+// a cable route without a device is refused exactly like a local pick, and
+// the report above flows back as the honest status.
+const unsubscribeAudioRoutingSet = window.desktopApi.onAudioRoutingSet((mode) => {
+  if (!isRoutingMode(mode)) return
+  mixer.setRoutingMode(mode, cableDeviceId ?? undefined)
+  audioOutputEl.value = mixer.getRoutingMode()
+  reportRouting()
+})
+
+// Detect once at startup too (not just on modal open): the phone may query or
+// set the route during a cast before Settings was ever opened.
+void detectCableDevice()
 
 // The settings modal (receiver/environment controls only — overview.md):
 // opened from the hover overlay's trigger; closed via the button, Escape,
@@ -656,4 +680,5 @@ window.addEventListener('beforeunload', () => {
   unsubscribeVcPump()
   unsubscribeVcStatusLine()
   unsubscribeVcState()
+  unsubscribeAudioRoutingSet()
 })

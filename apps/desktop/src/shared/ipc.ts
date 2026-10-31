@@ -1,4 +1,6 @@
 import type {
+  AudioRoutingMode,
+  AudioRoutingReport,
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
@@ -72,6 +74,12 @@ export const IPC = {
     state: 'vc:state',
     /** Renderer → main: the desktop's own toggle (receiver-environment control, ADR-007 addendum). */
     toggle: 'vc:toggle'
+  },
+  audioRouting: {
+    /** Renderer → main: the effective routing state changed (mode + cable presence). */
+    report: 'audio-routing:report',
+    /** Push: the phone asked to change the mode — the renderer applies it. */
+    set: 'audio-routing:set'
   }
 } as const
 
@@ -114,4 +122,8 @@ export interface DesktopApi {
   onVcState(listener: (state: VcDesktopState) => void): () => void
   /** The desktop's own virtual camera toggle (receiver-environment control). */
   toggleVirtualCamera(): void
+  /** Renderer → main: the effective audio routing state changed (mode + cable presence). */
+  reportAudioRouting(report: AudioRoutingReport): void
+  /** Subscribes to routing sets arriving from the phone; returns an unsubscribe function. */
+  onAudioRoutingSet(listener: (mode: AudioRoutingMode) => void): () => void
 }

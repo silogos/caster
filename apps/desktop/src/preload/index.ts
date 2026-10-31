@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { DesktopApi } from '../shared/ipc'
 import type {
+  AudioRoutingMode,
   MobileStateEvent,
   PairingSessionView,
   SignalingIceMessage,
@@ -58,7 +59,11 @@ const desktopApi: DesktopApi = {
   onVcState: (listener) => subscribe<VcDesktopState>(IPC.vc.state, listener),
   toggleVirtualCamera: () => {
     ipcRenderer.invoke(IPC.vc.toggle)
-  }
+  },
+  reportAudioRouting: (report) => {
+    ipcRenderer.send(IPC.audioRouting.report, report)
+  },
+  onAudioRoutingSet: (listener) => subscribe<AudioRoutingMode>(IPC.audioRouting.set, listener)
 }
 
 contextBridge.exposeInMainWorld('desktopApi', desktopApi)

@@ -23,6 +23,8 @@ interface VcHarness {
   queries: number[]
   starts: number[]
   stops: number[]
+  routingQueries: number[]
+  routingSets: string[]
 }
 
 let harness: VcHarness | null = null
@@ -31,11 +33,15 @@ async function startHarness(): Promise<VcHarness> {
   const queries: number[] = []
   const starts: number[] = []
   const stops: number[] = []
+  const routingQueries: number[] = []
+  const routingSets: string[] = []
   const signaling = new SignalingServer({
     desktopName: DESKTOP_NAME,
     onVcQuery: () => queries.push(Date.now()),
     onVcStart: () => starts.push(Date.now()),
-    onVcStop: () => stops.push(Date.now())
+    onVcStop: () => stops.push(Date.now()),
+    onAudioRoutingQuery: () => routingQueries.push(Date.now()),
+    onAudioRoutingSet: (mode) => routingSets.push(mode)
   })
   const port = await signaling.start(0)
   const pairing = new PairingServer({ port, hosts: () => ['127.0.0.1'], now: () => Date.now() })
@@ -44,7 +50,7 @@ async function startHarness(): Promise<VcHarness> {
   const sid = pairing.currentSid
   const record = sid !== null ? pairing.lookup(sid) : null
   if (sid === null || record === null) throw new Error('session creation failed')
-  return { port, sid, secret: record.secret, signaling, queries, starts, stops }
+  return { port, sid, secret: record.secret, signaling, queries, starts, stops, routingQueries, routingSets }
 }
 
 
@@ -228,5 +234,41 @@ describe('signaling loopback: vc-* control (webrtc.md proto 2, ADR-007)', () => 
     const wrongWay = await phone.nextReply(1_000)
     expect(wrongWay.type).toBe('error')
     expect((wrongWay.payload as { msg?: string }).msg).toContain('sender of vc-status')
+  })
+
+  it('delivers audio-routing-query/set to the coordinator on a proto-2 connection', async () => {
+    const h = harness!
+    const phone = await new VcPhone(h.port, h.sid, h.secret).connect()
+    activePhone = phone
+    await phone.handshake(1, 2)
+    phone.send('audio-routing-query')
+    phone.send('audio-routing-set', { mode: 'cable' })
+    await sleep(150)
+    expect(h.routingQueries.length).toBe(1)
+    expect(h.routingSets).toEqual(['cable'])
+  })
+
+  it('rejects a malformed audio-routing-set mode recoverably', async () => {
+    const h = harness!
+    h.routingSets.length = 0 // shared harness arrays — this test owns the delta
+    const phone = await new VcPhone(h.port, h.sid, h.secret).connect()
+    activePhone = phone
+    await phone.handshake(1, 2)
+    phone.send('audio-routing-set', { mode: 'loudhailer' })
+    const reply = await phone.nextReply(1_000)
+    expect(reply.type).toBe('error')
+    expect((reply.payload as { msg?: string }).msg).toContain('malformed audio-routing-set mode')
+    expect(h.routingSets).toEqual([])
+  })
+
+  it('pushes audio-routing-status to a proto-2 phone', async () => {
+    const h = harness!
+    const phone = await new VcPhone(h.port, h.sid, h.secret).connect()
+    activePhone = phone
+    await phone.handshake(1, 2)
+    h.signaling.sendAudioRoutingStatus({ mode: 'both', cableAvailable: true })
+    const status = await phone.nextReply(1_000)
+    expect(status.type).toBe('audio-routing-status')
+    expect(status.payload).toEqual({ mode: 'both', cableAvailable: true })
   })
 })

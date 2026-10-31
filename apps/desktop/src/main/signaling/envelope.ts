@@ -22,6 +22,9 @@ export type EnvelopeType =
   | 'vc-start'
   | 'vc-stop'
   | 'vc-status'
+  | 'audio-routing-query'
+  | 'audio-routing-set'
+  | 'audio-routing-status'
   | 'ping'
   | 'pong'
 
@@ -122,6 +125,24 @@ export interface VcStatusPayload {
   /** True while the camera exists and frames are being published. */
   active: boolean
 }
+/**
+ * Audio output routing control (webrtc.md proto 2): the phone's mirror of the
+ * desktop's receiver-environment setting — where the desktop's mix goes
+ * (speakers / virtual cable / both). The desktop owns the truth; a `set` the
+ * mixer must refuse (cable mode without a device) simply results in the next
+ * status carrying the effective mode.
+ */
+export type AudioRoutingMode = 'speakers' | 'cable' | 'both'
+
+export interface AudioRoutingSetPayload {
+  mode: AudioRoutingMode
+}
+
+export interface AudioRoutingStatusPayload {
+  mode: AudioRoutingMode
+  /** False when no virtual cable device exists — the phone disables those options. */
+  cableAvailable: boolean
+}
 export interface HeartbeatPayload {
   /** Sender's epoch milliseconds; echoed unchanged in the pong. */
   t: number
@@ -138,6 +159,8 @@ export type EnvelopePayload =
   | IcePayload
   | SessionInfoPayload
   | VcStatusPayload
+  | AudioRoutingSetPayload
+  | AudioRoutingStatusPayload
   | HeartbeatPayload
 
 export interface Envelope<P extends EnvelopePayload = EnvelopePayload> {
@@ -169,6 +192,9 @@ const ENVELOPE_TYPES: ReadonlySet<string> = new Set<EnvelopeType>([
   'vc-start',
   'vc-stop',
   'vc-status',
+  'audio-routing-query',
+  'audio-routing-set',
+  'audio-routing-status',
   'ping',
   'pong'
 ])

@@ -116,3 +116,16 @@ export interface VcDesktopState {
   supported: boolean
 }
 
+/**
+ * Audio output routing (proto 2): where the desktop's mix goes. A receiver-
+ * environment setting, mirrored on the phone by user decision (ADR-007
+ * addendum pattern — the desktop owns the truth).
+ */
+export type AudioRoutingMode = 'speakers' | 'cable' | 'both'
+
+/** The renderer's report of the effective routing state (main caches + relays to the phone). */
+export interface AudioRoutingReport {
+  mode: AudioRoutingMode
+  cableAvailable: boolean
+}
+

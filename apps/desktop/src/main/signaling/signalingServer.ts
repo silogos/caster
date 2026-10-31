@@ -14,7 +14,8 @@ import {
   type PcId,
   type SessionInfoPayload,
   type SdpPayload,
-  type VcStatusPayload
+  type VcStatusPayload,
+  type AudioRoutingStatusPayload
 } from './envelope'
 import { computeMac, createNonce, deriveTrustKey, negotiateProtocol, verifyMac } from './handshake'
 import { deviceNameFromUa } from './ua'
@@ -112,6 +113,14 @@ export interface SignalingServerOptions {
   onVcQuery?: () => void
   onVcStart?: () => void
   onVcStop?: () => void
+  /**
+   * Audio output routing control (webrtc.md proto 2): the phone's mirror of
+   * the receiver's speakers/cable/both setting. `onAudioRoutingSet` receives a
+   * validated mode; the coordinator applies it and answers with
+   * `audio-routing-status` (sendAudioRoutingStatus).
+   */
+  onAudioRoutingQuery?: () => void
+  onAudioRoutingSet?: (mode: 'speakers' | 'cable' | 'both') => void
 }
 
 interface ConnectionState {
@@ -276,6 +285,18 @@ export class SignalingServer {
   }
 
   /**
+   * Audio output routing state (proto 2): the query reply and the push on
+   * every change — the phone's selector renders exactly this. Proto-2 only,
+   * same rule as vc-status.
+   */
+  sendAudioRoutingStatus(status: AudioRoutingStatusPayload): void {
+    this.withAuthorized((conn) => {
+      if (conn.proto < 2) return
+      this.send(conn, 'audio-routing-status', status satisfies AudioRoutingStatusPayload)
+    })
+  }
+
+  /**
    * Desktop-initiated graceful end: `bye` invalidates the session immediately
    * (webrtc.md), so this sends bye, closes the socket, and fires onBye for the
    * coordinator to show a fresh QR. The reserved `forget` reason (the desktop
@@ -414,6 +435,22 @@ export class SignalingServer {
         break
       case 'vc-status':
         this.sendError(conn, ERROR_CODES.badMessage, 'desktop is the sender of vc-status')
+        break
+      case 'audio-routing-query':
+        this.onVcMessage(conn, envelope.type, () => this.options.onAudioRoutingQuery?.())
+        break
+      case 'audio-routing-set':
+        this.onVcMessage(conn, envelope.type, () => {
+          const mode = (envelope.payload as { mode?: unknown }).mode
+          if (mode !== 'speakers' && mode !== 'cable' && mode !== 'both') {
+            this.sendError(conn, ERROR_CODES.badMessage, 'malformed audio-routing-set mode')
+            return
+          }
+          this.options.onAudioRoutingSet?.(mode)
+        })
+        break
+      case 'audio-routing-status':
+        this.sendError(conn, ERROR_CODES.badMessage, 'desktop is the sender of audio-routing-status')
         break
       case 'ping':
         this.onPing(conn, envelope)
