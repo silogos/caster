@@ -23,6 +23,7 @@ import { SoftcamRegistration, softcamDir } from './vc/registration'
 import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
 import { ZfaudioInstaller, zfaudioDir } from './zfaudio/installer'
+import { PipewireDeviceManager } from './zfaudio/pipewireDevices'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -78,6 +79,9 @@ let vcAutoStart = false
 // The virtual audio installer (ADR-008): macOS-only — the one-time elevated
 // install of the Zero-Friction loopback devices. Null elsewhere.
 let zfaudio: ZfaudioInstaller | null = null
+// Linux's equivalent (issue #75): session-scoped loopback devices via pactl —
+// created at start, removed at quit. Null on other platforms.
+let pipewireAudio: PipewireDeviceManager | null = null
 // The last-pushed vc capability — a recreated window's fresh renderer missed
 // the live pushes, so the settings rows re-assert from this cache.
 let vcSupportedPush: boolean | null = null
@@ -295,6 +299,14 @@ app.whenReady().then(async () => {
     zfaudio = new ZfaudioInstaller({
       dir: zfaudioDir(app.isPackaged, process.resourcesPath, app.getAppPath())
     })
+  }
+  // Linux per-track audio (ADR-008 follow-up, issue #75): the two loopback
+  // devices are created at app start (capture-card style — they sit silent
+  // until a cast routes into them) and removed at quit. The renderer's
+  // existing label detection picks them up; no IPC, no install, no elevation.
+  if (process.platform === 'linux') {
+    pipewireAudio = new PipewireDeviceManager()
+    void pipewireAudio.ensureDevices()
   }
   const pushVirtualAudioState = (): void => {
     // The platform rides on this push (issue #74) so the renderer's cable
@@ -619,6 +631,9 @@ app.on('window-all-closed', () => {
 
 // App quit: delete the camera without protocol chatter — the socket may be
 // gone (softcam also cleans up on process death, but we never rely on it).
+// Linux's loopback devices go with us (adopted leftovers from a crashed run
+// are not ours to remove — ensure is idempotent next start).
 app.on('will-quit', () => {
   virtualCamera?.dispose()
+  void pipewireAudio?.unloadAll()
 })

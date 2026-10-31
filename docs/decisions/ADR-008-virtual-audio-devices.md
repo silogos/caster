@@ -41,7 +41,7 @@ Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **d
 |---|---|---|
 | **macOS** | HAL plugin (libASPL, MIT) — this ADR | **shipped (batch A)** |
 | **Windows** | Kernel driver + Microsoft signing — not viable for this project | OBS use case solved by WASAPI process loopback (Application Audio Capture, zero-install); call apps via VB-Cable (pragmatic) — **detected as a cable target + platform-honest guidance** (issue #74: `findCableOutputDevice` third tier, `virtual-audio:state` carries the platform) |
-| **Linux** | PipeWire virtual source (user-space) | follow-up |
+| **Linux** | PipeWire virtual source (user-space) | **adapter shipped (issue #75)**: two `module-null-sink` devices via `pactl` (`zfaudio/pipewireDevices.ts`) — the sink is our output side, its auto-created `.monitor` source is the input side; labels match the macOS devices so detection is shared. **Session-scoped**, unlike macOS's permanent install: created at app start (capture-card style, silent until a cast routes in), removed at quit; a crashed run's leftovers are adopted, not duplicated. pactl chosen over pw-cli for PulseAudio + PipeWire-Pulse compatibility; zero elevation. On-rig verification pending |
 
 ## Consequences
 
