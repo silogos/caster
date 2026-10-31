@@ -4,6 +4,7 @@ import type {
   SignalingIceMessage,
   SignalingSdpMessage,
   TrustedDeviceView,
+  VcDesktopState,
   VcPumpCommand
 } from './types'
 
@@ -57,15 +58,20 @@ export const IPC = {
   },
   vc: {
     /**
-     * Push: the virtual camera's renderer pump command (ADR-007) — start
-     * publishing at the fixed camera dims (frames then flow on `frame`), or
-     * stop. Also drives the receiver's VC-active placeholder.
+     * Push: the virtual camera's renderer pump command (ADR-007) — `frames`
+     * pumps at the fixed dims, `no-signal` publishes the "No input video"
+     * still (Syphon stays up between casts), `off` stops. Also drives the
+     * receiver's VC-active placeholder and its toggle state.
      */
     pump: 'vc:pump',
-    /** Renderer → main: one packed BGR24 frame (width×height×3 bytes, top-down). */
+    /** Renderer → main: one packed frame (width×height×{3|4} bytes, top-down). */
     frame: 'vc:frame',
     /** Renderer → main: the pump gave up (e.g. repeated context loss) — stop the camera honestly. */
-    pumpFailed: 'vc:pump-failed'
+    pumpFailed: 'vc:pump-failed',
+    /** Push: whether this desktop can do the virtual camera (the settings section's visibility). */
+    state: 'vc:state',
+    /** Renderer → main: the desktop's own toggle (receiver-environment control, ADR-007 addendum). */
+    toggle: 'vc:toggle'
   }
 } as const
 
@@ -100,8 +106,12 @@ export interface DesktopApi {
   fitWindowToStream(): void
   /** Subscribes to the virtual camera's pump commands; returns an unsubscribe function. */
   onVcPump(listener: (command: VcPumpCommand) => void): () => void
-  /** Sends one packed BGR24 frame to the virtual camera (ADR-007 frame path). */
+  /** Sends one packed frame to the virtual camera (ADR-007 frame path). */
   sendVcFrame(data: Uint8Array, width: number, height: number): void
   /** Reports the renderer pump gave up — the main process stops the camera. */
   reportVcPumpFailed(): void
+  /** Subscribes to the desktop's virtual camera capability; returns an unsubscribe function. */
+  onVcState(listener: (state: VcDesktopState) => void): () => void
+  /** The desktop's own virtual camera toggle (receiver-environment control). */
+  toggleVirtualCamera(): void
 }

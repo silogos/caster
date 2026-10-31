@@ -148,6 +148,16 @@ body {
   margin-top: 4px;
 }
 
+/* ADR-007 addendum: environment controls stay reachable with no signal. */
+.no-input-settings {
+  margin-top: 0;
+}
+
+/* The VC placeholder's own off switch — same quiet button language. */
+.vc-turn-off {
+  margin-top: 4px;
+}
+
 /*
   The virtual camera's placeholder (ADR-007): the same monitor-language stage
   as no-input, shown while the camera publishes instead of the video preview.

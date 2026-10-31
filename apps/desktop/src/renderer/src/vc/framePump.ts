@@ -93,6 +93,20 @@ export class FramePump {
     this.dims = null
   }
 
+  /**
+   * Publish one still through the same GPU path (draw → pack → IPC) without a
+   * frame source — the "No input video" placeholder between casts (ADR-007
+   * addendum). `source` is any TexImageSource (a text-rendered 2D canvas).
+   */
+  sendStill(source: unknown, width: number, height: number, format: PumpFormat): void {
+    this.stop()
+    const canvas = this.deps.createCanvas(width, height, format)
+    const scratch = new Uint8Array(frameBytes(width, height, format))
+    canvas.drawFrame(source as PumpFrame)
+    canvas.readPixels(scratch)
+    this.deps.send(scratch, width, height)
+  }
+
   private onFrame(frame: PumpFrame): void {
     try {
       if (this.canvas === null || this.scratch === null || this.dims === null) {

@@ -12,12 +12,13 @@ import type { SoftcamRegistration } from './registration'
 
 type RegisterResult = 'registered' | 'declined' | 'failed'
 
-function fakeBackend(createSucceeds = true, pixelFormat: 'bgr24' | 'bgra' = 'bgr24'): VcCameraBackend & { created: string[]; closed: string[]; frames: Uint8Array[] } {
+function fakeBackend(createSucceeds = true, pixelFormat: 'bgr24' | 'bgra' = 'bgr24', idleNoSignal = false): VcCameraBackend & { created: string[]; closed: string[]; frames: Uint8Array[] } {
   const state = { created: [] as string[], closed: [] as string[], frames: [] as Uint8Array[] }
   let n = 0
   return {
     support: 'ok',
     pixelFormat,
+    idleNoSignal,
     ...state,
     createCamera(width, height): VcCamera | null {
       if (!createSucceeds) return null
@@ -73,7 +74,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
   it('reports unavailable when the platform or files are missing, and never registers', async () => {
     const registration = fakeRegistration(false)
     const { controller, statuses } = makeController({
-      backend: { support: 'unsupported-platform', pixelFormat: 'bgr24', createCamera: () => null },
+      backend: { support: 'unsupported-platform', pixelFormat: 'bgr24', idleNoSignal: false, createCamera: () => null },
       registration
     })
     await controller.onVcQuery()
@@ -95,7 +96,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     await controller.onVcStart()
     expect(registration.registerCalls).toBe(1)
     expect((backend as ReturnType<typeof fakeBackend>).created).toEqual(['cam-1:1280x720'])
-    expect(pumps).toEqual([{ active: true, width: 1280, height: 720, pixelFormat: 'bgr24' }])
+    expect(pumps).toEqual([{ mode: 'frames', width: 1280, height: 720, pixelFormat: 'bgr24' }])
     expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: true })
   })
 
@@ -112,7 +113,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     const { controller, pumps, backend } = makeController({ streamSize: { width: 2560, height: 1440 } })
     await controller.onVcStart()
     expect((backend as ReturnType<typeof fakeBackend>).created).toEqual(['cam-1:1920x1080'])
-    expect(pumps).toEqual([{ active: true, width: 1920, height: 1080, pixelFormat: 'bgr24' }])
+    expect(pumps).toEqual([{ mode: 'frames', width: 1920, height: 1080, pixelFormat: 'bgr24' }])
   })
 
   it('refuses to start without a stream size (toggle is cast-scoped)', async () => {
@@ -138,7 +139,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     await controller.onVcStop()
     const cam = backend as ReturnType<typeof fakeBackend>
     expect(cam.closed).toEqual(['cam-1:1280x720'])
-    expect(pumps.at(-1)).toEqual({ active: false, width: null, height: null })
+    expect(pumps.at(-1)).toEqual({ mode: 'off' })
     expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: false })
     await controller.onVcStop() // idempotent
     expect(cam.closed).toHaveLength(1)
@@ -155,7 +156,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     await b.controller.onVcStart()
     b.controller.dispose() // app quit — no status push needed
     expect((b.backend as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
-    expect(b.pumps.at(-1)).toEqual({ active: false, width: null, height: null })
+    expect(b.pumps.at(-1)).toEqual({ mode: 'off' })
   })
 
   it('ignores re-entrant starts while the UAC registration is in flight', async () => {
@@ -190,7 +191,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     const syphon = fakeBackend(true, 'bgra')
     const { controller, statuses, pumps } = makeController({ backend: syphon })
     await controller.onVcStart()
-    expect(pumps).toEqual([{ active: true, width: 1280, height: 720, pixelFormat: 'bgra' }])
+    expect(pumps).toEqual([{ mode: 'frames', width: 1280, height: 720, pixelFormat: 'bgra' }])
     expect(controller.activePixelFormat).toBe('bgra')
     controller.onFrame(new Uint8Array(1280 * 720 * 4)) // the format's frame size
     controller.onFrame(new Uint8Array(1280 * 720 * 3)) // a bgr24 frame — dropped
@@ -206,6 +207,7 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     const backend: VcCameraBackend = {
       support: 'ok',
       pixelFormat: 'bgra',
+      idleNoSignal: true,
       createCamera: (_w, _h, handlers) => {
         onDead = handlers?.onDead
         return { sendFrame: () => undefined, close: () => undefined }
@@ -216,7 +218,50 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     expect(statuses.at(-1)?.active).toBe(true)
     onDead?.()
     expect(statuses.at(-1)).toEqual({ available: true, needsRegistration: false, active: false })
-    expect(pumps.at(-1)).toEqual({ active: false, width: null, height: null })
+    expect(pumps.at(-1)).toEqual({ mode: 'off' })
     expect(controller.activePixelFormat).toBeNull()
+  })
+
+  it('an idleNoSignal backend keeps the camera up with a no-signal still, then resumes on the next cast', async () => {
+    const syphon = fakeBackend(true, 'bgra', true)
+    const { controller, statuses, pumps } = makeController({ backend: syphon })
+    await controller.onVcStart()
+    expect(pumps[0].mode).toBe('frames')
+
+    // The cast drops: no teardown — the still replaces the live feed, the
+    // status stays active (the phone's card is hidden without a cast anyway).
+    controller.onCastGone()
+    expect((syphon as ReturnType<typeof fakeBackend>).closed).toHaveLength(0)
+    expect(pumps.at(-1)).toEqual({ mode: 'no-signal', width: 1280, height: 720, pixelFormat: 'bgra' })
+    expect(statuses.at(-1)?.active).toBe(true)
+    // Stale frames while idling are dropped (the still must not be overwritten).
+    controller.onFrame(new Uint8Array(1280 * 720 * 4))
+    expect((syphon as ReturnType<typeof fakeBackend>).frames).toHaveLength(0)
+
+    // A fresh cast resumes frames without recreating the camera.
+    controller.onCastActive()
+    expect(pumps.at(-1)).toEqual({ mode: 'frames', width: 1280, height: 720, pixelFormat: 'bgra' })
+
+    // vc-stop still tears everything down.
+    await controller.onVcStop()
+    expect((syphon as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
+    expect(pumps.at(-1)).toEqual({ mode: 'off' })
+  })
+
+  it('a non-idle backend (Windows softcam) still dies with the cast', async () => {
+    const { controller, pumps, backend } = makeController()
+    await controller.onVcStart()
+    controller.onCastGone()
+    expect((backend as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
+    expect(pumps.at(-1)).toEqual({ mode: 'off' })
+  })
+
+  it('toggle() drives both directions (the desktop switch, ADR-007 addendum)', async () => {
+    const { controller, statuses, backend } = makeController()
+    await controller.toggle()
+    expect((backend as ReturnType<typeof fakeBackend>).created).toHaveLength(1)
+    expect(statuses.at(-1)?.active).toBe(true)
+    await controller.toggle()
+    expect((backend as ReturnType<typeof fakeBackend>).closed).toHaveLength(1)
   })
 })

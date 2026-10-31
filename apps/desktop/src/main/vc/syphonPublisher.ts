@@ -52,13 +52,13 @@ export interface SyphonBackendOptions {
 
 export function loadSyphonBackend(options: SyphonBackendOptions): VcCameraBackend {
   if (process.platform !== 'darwin') {
-    return { support: 'unsupported-platform', pixelFormat: 'bgra', createCamera: () => null }
+    return { support: 'unsupported-platform', pixelFormat: 'bgra', idleNoSignal: false, createCamera: () => null }
   }
   const helperPath = join(options.dir, 'syphon-helper')
   const frameworkPresent = existsSync(join(options.dir, 'Syphon.framework', 'Syphon'))
   if (!existsSync(helperPath) || !frameworkPresent) {
     logger.warn(LOG_SCOPE, `syphon helper/framework not found under ${options.dir}`)
-    return { support: 'dll-missing', pixelFormat: 'bgra', createCamera: () => null }
+    return { support: 'dll-missing', pixelFormat: 'bgra', idleNoSignal: false, createCamera: () => null }
   }
   const spawnHelper: HelperSpawner =
     options.spawnHelper ??
@@ -67,6 +67,9 @@ export function loadSyphonBackend(options: SyphonBackendOptions): VcCameraBacken
   return {
     support: 'ok',
     pixelFormat: 'bgra',
+    // The Syphon server outlives casts: with no stream it publishes a
+    // "No input video" still so OBS shows a clean stage, never a frozen frame.
+    idleNoSignal: true,
     createCamera(width, height, handlers?: VcCameraHandlers): VcCamera | null {
       let child: HelperProcess
       try {

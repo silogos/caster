@@ -95,12 +95,24 @@ export interface CastSessionInfo {
 }
 
 /**
- * The virtual camera's renderer pump command (ADR-007): start publishing at
- * the fixed camera dims in the backend's pixel format, or stop. Main →
- * renderer push. `pixelFormat` picks the canvas mode: 'bgr24' (Windows
- * softcam) packs 3 bytes/pixel on the GPU; 'bgra' (macOS Syphon) keeps 4.
+ * The virtual camera's renderer pump command (ADR-007): `frames` pumps decoded
+ * frames at the fixed camera dims in the backend's pixel format; `no-signal`
+ * publishes one "No input video" still (the cast dropped but the camera stays
+ * published — Syphon consumers see the placeholder instead of a frozen last
+ * frame); `off` stops everything (the camera itself is torn down).
  */
 export type VcPumpCommand =
-  | { active: true; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
-  | { active: false; width: null; height: null }
+  | { mode: 'frames'; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
+  | { mode: 'no-signal'; width: number; height: number; pixelFormat: 'bgr24' | 'bgra' }
+  | { mode: 'off' }
+
+/**
+ * The desktop's virtual camera capability + runtime state, pushed to the
+ * renderer for its own controls (settings section, placeholder button) —
+ * display/control only; the phone's toggle is unaffected (ADR-007 addendum).
+ */
+export interface VcDesktopState {
+  /** False when the platform/files are unsupported — the renderer hides its controls. */
+  supported: boolean
+}
 

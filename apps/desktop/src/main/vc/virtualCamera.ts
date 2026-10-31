@@ -48,6 +48,14 @@ export class VirtualCameraController {
   private state: VcState = 'unavailable'
   private camera: SoftcamCamera | null = null
   private cameraBytes = 0
+  /** The camera's fixed dims (kept for the no-signal/resume pump commands). */
+  private cameraDims: { width: number; height: number } | null = null
+  /**
+   * Idle "No input video" publishing (idleNoSignal backends — ADR-007
+   * addendum): the camera stays up between casts; the renderer's still frame
+   * replaces the frozen-last-frame OBS would otherwise show.
+   */
+  private noSignal = false
   private initPromise: Promise<void> | null = null
   /** Guards re-entrant starts while the UAC registration is in flight. */
   private starting = false
@@ -62,6 +70,25 @@ export class VirtualCameraController {
   /** The active backend's pixel format (for frame-size validation); null while inactive. */
   get activePixelFormat(): 'bgr24' | 'bgra' | null {
     return this.state === 'active' ? this.options.backend.pixelFormat : null
+  }
+
+  /** Whether the desktop can do the virtual camera at all (after ready()). */
+  get available(): boolean {
+    return this.state !== 'unavailable'
+  }
+
+  /** Whether the camera is published (including the no-signal still between casts). */
+  get isActive(): boolean {
+    return this.state === 'active'
+  }
+
+  /** The desktop's own toggle (receiver-environment control, ADR-007 addendum). */
+  async toggle(): Promise<void> {
+    if (this.state === 'active') {
+      await this.onVcStop()
+    } else {
+      await this.onVcStart()
+    }
   }
 
   /**
@@ -158,10 +185,12 @@ export class VirtualCameraController {
       return
     }
     this.camera = camera
+    this.cameraDims = { width: dims.width, height: dims.height }
     this.cameraBytes = dims.width * dims.height * (this.options.backend.pixelFormat === 'bgr24' ? 3 : 4)
     this.state = 'active'
+    this.noSignal = false
     this.log('info', 'virtual camera active', { width: dims.width, height: dims.height })
-    this.options.onPumpCommand({ active: true, width: dims.width, height: dims.height, pixelFormat: this.options.backend.pixelFormat })
+    this.options.onPumpCommand({ mode: 'frames', width: dims.width, height: dims.height, pixelFormat: this.options.backend.pixelFormat })
     this.pushStatus()
   }
 
@@ -172,9 +201,9 @@ export class VirtualCameraController {
     this.teardown('vc-stop')
   }
 
-  /** A frame from the renderer pump (BGR24, the camera's exact dims). */
+  /** A frame from the renderer pump (the backend's format, the camera's exact dims). */
   onFrame(bytes: Uint8Array): void {
-    if (this.camera === null) return
+    if (this.camera === null || this.noSignal) return
     if (bytes.byteLength !== this.cameraBytes) {
       // Never feed a mismatched buffer to the native memcpy — drop with the
       // honest reason; the next frame is a moment away.
@@ -184,9 +213,39 @@ export class VirtualCameraController {
     this.camera.sendFrame(bytes)
   }
 
-  /** The cast is gone (end, mobile gone, bye, waiting) — the camera dies with it. */
+  /**
+   * The cast is gone (end, mobile gone, bye, waiting). Backends that publish
+   * between casts keep the camera up with a "No input video" still — the
+   * consumer sees a clean stage, not a frozen last frame; a fresh cast resumes
+   * frames via [onCastActive]. Otherwise the camera dies with the cast.
+   */
   onCastGone(): void {
-    if (this.state === 'active') this.teardown('cast-gone')
+    if (this.state !== 'active' || this.cameraDims === null) return
+    if (this.options.backend.idleNoSignal) {
+      this.noSignal = true
+      this.options.onPumpCommand({
+        mode: 'no-signal',
+        width: this.cameraDims.width,
+        height: this.cameraDims.height,
+        pixelFormat: this.options.backend.pixelFormat
+      })
+      this.log('info', 'virtual camera publishing the no-input still (cast gone)')
+      return
+    }
+    this.teardown('cast-gone')
+  }
+
+  /** A cast went live again while the camera idles on the no-input still. */
+  onCastActive(): void {
+    if (this.state !== 'active' || !this.noSignal || this.cameraDims === null) return
+    this.noSignal = false
+    this.options.onPumpCommand({
+      mode: 'frames',
+      width: this.cameraDims.width,
+      height: this.cameraDims.height,
+      pixelFormat: this.options.backend.pixelFormat
+    })
+    this.log('info', 'virtual camera resumed frames')
   }
 
   /** App quit — delete the camera without protocol chatter (socket may be gone). */
@@ -200,8 +259,10 @@ export class VirtualCameraController {
       this.camera = null
       this.cameraBytes = 0
     }
+    this.cameraDims = null
+    this.noSignal = false
     this.state = 'available'
-    this.options.onPumpCommand({ active: false, width: null, height: null })
+    this.options.onPumpCommand({ mode: 'off' })
     this.log('info', `virtual camera stopped (${reason})`)
     if (options.push) this.pushStatus()
   }

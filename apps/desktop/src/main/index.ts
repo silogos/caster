@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcPumpCommand } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -78,6 +78,7 @@ function pushToRenderer(
     | { pc: PcId; sdp: string }
     | { pc: PcId; candidate: unknown }
     | VcPumpCommand
+    | VcDesktopState
   ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -245,7 +246,12 @@ app.whenReady().then(async () => {
     sendStatus: (status) => signaling.sendVcStatus(status),
     onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
   })
-  void virtualCamera.ready()
+  // Capability push for the renderer's own controls (settings section,
+  // placeholder button) — availability only, never cast state (ADR-007).
+  const vcController = virtualCamera
+  void vcController.ready().then(() => {
+    pushToRenderer(IPC.vc.state, { supported: vcController.available })
+  })
 
   pairing = new PairingServer({
     port: signaling.actualPort,
@@ -342,6 +348,11 @@ app.whenReady().then(async () => {
     logger.warn(LOG_SCOPE, 'renderer vc pump failed — stopping the virtual camera')
     virtualCamera?.onCastGone()
   })
+  // The desktop's own toggle (receiver-environment control, ADR-007 addendum)
+  // — same controller the phone's toggle drives; both stay truthful via pushes.
+  ipcMain.handle(IPC.vc.toggle, () => {
+    virtualCamera?.toggle()
+  })
 
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox
@@ -391,6 +402,8 @@ app.whenReady().then(async () => {
       // 30+ min sessions: hold the display awake — sleep or a screensaver
       // firing mid-cast would stall or pollute the captured feed (Phase14).
       startCastKeepAwake()
+      // A cast went live — a no-signal-idling virtual camera resumes frames.
+      virtualCamera?.onCastActive()
       if (sessionInfoOverlayEnabled) {
         setSessionInfoOverlayEnabled(true)
       }

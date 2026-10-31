@@ -6,6 +6,7 @@ import type {
   PairingSessionView,
   SignalingIceMessage,
   SignalingSdpMessage,
+  VcDesktopState,
   VcPumpCommand
 } from '../shared/types'
 
@@ -53,6 +54,10 @@ const desktopApi: DesktopApi = {
   },
   reportVcPumpFailed: () => {
     ipcRenderer.send(IPC.vc.pumpFailed)
+  },
+  onVcState: (listener) => subscribe<VcDesktopState>(IPC.vc.state, listener),
+  toggleVirtualCamera: () => {
+    ipcRenderer.invoke(IPC.vc.toggle)
   }
 }
 

@@ -37,6 +37,10 @@
         <h2 class="no-input-heading" id="no-input-heading">No input video</h2>
         <p class="no-input-subline" id="no-input-subline"></p>
         <button class="button no-input-disconnect" id="no-input-disconnect" type="button">Disconnect</button>
+        <!-- Receiver/environment controls stay reachable while there is no
+             signal (ADR-007 addendum): the mixer and window preferences do
+             not depend on a live stream. -->
+        <button class="button no-input-settings" id="no-input-settings" type="button">Settings</button>
       </div>
       <!-- The virtual camera's placeholder (ADR-007): while the camera
            publishes there is no preview (by design — the phone asked for
@@ -49,6 +53,9 @@
         <h2 class="vc-heading" id="vc-heading">Virtual camera active</h2>
         <p class="vc-subline" id="vc-subline"></p>
         <p class="vc-status" id="vc-status"></p>
+        <!-- The desktop's own off switch (receiver-environment control,
+             ADR-007 addendum); between casts the stage's still says so. -->
+        <button class="button vc-turn-off" id="vc-turn-off" type="button">Turn off virtual camera</button>
       </div>
       <!-- The cast surface (Phase5): the remote MediaStream lands here; the
            element is composited directly, no canvas copy (desktop.md).
@@ -113,6 +120,15 @@
           <button class="mixer-button" id="fit-window" type="button">Match window to video</button>
         </div>
         <p class="modal-note">The info window rides outside the receiver, keeping a captured feed clean.</p>
+        <!-- The desktop's virtual camera toggle (ADR-007 addendum): a
+             receiver-output control — publish the received feed for OBS/VJ
+             apps. Hidden when this desktop can't (non-supported platforms).
+             The phone keeps its own toggle; both drive the same state. -->
+        <div class="window-row" id="vc-settings-row" hidden>
+          <label class="window-label" for="vc-toggle">Virtual camera</label>
+          <input type="checkbox" id="vc-toggle" />
+        </div>
+        <p class="modal-note" id="vc-settings-note">Publishes the cast as a camera (Windows) or Syphon source (macOS) for OBS and calls. It stays on between casts — the feed shows “No input video” while none flows.</p>
       </div>
     </div>
     <script type="module" src="./src/main.ts"></script>

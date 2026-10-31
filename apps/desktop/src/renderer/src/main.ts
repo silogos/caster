@@ -39,12 +39,17 @@ const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivEleme
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
 const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
 const noInputDisconnectEl = document.getElementById('no-input-disconnect') as HTMLButtonElement
+const noInputSettingsEl = document.getElementById('no-input-settings') as HTMLButtonElement
 // The virtual camera's placeholder stage (ADR-007): shown instead of the video
 // while the camera publishes (no preview by design).
 const vcStageEl = document.getElementById('vc-stage') as HTMLDivElement
 const vcHeadingEl = document.getElementById('vc-heading') as HTMLHeadingElement
 const vcSublineEl = document.getElementById('vc-subline') as HTMLParagraphElement
 const vcStatusEl = document.getElementById('vc-status') as HTMLParagraphElement
+const vcTurnOffEl = document.getElementById('vc-turn-off') as HTMLButtonElement
+// The desktop's own toggle (ADR-007 addendum): the settings modal's row.
+const vcSettingsRowEl = document.getElementById('vc-settings-row') as HTMLDivElement
+const vcToggleEl = document.getElementById('vc-toggle') as HTMLInputElement
 // Renderer-side structured logging: the main process has src/main/log.ts; these
 // lines go to the devtools console with the same level-tagged shape.
 const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
@@ -347,6 +352,12 @@ openSettingsEl.addEventListener('click', () => {
   settingsBackdropEl.hidden = false
   closeSettingsEl.focus()
 })
+// The no-signal stage's Settings (ADR-007 addendum): environment controls do
+// not need a live stream — same modal as the cast overlay's trigger.
+noInputSettingsEl.addEventListener('click', () => {
+  settingsBackdropEl.hidden = false
+  closeSettingsEl.focus()
+})
 closeSettingsEl.addEventListener('click', hideSettings)
 settingsBackdropEl.addEventListener('click', (event) => {
   if (event.target === settingsBackdropEl) hideSettings()
@@ -428,6 +439,28 @@ const vcPump = new FramePump({
   log
 })
 
+/**
+ * The "No input video" still (ADR-007 addendum): rendered once as a 2D canvas
+ * and pushed through the same GPU path — Syphon consumers (OBS) see a clean
+ * stage between casts instead of a frozen last frame.
+ */
+function noSignalStill(width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (ctx !== null) {
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, width, height)
+    ctx.fillStyle = '#8a8a8f'
+    ctx.font = `600 ${Math.round(height / 12)}px system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('No input video', width / 2, height / 2)
+  }
+  return canvas
+}
+
 /** The receiver's stage swap for VC mode (ADR-007): placeholder in, preview out. */
 function renderVcActive(active: boolean): void {
   document.body.classList.toggle('vc-active', active)
@@ -440,20 +473,50 @@ function renderVcActive(active: boolean): void {
   }
 }
 
+// The desktop's own controls (ADR-007 addendum): published state follows the
+// pump commands; the toggle rides the same controller as the phone's.
+let vcSupported = false
+let vcPublished = false
+
+function renderVcControls(): void {
+  vcSettingsRowEl.hidden = !vcSupported
+  vcToggleEl.checked = vcPublished
+  vcTurnOffEl.hidden = !vcPublished
+}
+
+const unsubscribeVcState = window.desktopApi.onVcState((state) => {
+  vcSupported = state.supported
+  renderVcControls()
+})
+
 const unsubscribeVcPump = window.desktopApi.onVcPump((command) => {
-  if (command.active) {
+  if (command.mode === 'frames') {
     const track = currentMediaStream?.getVideoTracks()[0]
     if (track === undefined) {
       log('warn', 'vc pump start with no video track — ignoring (the camera dies with the cast)')
       return
     }
+    vcPublished = true
     renderVcActive(true)
+    renderVcControls()
     vcPump.start(track, command.width, command.height, command.pixelFormat)
+  } else if (command.mode === 'no-signal') {
+    // The cast dropped but the camera stays published: swap the live feed for
+    // the still, keep the placeholder (the desktop is still in VC mode).
+    vcPublished = true
+    renderVcActive(true)
+    renderVcControls()
+    vcPump.sendStill(noSignalStill(command.width, command.height), command.width, command.height, command.pixelFormat)
   } else {
     vcPump.stop()
+    vcPublished = false
     renderVcActive(false)
+    renderVcControls()
   }
 })
+
+vcToggleEl.addEventListener('change', () => window.desktopApi.toggleVirtualCamera())
+vcTurnOffEl.addEventListener('click', () => window.desktopApi.toggleVirtualCamera())
 
 // The placeholder's status line follows session-info while publishing.
 const unsubscribeVcStatusLine = window.desktopApi.onMobileStateChanged((state) => {
@@ -529,4 +592,5 @@ window.addEventListener('beforeunload', () => {
   unsubscribeOverlay()
   unsubscribeVcPump()
   unsubscribeVcStatusLine()
+  unsubscribeVcState()
 })

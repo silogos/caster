@@ -37,6 +37,13 @@ export interface VcCameraBackend {
   support: SoftcamSupport
   /** What the renderer must produce for sendFrame. */
   pixelFormat: VcPixelFormat
+  /**
+   * True when the camera is a long-lived publisher that should stay up (with a
+   * "No input video" still) while the cast is gone — Syphon's shape, where a
+   * vanished server leaves OBS frozen on the last frame. softcam's camera
+   * instead dies with the cast (the OS device list must not go stale).
+   */
+  idleNoSignal: boolean
   /** Null when the platform is unsupported, files are missing, or creation failed. */
   createCamera(width: number, height: number, handlers?: VcCameraHandlers): VcCamera | null
 }
@@ -59,12 +66,12 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
   // softcam.dll ships x64 builds only; other platforms (and win-arm64) report
   // honest unavailability — the phone hides its toggle.
   if (process.platform !== 'win32' || process.arch !== 'x64') {
-    return { support: 'unsupported-platform', pixelFormat: 'bgr24', createCamera: () => null }
+    return { support: 'unsupported-platform', pixelFormat: 'bgr24', idleNoSignal: false, createCamera: () => null }
   }
   const dllPath = join(dllDir, 'softcam.dll')
   if (!existsSync(dllPath)) {
     logger.warn(LOG_SCOPE, `softcam.dll not found at ${dllPath}`)
-    return { support: 'dll-missing', pixelFormat: 'bgr24', createCamera: () => null }
+    return { support: 'dll-missing', pixelFormat: 'bgr24', idleNoSignal: false, createCamera: () => null }
   }
   try {
     // Lazy require: nothing outside this win32 path loads koffi (macOS dev, tests).
@@ -84,6 +91,7 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
     return {
       support: 'ok',
       pixelFormat: 'bgr24',
+      idleNoSignal: false,
       createCamera(width, height) {
         const handle = exports.scCreateCamera(width, height, SOFTCAM_FRAMERATE_UNPACED)
         if (handle === null || handle === undefined) {
@@ -98,6 +106,6 @@ export function loadSoftcam(dllDir: string): SoftcamLibrary {
     }
   } catch (error) {
     logger.warn(LOG_SCOPE, `softcam.dll could not be loaded — reporting unavailable`, { error: String(error) })
-    return { support: 'dll-missing', pixelFormat: 'bgr24', createCamera: () => null }
+    return { support: 'dll-missing', pixelFormat: 'bgr24', idleNoSignal: false, createCamera: () => null }
   }
 }
