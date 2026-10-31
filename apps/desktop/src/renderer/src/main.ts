@@ -1,6 +1,6 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
-import { findCableOutputDevice, isRoutingMode, type RoutingMode } from './audio/routing'
+import { findCableOutputDevice, findPerTrackDevices, isRoutingMode, type RoutingMode } from './audio/routing'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
@@ -401,6 +401,13 @@ const detectCableDevice = async (): Promise<void> => {
     }
     const devices = await navigator.mediaDevices.enumerateDevices()
     renderRoutingUi(findCableOutputDevice(devices))
+    // Per-track devices (batch A, ADR-008): game audio and mic each get
+    // their own input device — the two-track architecture end to end.
+    const perTrack = findPerTrackDevices(devices)
+    mixer.setPerTrackCableDevices({
+      game: perTrack.gameAudio?.deviceId,
+      mic: perTrack.mic?.deviceId
+    })
   } catch (error) {
     log('warn', 'audio output device detection failed', { error: String(error) })
     renderRoutingUi(null)

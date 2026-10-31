@@ -34,6 +34,11 @@
           "from": "resources/syphon",
           "to": "syphon",
           "filter": ["syphon-helper", "Syphon.framework/**", "LICENSE"]
+        },
+        {
+          "from": "resources/zfaudio",
+          "to": "zfaudio",
+          "filter": ["ZeroFrictionAudio.driver/**", "install.sh", "build.sh", "src/**", "CMakeLists.txt", "Info.plist.in"]
         }
       ],
       "target": [

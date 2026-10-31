@@ -34,6 +34,15 @@ export const isRoutingMode = (value: unknown): value is RoutingMode =>
 export const findCableOutputDevice = (
   devices: readonly AudioDeviceInfo[]
 ): AudioDeviceInfo | null => {
+  // Prefer caster's own devices (batch A, ADR-008) — they're per-track.
+  const ours = devices.filter(
+    (device) =>
+      device.kind === 'audiooutput' &&
+      /zero-friction (game audio|mic)/i.test(device.label) &&
+      device.deviceId !== ''
+  )
+  if (ours.length > 0) return ours[0]
+
   const matches = devices.filter(
     (device) =>
       device.kind === 'audiooutput' &&
@@ -43,6 +52,24 @@ export const findCableOutputDevice = (
   // Multiple channels variants (2ch/64ch) are equivalent for our purpose;
   // the first match keeps behavior stable between launches.
   return matches[0] ?? null
+}
+
+/**
+ * Find caster's own per-track devices (batch A, ADR-008): the game audio and
+ * mic loopback devices from the ZeroFrictionAudio HAL plugin. Returns both,
+ * either may be null (plugin not installed / not detected).
+ */
+export const findPerTrackDevices = (
+  devices: readonly AudioDeviceInfo[]
+): { gameAudio: AudioDeviceInfo | null; mic: AudioDeviceInfo | null } => {
+  const find = (label: RegExp): AudioDeviceInfo | null =>
+    devices.find(
+      (device) => device.kind === 'audiooutput' && label.test(device.label) && device.deviceId !== ''
+    ) ?? null
+  return {
+    gameAudio: find(/zero-friction game audio/i),
+    mic: find(/zero-friction mic/i)
+  }
 }
 
 const STORAGE_KEY = 'zfc.audio-routing.v1'

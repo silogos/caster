@@ -117,6 +117,16 @@ export class AudioMixer {
   private sendDestination: MediaStreamAudioDestinationNodeLike | null = null
   private cableContext: AudioContextLike | null = null
   private cableSource: MediaStreamAudioSourceNodeLike | null = null
+  /**
+   * Per-track cable routing (batch A, ADR-008): caster's own devices (from
+   * the ZeroFrictionAudio HAL plugin) — each channel gets its own cable
+   * context, so game audio and mic arrive as separate input devices. Null
+   * entries mean that channel falls back to the shared mix cable.
+   */
+  private perTrackDeviceIds: Partial<Record<MixerChannel, string>> = {}
+  private perTrackSend: Partial<Record<MixerChannel, MediaStreamAudioDestinationNodeLike>> = {}
+  private perTrackCableContexts: Partial<Record<MixerChannel, AudioContextLike>> = {}
+  private perTrackCableSources: Partial<Record<MixerChannel, MediaStreamAudioSourceNodeLike>> = {}
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -178,6 +188,22 @@ export class AudioMixer {
   }
 
   /**
+   * Per-track cable routing (batch A, ADR-008): assign each channel its own
+   * virtual cable device — "Zero-Friction Game Audio" and "Zero-Friction
+   * Mic" — so game audio and mic arrive as two independent input devices
+   * other apps can pick separately. Channels without a device fall back to
+   * the shared mix cable. Call with nulls to clear.
+   */
+  setPerTrackCableDevices(devices: Partial<Record<MixerChannel, string>>): void {
+    this.perTrackDeviceIds = devices
+    this.applyRouting() // rewire with the new per-track assignments
+    this.options.log('info', 'per-track cable devices updated', {
+      game: devices.game ?? '(shared)',
+      mic: devices.mic ?? '(shared)'
+    })
+  }
+
+  /**
    * Route one remote stream through its channel's GainNode. Safe to call again
    * for a fresh stream (a rebuilt pc produces a new MediaStream) — the previous
    * source is disconnected first. The AudioContext is created lazily here: no
@@ -217,17 +243,71 @@ export class AudioMixer {
     const context = this.context
     if (context === null) return
     const wantsCable = this.routingMode !== 'speakers'
-    if (wantsCable && this.sendDestination === null) {
-      this.sendDestination = context.createMediaStreamDestination()
-    }
+
+    // Per-track path (batch A): each channel with its own device gets a
+    // dedicated send + cable context — its audio arrives at its own input
+    // device, not the shared mix cable.
     for (const channel of CHANNELS) {
       const gain = this.wiring[channel].gain
       if (gain === null) continue
+      const deviceId = this.perTrackDeviceIds[channel]
       gain.disconnect()
       if (this.routingMode !== 'cable') gain.connect(context.destination)
-      if (wantsCable && this.sendDestination !== null) gain.connect(this.sendDestination)
+
+      if (wantsCable && deviceId !== undefined) {
+        // Per-track cable: send → own context with its device as sink
+        if (this.perTrackSend[channel] === undefined) {
+          this.perTrackSend[channel] = context.createMediaStreamDestination()
+        }
+        gain.connect(this.perTrackSend[channel]!)
+        this.applyPerTrackCableBridge(channel, deviceId)
+      } else if (wantsCable) {
+        // Shared cable (fallback / no per-track device for this channel)
+        if (this.sendDestination === null) {
+          this.sendDestination = context.createMediaStreamDestination()
+        }
+        gain.connect(this.sendDestination)
+      }
     }
+
+    // Clean up per-track contexts whose channels lost their devices
+    for (const channel of CHANNELS) {
+      if (this.perTrackCableContexts[channel] !== undefined && this.perTrackDeviceIds[channel] === undefined) {
+        this.perTrackCableContexts[channel]?.close?.()
+        delete this.perTrackCableContexts[channel]
+        delete this.perTrackCableSources[channel]
+        delete this.perTrackSend[channel]
+      }
+    }
+
     this.applyCableBridge(wantsCable)
+  }
+
+  /** Per-channel cable context: its own AudioContext with the track device as sink. */
+  private applyPerTrackCableBridge(channel: MixerChannel, deviceId: string): void {
+    const send = this.perTrackSend[channel]
+    if (send === undefined) return
+
+    if (this.perTrackCableContexts[channel] === undefined) {
+      try {
+        this.perTrackCableContexts[channel] = this.options.createAudioContext({ sinkId: deviceId })
+      } catch (error) {
+        this.options.log('error', `creating the ${channel} cable AudioContext failed`, {
+          error: String(error)
+        })
+        return
+      }
+    }
+    const cableContext = this.perTrackCableContexts[channel]!
+    if (cableContext.state !== 'running') {
+      cableContext.resume().catch((error: unknown) =>
+        this.options.log('warn', `${channel} cable AudioContext resume failed`, { error: String(error) })
+      )
+    }
+    if (this.perTrackCableSources[channel] === undefined) {
+      this.perTrackCableSources[channel] = cableContext.createMediaStreamSource(send.stream)
+      this.perTrackCableSources[channel]!.connect(cableContext.destination)
+    }
   }
 
   /**

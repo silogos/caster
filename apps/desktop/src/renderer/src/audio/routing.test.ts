@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   findCableOutputDevice,
+  findPerTrackDevices,
   isRoutingMode,
   loadRoutingMode,
   persistRoutingMode
@@ -100,5 +101,47 @@ describe('routing mode persistence', () => {
 
   it('persisting is a no-op without storage (in-memory mixer)', () => {
     expect(() => persistRoutingMode(undefined, 'cable')).not.toThrow()
+  })
+})
+
+describe('per-track device detection (batch A, ADR-008)', () => {
+  it('finds both Zero-Friction devices among output devices', () => {
+    const devices = [
+      { deviceId: 'd1', kind: 'audioinput', label: 'Built-in Microphone' },
+      { deviceId: 'd2', kind: 'audiooutput', label: 'MacBook Pro Speakers' },
+      { deviceId: 'd3', kind: 'audiooutput', label: 'Zero-Friction Game Audio' },
+      { deviceId: 'd4', kind: 'audiooutput', label: 'Zero-Friction Mic' },
+      { deviceId: 'd5', kind: 'audiooutput', label: 'BlackHole 2ch' }
+    ]
+    const result = findPerTrackDevices(devices)
+    expect(result.gameAudio?.deviceId).toBe('d3')
+    expect(result.mic?.deviceId).toBe('d4')
+  })
+
+  it('returns nulls when the devices are missing (plugin not installed)', () => {
+    const devices = [
+      { deviceId: 'd1', kind: 'audiooutput', label: 'Speakers' },
+      { deviceId: 'd2', kind: 'audiooutput', label: 'BlackHole 2ch' }
+    ]
+    const result = findPerTrackDevices(devices)
+    expect(result.gameAudio).toBeNull()
+    expect(result.mic).toBeNull()
+  })
+
+  it('ignores input-side entries — the output side is ours to play into', () => {
+    const devices = [
+      { deviceId: 'd1', kind: 'audioinput', label: 'Zero-Friction Game Audio' },
+      { deviceId: 'd2', kind: 'audiooutput', label: 'Zero-Friction Game Audio' }
+    ]
+    const result = findPerTrackDevices(devices)
+    expect(result.gameAudio?.deviceId).toBe('d2')
+  })
+
+  it('prefers Zero-Friction over BlackHole as the generic cable target', () => {
+    const devices = [
+      { deviceId: 'd1', kind: 'audiooutput', label: 'BlackHole 2ch' },
+      { deviceId: 'd2', kind: 'audiooutput', label: 'Zero-Friction Game Audio' }
+    ]
+    expect(findCableOutputDevice(devices)?.deviceId).toBe('d2')
   })
 })
