@@ -56,7 +56,13 @@ export const IPC = {
      */
     sessionInfoOverlay: 'window:session-info-overlay',
     /** Renderer → main: re-fit the window to the current stream's aspect. */
-    fitToStream: 'window:fit-to-stream'
+    fitToStream: 'window:fit-to-stream',
+    /**
+     * Renderer → main: the frameless preference (ADR-007 addendum). Frame is
+     * set at creation, so the main process recreates the window (bounds kept)
+     * and pushes the effective state back — same pattern as sessionInfoOverlay.
+     */
+    frameless: 'window:frameless'
   },
   vc: {
     /**
@@ -126,4 +132,8 @@ export interface DesktopApi {
   reportAudioRouting(report: AudioRoutingReport): void
   /** Subscribes to routing sets arriving from the phone; returns an unsubscribe function. */
   onAudioRoutingSet(listener: (mode: AudioRoutingMode) => void): () => void
+  /** Turns the frameless preference on/off (the window is recreated, bounds kept). */
+  setFrameless(enabled: boolean): void
+  /** Subscribes to the frameless preference's effective state; returns an unsubscribe function. */
+  onFramelessChanged(listener: (enabled: boolean) => void): () => void
 }

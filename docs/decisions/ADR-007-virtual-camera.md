@@ -106,7 +106,7 @@ Live use exposed a UX gap and a product refinement, both from the user:
 
 ### The frameless receiver window (2026-10-31, same live round)
 
-The clarification that followed: not windowless-but-framed, but a window **without window chrome at all** — no title bar, no traffic lights; the receiver is a pure video surface, so a capture never sees a title bar to crop. `frame: false` + the renderer CSS makes the entire window a drag surface (interactive controls opt out via `no-drag`; the video itself is grabbable; edges still resize). Combined with the tray, the app has no on-window navigation by design — move by dragging, resize by edges, quit from the tray.
+The clarification that followed: not windowless-but-framed, but a window **without window chrome at all** — no title bar, no traffic lights, **square corners** (`roundedCorners: false` — macOS rounds frameless windows by default, found live); the receiver becomes a pure video surface, so a capture never sees a title bar to crop. Refined again in the same round into a **Settings toggle** (default framed): frame is fixed at window creation, so the main process recreates the window on toggle — the user's bounds kept, the mobile-state and virtual-camera pump pushes re-asserted into the fresh renderer (`reassertPump`), and the drag surface CSS scoped under `body.frameless` (grab anywhere to move, edges resize, controls opt out). Combined with the tray, a frameless receiver has no on-window navigation by design — move by dragging, resize by edges, quit from the tray.
 
 ### Windowless mode: the menu-bar tray (2026-10-31, the recorded follow-up shipped)
 

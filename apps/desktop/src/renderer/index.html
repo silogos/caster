@@ -133,6 +133,13 @@
           <label class="window-label" for="fit-window">Window should match the video?</label>
           <button class="mixer-button" id="fit-window" type="button">Match window to video</button>
         </div>
+        <!-- Frameless (ADR-007 addendum): a pure video surface — no title bar
+             or traffic lights, square corners; drag anywhere to move. The
+             window is recreated on toggle (its shape and position are kept). -->
+        <div class="window-row">
+          <label class="window-label" for="frameless">Frameless window</label>
+          <input type="checkbox" id="frameless" />
+        </div>
         <p class="modal-note">The info window rides outside the receiver, keeping a captured feed clean.</p>
         <!-- The desktop's virtual camera toggle (ADR-007 addendum): a
              receiver-output control — publish the received feed for OBS/VJ

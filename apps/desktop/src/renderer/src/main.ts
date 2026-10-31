@@ -480,6 +480,27 @@ fitWindowEl.addEventListener('click', () => {
   window.desktopApi.fitWindowToStream()
 })
 
+// The frameless preference (ADR-007 addendum): persisted like the overlay
+// checkbox; the main process recreates the window and pushes the effective
+// state back so this checkbox never lies after a toggle.
+const FRAMELESS_KEY = 'zfc.frameless.v1'
+const framelessEl = document.getElementById('frameless') as HTMLInputElement
+const applyFramelessClass = (enabled: boolean): void => {
+  framelessEl.checked = enabled
+  document.body.classList.toggle('frameless', enabled)
+}
+const storedFrameless = window.localStorage.getItem(FRAMELESS_KEY) === 'true'
+applyFramelessClass(storedFrameless)
+window.desktopApi.setFrameless(storedFrameless)
+framelessEl.addEventListener('change', () => {
+  window.localStorage.setItem(FRAMELESS_KEY, String(framelessEl.checked))
+  window.desktopApi.setFrameless(framelessEl.checked)
+})
+const unsubscribeFrameless = window.desktopApi.onFramelessChanged((enabled) => {
+  applyFramelessClass(enabled)
+  window.localStorage.setItem(FRAMELESS_KEY, String(enabled))
+})
+
 // The virtual camera pump (ADR-007): decoded frames (MSTP — works minimized,
 // no preview needed) → WebGL canvas (GPU scale + letterbox + BGR byte-packing)
 // → raw IPC → scSendFrame. One frame in, one buffer out, no cap — the cast's
@@ -681,4 +702,5 @@ window.addEventListener('beforeunload', () => {
   unsubscribeVcStatusLine()
   unsubscribeVcState()
   unsubscribeAudioRoutingSet()
+  unsubscribeFrameless()
 })

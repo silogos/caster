@@ -235,6 +235,21 @@ export class VirtualCameraController {
     this.teardown('cast-gone')
   }
 
+  /**
+   * Re-send the current pump command — a fresh renderer (window recreated for
+   * the frameless preference) missed every earlier push; the camera itself
+   * never noticed.
+   */
+  reassertPump(): void {
+    if (this.state !== 'active' || this.cameraDims === null) return
+    this.options.onPumpCommand({
+      mode: this.noSignal ? 'no-signal' : 'frames',
+      width: this.cameraDims.width,
+      height: this.cameraDims.height,
+      pixelFormat: this.options.backend.pixelFormat
+    })
+  }
+
   /** A cast went live again while the camera idles on the no-input still. */
   onCastActive(): void {
     if (this.state !== 'active' || !this.noSignal || this.cameraDims === null) return

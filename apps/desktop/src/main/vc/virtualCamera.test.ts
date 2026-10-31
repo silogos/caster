@@ -256,6 +256,23 @@ describe('VirtualCameraController (ADR-007 state machine)', () => {
     expect(pumps.at(-1)).toEqual({ mode: 'off' })
   })
 
+  it('reassertPump re-sends the current command for a fresh renderer (frameless recreate)', async () => {
+    const syphon = fakeBackend(true, 'bgra', true)
+    const { controller, pumps } = makeController({ backend: syphon })
+    await controller.onVcStart()
+    controller.onCastGone() // idle on the no-signal still
+    const before = pumps.length
+    controller.reassertPump() // a new renderer missed the earlier pushes
+    expect(pumps.length).toBe(before + 1)
+    expect(pumps.at(-1)).toEqual({ mode: 'no-signal', width: 1280, height: 720, pixelFormat: 'bgra' })
+    controller.onCastActive()
+    controller.reassertPump()
+    expect(pumps.at(-1)).toEqual({ mode: 'frames', width: 1280, height: 720, pixelFormat: 'bgra' })
+    await controller.onVcStop()
+    controller.reassertPump() // inactive — nothing to re-assert
+    expect(pumps.at(-1)).toEqual({ mode: 'off' })
+  })
+
   it('toggle() drives both directions (the desktop switch, ADR-007 addendum)', async () => {
     const { controller, statuses, backend } = makeController()
     await controller.toggle()

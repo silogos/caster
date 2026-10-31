@@ -47,6 +47,10 @@ const desktopApi: DesktopApi = {
   fitWindowToStream: () => {
     ipcRenderer.invoke(IPC.window.fitToStream)
   },
+  setFrameless: (enabled) => {
+    ipcRenderer.invoke(IPC.window.frameless, enabled)
+  },
+  onFramelessChanged: (listener) => subscribe<boolean>(IPC.window.frameless, listener),
   onVcPump: (listener) => subscribe<VcPumpCommand>(IPC.vc.pump, listener),
   sendVcFrame: (data, width, height) => {
     // Plain send (fire-and-forget): frames are 30–120 Hz — invoke()'s reply

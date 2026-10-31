@@ -48,6 +48,9 @@ let trust: TrustStore | null = null
 //   it opens and to a "fit window to video" request.
 let castActive = false
 let sessionInfoOverlayEnabled = false
+// The frameless preference (ADR-007 addendum): frame is fixed at window
+// creation, so changes recreate the window (bounds kept). Default: framed.
+let framelessEnabled = false
 let sessionInfoWindow: BrowserWindow | null = null
 let lastMobileState: MobileStateEvent | null = null
 let lastStreamSize: { width: number; height: number } | null = null
@@ -84,6 +87,7 @@ function pushToRenderer(
     | VcPumpCommand
     | VcDesktopState
     | AudioRoutingMode
+    | boolean
   ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
@@ -396,6 +400,23 @@ app.whenReady().then(async () => {
     sessionInfoWindow = null
   }
 
+  /** Recreate the receiver in the new frame mode, keeping the user's bounds. */
+  const applyFrameless = (enabled: boolean): void => {
+    if (framelessEnabled === enabled && mainWindow !== null) return
+    framelessEnabled = enabled
+    const bounds = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow.getBounds() : undefined
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      mainWindow.destroy() // a real teardown — bypasses the close-to-hide path
+    }
+    mainWindow = createMainWindow({ frameless: enabled, bounds })
+    wireMainWindowLifecycle()
+    pushToRenderer(IPC.window.frameless, enabled)
+    // The fresh renderer lost every in-flight push — re-assert the live ones.
+    if (lastMobileState !== null) pushToRenderer(IPC.pairing.mobileState, lastMobileState)
+    virtualCamera?.reassertPump()
+    logger.info(LOG_SCOPE, `receiver recreated ${enabled ? 'frameless' : 'framed'}`)
+  }
+
   const pushOverlayState = (enabled: boolean): void => {
     if (mainWindow !== null && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.window.sessionInfoOverlay, enabled)
@@ -464,6 +485,13 @@ app.whenReady().then(async () => {
   // On-demand reshape (Phase14): after the user has sized the window for their
   // canvas, one click snaps it to the stream's aspect — the same geometry
   // math as before (current content area, stream aspect, work-area clamps).
+  ipcMain.handle(IPC.window.frameless, (_event, raw) => {
+    if (typeof raw !== 'boolean') {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed frameless state — dropping')
+      return
+    }
+    applyFrameless(raw)
+  })
   ipcMain.handle(IPC.window.fitToStream, () => {
     if (mainWindow === null || mainWindow.isDestroyed()) return
     if (!castActive || lastStreamSize === null) {
@@ -481,25 +509,29 @@ app.whenReady().then(async () => {
     setSessionInfoOverlayEnabled(raw)
   })
 
+  const wireMainWindowLifecycle = (): void => {
+    if (mainWindow === null) return
+    // Windowless mode (ADR-007 follow-up): closing the receiver hides it — the
+    // cast and the virtual camera keep running; the tray owns the app's life.
+    // The renderer stays alive hidden (backgroundThrottling off), so decode,
+    // the mixer, and the VC pump never notice the window being gone.
+    mainWindow.on('close', (event) => {
+      if (!isQuitting()) {
+        event.preventDefault()
+        mainWindow?.hide()
+        app.dock?.hide()
+        logger.info(LOG_SCOPE, 'receiver hidden — running from the menu bar (cast/virtual camera unaffected)')
+      }
+    })
+    // The receiver window is the product: at a real quit (tray/OS), release
+    // the blocker and the overlay with it.
+    mainWindow.on('closed', () => {
+      stopCastKeepAwake()
+      closeSessionInfoWindow()
+    })
+  }
   mainWindow = createMainWindow()
-  // Windowless mode (ADR-007 follow-up): closing the receiver hides it — the
-  // cast and the virtual camera keep running; the tray owns the app's life.
-  // The renderer stays alive hidden (backgroundThrottling off), so decode,
-  // the mixer, and the VC pump never notice the window being gone.
-  mainWindow.on('close', (event) => {
-    if (!isQuitting()) {
-      event.preventDefault()
-      mainWindow?.hide()
-      app.dock?.hide()
-      logger.info(LOG_SCOPE, 'receiver hidden — running from the menu bar (cast/virtual camera unaffected)')
-    }
-  })
-  // The receiver window is the product: at a real quit (tray/OS), release the
-  // blocker and the overlay with it.
-  mainWindow.on('closed', () => {
-    stopCastKeepAwake()
-    closeSessionInfoWindow()
-  })
+  wireMainWindowLifecycle()
 
   const showReceiver = (): void => {
     app.dock?.show()
