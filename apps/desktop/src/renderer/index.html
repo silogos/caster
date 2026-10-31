@@ -35,12 +35,20 @@
            the only way trust ends (bye 'forget'). -->
       <div class="no-input" id="no-input-stage" hidden>
         <h2 class="no-input-heading" id="no-input-heading">No input video</h2>
-        <p class="no-input-subline" id="no-input-subline"></p>
-        <button class="overlay-button no-input-disconnect" id="no-input-disconnect" type="button">Disconnect</button>
-        <!-- Receiver/environment controls stay reachable while there is no
-             signal (ADR-007 addendum): the mixer and window preferences do
-             not depend on a live stream. -->
-        <button class="overlay-button no-input-settings" id="no-input-settings" type="button">Settings</button>
+        <!-- The stage's controls are the cast overlay's own structure
+             (class and all): status chip left, controls right — hover
+             reveals them, cursor anywhere in the window. The subline lives
+             in the chip now (overlay-language status); the center keeps only
+             the monitor heading. Receiver/environment controls stay
+             reachable while there is no signal (ADR-007 addendum) — the
+             mixer and window preferences do not depend on a live stream. -->
+        <div class="cast-overlay no-input-overlay">
+          <p class="cast-status" id="no-input-status"></p>
+          <div class="no-input-actions">
+            <button class="overlay-button" id="no-input-settings" type="button">Settings</button>
+            <button class="overlay-button" id="no-input-disconnect" type="button">Disconnect</button>
+          </div>
+        </div>
       </div>
       <!-- The virtual camera's placeholder (ADR-007): while the camera
            publishes there is no preview (by design — the phone asked for

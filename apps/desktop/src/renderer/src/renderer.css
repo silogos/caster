@@ -153,47 +153,30 @@ body.frameless .modal {
   color: var(--fg-muted);
 }
 
-.no-input-subline {
-  font-size: 15px;
-  color: var(--fg-muted);
+/* The no-input stage's controls — literally the cast overlay (same class,
+   so same fixed layer, padding, and reveal transition): status chip left,
+   controls right, Disconnect to the right of Settings. Reveal trigger below;
+   visibility rides the parent .no-input[hidden]. */
+.no-input-actions {
+  display: flex;
+  gap: 8px;
 }
 
-/* The no-input stage's buttons — the cast overlay's own chip style
-   (.overlay-button) and position, hover-revealed at the TOP of the window:
-   status left / settings right there → disconnect left / settings right here.
-   Fixed positioning lifts them out of the centered stage flow. */
-.no-input-disconnect {
-  position: fixed;
-  top: 16px;
-  left: 20px;
+/* The subline is a status sentence now — a chip, not a wrapping paragraph:
+   ellipsize like the session-info line rather than push the buttons away. */
+.no-input-overlay .cast-status {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.no-input-settings {
-  position: fixed;
-  top: 16px;
-  right: 20px;
-}
-
-/* Hidden until hover — and NOT clickable while invisible. Scoped up to
-   `.stage` so this outranks the later `.overlay-button { pointer-events:
-   auto }` (same tag count would lose to source order). */
-.stage .no-input-disconnect,
-.stage .no-input-settings {
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-/* Reveal on body:hover — the cast overlay's own trigger (body.receiving:hover
-   there): the cursor anywhere inside the window, INCLUDING over the settings
-   modal's backdrop (a body child outside .stage — a .stage:hover trigger let
-   the buttons drop out as soon as the modal opened). The buttons sit inside
-   .no-input, display:none when not in this state, so the rule only fires
-   when the no-input stage is actually shown. */
-body:hover .no-input-disconnect,
-body:hover .no-input-settings {
+/* body:hover — the cast overlay's own trigger (body.receiving:hover there):
+   the cursor anywhere inside the window, including over the settings modal's
+   backdrop. The overlay sits inside .no-input (display:none when not in this
+   state), so the rule only fires when the no-input stage is actually shown. */
+body:hover .no-input-overlay {
   opacity: 1;
-  pointer-events: auto;
 }
 
 /* The VC placeholder's own off switch — same quiet button language. */

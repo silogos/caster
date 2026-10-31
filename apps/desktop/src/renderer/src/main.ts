@@ -38,7 +38,9 @@ const fitWindowEl = document.getElementById('fit-window') as HTMLButtonElement
 // session — the only way trust ends.
 const noInputStageEl = document.getElementById('no-input-stage') as HTMLDivElement
 const noInputHeadingEl = document.getElementById('no-input-heading') as HTMLHeadingElement
-const noInputSublineEl = document.getElementById('no-input-subline') as HTMLParagraphElement
+// The subline lives in the stage overlay's status chip now (cast-overlay
+// language: status left, controls right) — the center keeps the heading only.
+const noInputStatusEl = document.getElementById('no-input-status') as HTMLParagraphElement
 const noInputDisconnectEl = document.getElementById('no-input-disconnect') as HTMLButtonElement
 const noInputSettingsEl = document.getElementById('no-input-settings') as HTMLButtonElement
 // The virtual camera's placeholder stage (ADR-007): shown instead of the video
@@ -240,7 +242,7 @@ function renderHero(): void {
     const view = noInputView(connectedName, reconnecting)
     noInputStageEl.hidden = false
     noInputHeadingEl.textContent = view.heading
-    noInputSublineEl.textContent = view.subline
+    noInputStatusEl.textContent = view.subline
     heroHeadingEl.hidden = true
     statusEl.hidden = true
     qrCardEl.hidden = true
