@@ -158,26 +158,27 @@ body.frameless .modal {
   color: var(--fg-muted);
 }
 
-/* The no-input stage's buttons — hover-revealed at the TOP of the window,
-   the same position and interaction language as the cast overlay's controls
-   (status left, settings right → here: disconnect left, settings right).
+/* The no-input stage's buttons — the cast overlay's own chip style
+   (.overlay-button) and position, hover-revealed at the TOP of the window:
+   status left / settings right there → disconnect left / settings right here.
    Fixed positioning lifts them out of the centered stage flow. */
 .no-input-disconnect {
   position: fixed;
   top: 16px;
   left: 20px;
-  margin: 0;
 }
 
 .no-input-settings {
   position: fixed;
   top: 16px;
   right: 20px;
-  margin: 0;
 }
 
-.no-input-disconnect,
-.no-input-settings {
+/* Hidden until hover — and NOT clickable while invisible. Scoped up to
+   `.stage` so this outranks the later `.overlay-button { pointer-events:
+   auto }` (same tag count would lose to source order). */
+.stage .no-input-disconnect,
+.stage .no-input-settings {
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
