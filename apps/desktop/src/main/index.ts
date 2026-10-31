@@ -49,8 +49,15 @@ let trust: TrustStore | null = null
 let castActive = false
 let sessionInfoOverlayEnabled = false
 // The frameless preference (ADR-007 addendum): frame is fixed at window
-// creation, so changes recreate the window (bounds kept). Default: framed.
+// creation, so changes recreate the window (bounds kept) — but NEVER while a
+// cast is live: the renderer owns the WebRTC pcs, and destroying it kills the
+// media (found live: the phone saw the cast drop on toggle). The pref applies
+// immediately when idle, else at the cast's end — the product's existing
+// "takes effect on next cast" semantics.
 let framelessEnabled = false
+/** What the LIVE window was created with; differs from the pref while deferred. */
+let windowIsFrameless = false
+let framelessRecreatePending = false
 let sessionInfoWindow: BrowserWindow | null = null
 let lastMobileState: MobileStateEvent | null = null
 let lastStreamSize: { width: number; height: number } | null = null
@@ -401,20 +408,39 @@ app.whenReady().then(async () => {
   }
 
   /** Recreate the receiver in the new frame mode, keeping the user's bounds. */
-  const applyFrameless = (enabled: boolean): void => {
-    if (framelessEnabled === enabled && mainWindow !== null) return
-    framelessEnabled = enabled
+  const recreateMainWindow = (frameless: boolean): void => {
     const bounds = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow.getBounds() : undefined
+    const wasVisible = mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible()
     if (mainWindow !== null && !mainWindow.isDestroyed()) {
       mainWindow.destroy() // a real teardown — bypasses the close-to-hide path
     }
-    mainWindow = createMainWindow({ frameless: enabled, bounds })
+    mainWindow = createMainWindow({ frameless, bounds })
+    windowIsFrameless = frameless
     wireMainWindowLifecycle()
-    pushToRenderer(IPC.window.frameless, enabled)
+    if (!wasVisible) {
+      // Windowless (tray) users stay windowless across the swap.
+      mainWindow.once('ready-to-show', () => {
+        mainWindow?.hide()
+        app.dock?.hide()
+      })
+    }
+    pushToRenderer(IPC.window.frameless, frameless)
     // The fresh renderer lost every in-flight push — re-assert the live ones.
     if (lastMobileState !== null) pushToRenderer(IPC.pairing.mobileState, lastMobileState)
     virtualCamera?.reassertPump()
-    logger.info(LOG_SCOPE, `receiver recreated ${enabled ? 'frameless' : 'framed'}`)
+    logger.info(LOG_SCOPE, `receiver recreated ${frameless ? 'frameless' : 'framed'}`)
+  }
+
+  const applyFrameless = (enabled: boolean): void => {
+    framelessEnabled = enabled
+    pushToRenderer(IPC.window.frameless, enabled)
+    if (windowIsFrameless === enabled) return
+    if (castActive) {
+      framelessRecreatePending = true
+      logger.info(LOG_SCOPE, 'frameless change deferred — a live cast must not be interrupted (applies at cast end)')
+      return
+    }
+    recreateMainWindow(enabled)
   }
 
   const pushOverlayState = (enabled: boolean): void => {
@@ -467,6 +493,11 @@ app.whenReady().then(async () => {
       lastStreamSize = null
       // The cast is over — the virtual camera dies with it (ADR-007).
       virtualCamera?.onCastGone()
+      // A frameless change waited out the cast — now is safe to apply.
+      if (framelessRecreatePending) {
+        framelessRecreatePending = false
+        recreateMainWindow(framelessEnabled)
+      }
     }
   })
   // The stream's size (first metadata, every rotation, quality steps): the
