@@ -422,15 +422,18 @@ app.whenReady().then(async () => {
   /** Recreate the receiver in the new frame mode, keeping the user's bounds. */
   const recreateMainWindow = (frameless: boolean): void => {
     const bounds = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow.getBounds() : undefined
-    const wasVisible = mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible()
     if (mainWindow !== null && !mainWindow.isDestroyed()) {
       mainWindow.destroy() // a real teardown — bypasses the close-to-hide path
     }
     mainWindow = createMainWindow({ frameless, bounds })
     windowIsFrameless = frameless
     wireMainWindowLifecycle()
-    if (!wasVisible) {
-      // Windowless (tray) users stay windowless across the swap.
+    // Windowless (tray) users stay windowless across the swap — but ONLY if
+    // they were truly in tray mode (dock hidden), not merely mid-startup where
+    // isVisible() is still false before ready-to-show (live finding: the app
+    // "didn't open" because the recreated window was hidden on ready-to-show).
+    const wasDockHidden = app.dock?.isVisible() === false
+    if (wasDockHidden) {
       mainWindow.once('ready-to-show', () => {
         mainWindow?.hide()
         app.dock?.hide()
