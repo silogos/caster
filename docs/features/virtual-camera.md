@@ -48,6 +48,14 @@ Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.
 - [ ] Every teardown path removes the camera cleanly (stop cast / Disconnect / quit; OBS doesn't hang).
 - [ ] Mid-cast reconnect → camera stops; phone re-query shows inactive; re-toggle works.
 
+**Linux (adapter shipped — issue #73; needs a Linux rig with PipeWire + GStreamer):**
+
+- [ ] `gst-launch-1.0` present → the phone's card shows available; absent → honestly unavailable (install guidance in the log).
+- [ ] Firefox (camera portal) sees **"Zero-Friction Camera"** and shows the feed; aspect correct. OBS: check its current PipeWire-camera transition state and record honestly.
+- [ ] 60 fps cast → smooth node output; the declared-caps 60/1 vs real-rate interplay is the knob if pacing looks wrong (`DECLARED_FRAMERATE`, `vc/pipewirePublisher.ts`).
+- [ ] No-signal idle, minimize, rotation letterbox, every teardown path — the same matrix as above.
+- [ ] Raw `/dev/video*` consumers: confirm they do **not** see it (the recorded reach limitation).
+
 ## Known limitations (recorded in ADR-007)
 
 Windows device name is the DLL's built-in **"Softcam"**; Windows ARM64 reports unavailable (no arm64 softcam build); macOS reaches **OBS/VJ apps only** (call apps wait on the CMIO entitlement door); audio routing for call consumers is v1-out-of-scope (video-only); closing the receiver window still ends the app (tray mode = follow-up).
