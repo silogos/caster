@@ -104,6 +104,20 @@
           </div>
         </div>
         <p class="modal-note">Volume is this computer's playback control — cast quality is set on the phone.</p>
+        <!-- Issue #54 — audio output routing: a receiver/environment control.
+             "Cable" sends the mix to a virtual cable device (BlackHole) so
+             recording apps can capture it while the speakers stay silent;
+             "Both" monitors locally at the same time. -->
+        <h3 class="modal-section-title">Audio output</h3>
+        <div class="window-row">
+          <label class="window-label" for="audio-output">Send audio to</label>
+          <select id="audio-output" class="window-select">
+            <option value="speakers" data-route="speakers">Speakers</option>
+            <option value="cable" data-route="cable">Virtual cable only (silent speakers)</option>
+            <option value="both" data-route="both">Speakers + virtual cable</option>
+          </select>
+        </div>
+        <p class="modal-note" id="audio-output-note"></p>
         <!-- Phase14 window controls — receiver window behavior, the desktop's
              own domain (overview.md): the optional session-info window lives
              OUTSIDE the receiver, so window capture (e.g. OBS) records a pure

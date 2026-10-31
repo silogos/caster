@@ -1,5 +1,6 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { findCableOutputDevice, isRoutingMode, type RoutingMode } from './audio/routing'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
@@ -70,9 +71,14 @@ const createPeerConnection = (): PeerConnectionLike =>
 // Phase9's mixer (audio.md): each remote stream → its own GainNode → the one
 // AudioContext.destination. The receiver's only allowed audio control — no
 // further processing. Levels persist via localStorage; the context is created
-// lazily on the first stream (mixer.ts).
+// lazily on the first stream (mixer.ts). Issue #54: the destination can be
+// re-routed (speakers / virtual cable / both) — the cable context is built
+// with a sinkId pointing at the detected BlackHole device.
 const mixer = new AudioMixer({
-  createAudioContext: () => new AudioContext(),
+  createAudioContext: (options) =>
+    options?.sinkId !== undefined
+      ? new AudioContext({ sinkId: options.sinkId } as AudioContextOptions)
+      : new AudioContext(),
   storage: window.localStorage,
   log
 })
@@ -340,6 +346,62 @@ const wireMixerChannel = (channel: MixerChannel, sliderId: string, muteButtonId:
 wireMixerChannel('game', 'game-volume', 'game-mute')
 wireMixerChannel('mic', 'mic-volume', 'mic-mute')
 
+// Issue #54 — audio output routing: where the mixed cast audio goes. The
+// cable target is a virtual cable device (BlackHole on macOS); without one,
+// the cable options are disabled with install guidance. Detection re-runs
+// every time the settings modal opens — the device can appear after an
+// install without a receiver restart.
+const audioOutputEl = document.getElementById('audio-output') as HTMLSelectElement
+const audioOutputNoteEl = document.getElementById('audio-output-note') as HTMLParagraphElement
+
+const CABLE_GUIDANCE =
+  'For send-only audio, install a virtual cable: brew install blackhole-2ch (then restart).'
+
+let cableDeviceId: string | null = null
+let labelsUnlocked = false
+
+const renderRoutingUi = (device: { deviceId: string; label: string } | null): void => {
+  cableDeviceId = device?.deviceId ?? null
+  for (const option of Array.from(audioOutputEl.options)) {
+    if (option.dataset.route === 'cable' || option.dataset.route === 'both') {
+      option.disabled = cableDeviceId === null
+    }
+  }
+  if (device === null) {
+    audioOutputNoteEl.textContent = CABLE_GUIDANCE
+    // A mode stored by a previous session whose device is now gone falls
+    // back to speakers — refusing beats a silent cast.
+    if (mixer.getRoutingMode() !== 'speakers') mixer.setRoutingMode('speakers')
+  } else {
+    audioOutputNoteEl.textContent = `Cable: ${device.label}`
+  }
+  audioOutputEl.value = mixer.getRoutingMode()
+}
+
+const detectCableDevice = async (): Promise<void> => {
+  try {
+    // Output device labels/ids populate only after an audio permission was
+    // granted once; the receiver runs in Electron with media permissions
+    // granted by default, so this one-time probe unlocks them.
+    if (!labelsUnlocked) {
+      labelsUnlocked = true
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
+      probe.getTracks().forEach((track) => track.stop())
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    renderRoutingUi(findCableOutputDevice(devices))
+  } catch (error) {
+    log('warn', 'audio output device detection failed', { error: String(error) })
+    renderRoutingUi(null)
+  }
+}
+
+audioOutputEl.addEventListener('change', () => {
+  const mode = audioOutputEl.value
+  if (!isRoutingMode(mode)) return
+  mixer.setRoutingMode(mode as RoutingMode, cableDeviceId ?? undefined)
+})
+
 // The settings modal (receiver/environment controls only — overview.md):
 // opened from the hover overlay's trigger; closed via the button, Escape,
 // or a click on the backdrop outside the dialog.
@@ -351,6 +413,7 @@ function hideSettings(): void {
 openSettingsEl.addEventListener('click', () => {
   settingsBackdropEl.hidden = false
   closeSettingsEl.focus()
+  void detectCableDevice()
 })
 // The no-signal stage's Settings (ADR-007 addendum): environment controls do
 // not need a live stream — same modal as the cast overlay's trigger.

@@ -36,6 +36,20 @@ Each remote stream becomes a `MediaStreamAudioSourceNode` → its **own** `GainN
 - A rebuilt pc produces a new `MediaStream`; re-attaching a channel disconnects the previous source first and the channel's gain node (and its level) is reused. Detaching a stream disconnects the source; the level survives for the next stream.
 - Mute is instant: gain is a plain `AudioParam.value` assignment, no ramps (no processing, per the spec).
 
+### Audio output routing (issue #54, 2026-10-04 — ADR-005 Phase D pulled forward)
+
+The mix can now leave the speakers. A third setting next to the mixer, **"Send audio to"** in the settings modal: **Speakers** (today's behavior, the default), **Virtual cable only (silent speakers)**, or **Speakers + virtual cable**. The cable target is a virtual cable *device* — BlackHole on macOS (free, open-source, signed by its author; `brew install blackhole-2ch` + a restart). No custom audio driver is written ([ADR-005](../decisions/ADR-005-virtual-camera-output.md) decision); the camera half of that ADR is separately gated on macOS signing, but the audio half is not — which is why this landed first.
+
+Mechanics (all in `audio/mixer.ts` + the pure `audio/routing.ts`):
+
+- `setRoutingMode(mode, cableDeviceId)` rewires the gains' *outgoing* edges: `cable` disconnects both gains from the destination and connects them to a `MediaStreamAudioDestinationNode` tap in the main context; `both` connects both targets; `speakers` reconnects only the destination. Gains stay shared, so volume/mute apply identically on every route — routing changes destinations, never levels.
+- The tap feeds a **second AudioContext created with `sinkId` = the cable device** (`AudioContext.setSinkId`-era API; Electron 44/Chromium supports the constructor option). The cable context is built **only when a device is known** — a missing sinkId would fall back to the system default, which *is* the speakers, the exact collision this exists to avoid. With no device, a cable request is refused (logged warn, mode unchanged): refusing beats a silent cast and beats an accidental speaker return.
+- Returning to `speakers` closes the cable context; the main context is never closed.
+- Detection is pure (`findCableOutputDevice`): an `audiooutput` device whose label matches `/blackhole/i` with a usable `deviceId` — BlackHole also appears as an *input* device (the side OBS reads) and that side is not ours. Detection re-runs each time the settings modal opens (a first-launch `getUserMedia` probe unlocks Chromium's device labels/ids); without a device the cable options render disabled and the note shows the install command.
+- Persistence: mode stored separately (`zfc.audio-routing.v1`, same localStorage rationale as the levels), validated on restore; an invalid stored mode falls back to speakers. A stored cable mode whose device has disappeared at launch falls back to speakers too (logged) — never silence.
+
+Known limitation (recorded, deferred): routing is **whole-mix** — game audio and mic move together. ADR-005's per-track three-state routing (send game audio to the cable while the mic stays off, etc.) is a follow-up; the wiring exists for it (the gains are per-channel), what is missing is per-channel route state and UI.
+
 ### UI
 
 The mixer lives in the receiver's **settings modal** (review-time restructure after Phase9: the video fills the whole window; hovering reveals a small overlay with the status line and a *Settings* trigger; the trigger opens the modal). It is the receiver's one allowed audio control (receiver/environment control, [overview.md](../architecture/overview.md) — never a cast setting). One row per channel: label, 0–100 % slider, mute/unmute button (`aria-pressed`); a note under them states that cast quality is set on the phone. The modal closes via its button, Escape, or a backdrop click. Slider values initialize from the persisted levels; every change goes through the mixer (which persists it), so the panel and the graph cannot drift apart.

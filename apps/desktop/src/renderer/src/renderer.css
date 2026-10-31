@@ -399,6 +399,19 @@ body.receiving:hover .cast-overlay {
   cursor: pointer;
 }
 
+/* Issue #54 audio routing — the select in the settings modal, styled like
+   the other modal controls. */
+.window-row select.window-select {
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg, transparent);
+  border: 1px solid var(--fg);
+  border-radius: 6px;
+  padding: 4px 8px;
+  max-width: 260px;
+  cursor: pointer;
+}
+
 /*
   Phase9's mixer (audio.md) — the receiver's one audio control: independent
   volume/mute per stream. Receiver/environment control only (overview.md):
