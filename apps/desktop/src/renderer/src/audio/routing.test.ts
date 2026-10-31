@@ -59,6 +59,35 @@ describe('findCableOutputDevice', () => {
     const second = device({ deviceId: 'bh-64ch', label: 'BlackHole 64ch' })
     expect(findCableOutputDevice([first, second])?.deviceId).toBe('bh-2ch')
   })
+
+  // Issue #74: VB-Cable is the pragmatic Windows cable — a third tier behind
+  // our own devices and BlackHole (the platforms don't compete; the order
+  // only decides the rare machine with several installed).
+  it('matches VB-Cable labels (Windows: "CABLE Output (VB-Audio Virtual Cable)")', () => {
+    const result = findCableOutputDevice([
+      device({ deviceId: 'spk', label: 'Speakers (Realtek Audio)' }),
+      device({ deviceId: 'vbc', label: 'CABLE Output (VB-Audio Virtual Cable)' })
+    ])
+    expect(result?.deviceId).toBe('vbc')
+  })
+
+  it('prefers Zero-Friction, then BlackHole, then VB-Cable when several exist', () => {
+    const devices = [
+      device({ deviceId: 'vbc', label: 'CABLE Output (VB-Audio Virtual Cable)' }),
+      device({ deviceId: 'bh', label: 'BlackHole 2ch' }),
+      device({ deviceId: 'zf', label: 'Zero-Friction Game Audio' })
+    ]
+    expect(findCableOutputDevice(devices)?.deviceId).toBe('zf')
+    expect(findCableOutputDevice(devices.slice(0, 2))?.deviceId).toBe('bh')
+    expect(findCableOutputDevice(devices.slice(0, 1))?.deviceId).toBe('vbc')
+  })
+
+  it('ignores the VB-Cable input side, like BlackHole\u2019s', () => {
+    const result = findCableOutputDevice([
+      device({ deviceId: 'vbc-in', kind: 'audioinput', label: 'CABLE Output (VB-Audio Virtual Cable)' })
+    ])
+    expect(result).toBeNull()
+  })
 })
 
 describe('routing mode persistence', () => {

@@ -360,9 +360,26 @@ const audioOutputNoteEl = document.getElementById('audio-output-note') as HTMLPa
 
 const CABLE_GUIDANCE =
   'For send-only audio, install a virtual cable: brew install blackhole-2ch (then restart).'
+const VBCABLE_GUIDANCE =
+  'For send-only audio, install VB-Cable (vb-audio.com/cable/), then restart the app.'
+const LINUX_CABLE_PENDING =
+  'Send-only audio needs the PipeWire virtual devices (in development) — a third-party cable works if you have one.'
 
 let cableDeviceId: string | null = null
 let labelsUnlocked = false
+// The main process reports its OS on the virtual-audio push (issue #74) —
+// the guidance below is honest per platform without sniffing the renderer.
+let desktopPlatform: 'darwin' | 'win32' | 'linux' | 'other' = 'other'
+
+/** What to tell the user when no cable device exists — per platform (#74). */
+const cableGuidanceText = (): string => {
+  if (desktopPlatform === 'win32') return VBCABLE_GUIDANCE
+  if (desktopPlatform === 'linux') return LINUX_CABLE_PENDING
+  // macOS with the bundled driver: the Install row's own note explains the
+  // better path — no third-party guidance on top of it.
+  if (desktopPlatform === 'darwin' && virtualAudioSupported) return ''
+  return CABLE_GUIDANCE
+}
 
 const renderRoutingUi = (device: { deviceId: string; label: string } | null): void => {
   cableDeviceId = device?.deviceId ?? null
@@ -372,7 +389,7 @@ const renderRoutingUi = (device: { deviceId: string; label: string } | null): vo
     }
   }
   if (device === null) {
-    audioOutputNoteEl.textContent = CABLE_GUIDANCE
+    audioOutputNoteEl.textContent = cableGuidanceText()
     // A mode stored by a previous session whose device is now gone falls
     // back to speakers — refusing beats a silent cast.
     if (mixer.getRoutingMode() !== 'speakers') mixer.setRoutingMode('speakers')
@@ -422,7 +439,11 @@ const renderVirtualAudioRow = (): void => {
 
 const unsubscribeVirtualAudioState = window.desktopApi.onVirtualAudioState((state) => {
   virtualAudioSupported = state.supported
+  desktopPlatform = state.platform
   renderVirtualAudioRow()
+  // The guidance text may have changed with the platform — refresh it if the
+  // no-cable note is what's on screen right now.
+  if (cableDeviceId === null) audioOutputNoteEl.textContent = cableGuidanceText()
 })
 
 virtualAudioInstallButtonEl.addEventListener('click', () => {
