@@ -389,6 +389,61 @@ const reportRouting = (): void => {
   })
 }
 
+// ADR-008 install UX: the Zero-Friction loopback devices as a one-click
+// install — one administrator password, once, and OBS/Zoom can pick game
+// audio and the mic as two separate input devices forever after. The row
+// appears only where the main process says installing is possible (macOS
+// with the bundled driver) AND the devices are missing.
+const virtualAudioRowEl = document.getElementById('virtual-audio-row') as HTMLDivElement
+const virtualAudioInstallButtonEl = document.getElementById('virtual-audio-install') as HTMLButtonElement
+const virtualAudioNoteEl = document.getElementById('virtual-audio-note') as HTMLParagraphElement
+
+const VIRTUAL_AUDIO_GUIDANCE =
+  'Adds two input devices — Zero-Friction Game Audio and Zero-Friction Mic — that OBS and Zoom can pick separately. One administrator password, once.'
+const VIRTUAL_AUDIO_INSTALLING = 'Installing — enter this Mac’s administrator password…'
+const VIRTUAL_AUDIO_DECLINED = 'Install cancelled — the devices were not installed.'
+const VIRTUAL_AUDIO_FAILED = 'Install failed — try again.'
+/** coreaudiod restarts asynchronously after the elevated copy — poll briefly. */
+const VIRTUAL_AUDIO_REDETECT_ATTEMPTS = 10
+const VIRTUAL_AUDIO_REDETECT_INTERVAL_MS = 500
+
+let virtualAudioSupported = false
+let perTrackMissing = true
+let virtualAudioNoteText = VIRTUAL_AUDIO_GUIDANCE
+
+const renderVirtualAudioRow = (): void => {
+  const visible = virtualAudioSupported && perTrackMissing
+  virtualAudioRowEl.hidden = !visible
+  virtualAudioNoteEl.hidden = !visible
+  if (visible) virtualAudioNoteEl.textContent = virtualAudioNoteText
+}
+
+const unsubscribeVirtualAudioState = window.desktopApi.onVirtualAudioState((state) => {
+  virtualAudioSupported = state.supported
+  renderVirtualAudioRow()
+})
+
+virtualAudioInstallButtonEl.addEventListener('click', () => {
+  if (virtualAudioInstallButtonEl.disabled) return
+  virtualAudioInstallButtonEl.disabled = true
+  virtualAudioNoteText = VIRTUAL_AUDIO_INSTALLING
+  renderVirtualAudioRow()
+  void window.desktopApi.installVirtualAudio().then(async (result) => {
+    if (result === 'installed') {
+      for (let attempt = 0; attempt < VIRTUAL_AUDIO_REDETECT_ATTEMPTS && perTrackMissing; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, VIRTUAL_AUDIO_REDETECT_INTERVAL_MS))
+        await detectCableDevice()
+      }
+      virtualAudioNoteText = perTrackMissing ? VIRTUAL_AUDIO_FAILED : VIRTUAL_AUDIO_GUIDANCE
+    } else {
+      // A cancelled password prompt is a user decision, not an error.
+      virtualAudioNoteText = result === 'declined' ? VIRTUAL_AUDIO_DECLINED : VIRTUAL_AUDIO_FAILED
+    }
+    virtualAudioInstallButtonEl.disabled = false
+    renderVirtualAudioRow()
+  })
+})
+
 const detectCableDevice = async (): Promise<void> => {
   try {
     // Output device labels/ids populate only after an audio permission was
@@ -404,10 +459,13 @@ const detectCableDevice = async (): Promise<void> => {
     // Per-track devices (batch A, ADR-008): game audio and mic each get
     // their own input device — the two-track architecture end to end.
     const perTrack = findPerTrackDevices(devices)
+    perTrackMissing = perTrack.gameAudio === null || perTrack.mic === null
+    if (!perTrackMissing) virtualAudioNoteText = VIRTUAL_AUDIO_GUIDANCE
     mixer.setPerTrackCableDevices({
       game: perTrack.gameAudio?.deviceId,
       mic: perTrack.mic?.deviceId
     })
+    renderVirtualAudioRow()
   } catch (error) {
     log('warn', 'audio output device detection failed', { error: String(error) })
     renderRoutingUi(null)
@@ -727,5 +785,6 @@ window.addEventListener('beforeunload', () => {
   unsubscribeVcState()
   unsubscribeVcAutoStart()
   unsubscribeAudioRoutingSet()
+  unsubscribeVirtualAudioState()
   unsubscribeFrameless()
 })

@@ -1,6 +1,6 @@
 # ADR-008: Virtual audio devices — audio as input, the capture-card experience (macOS)
 
-- **Status:** accepted (2026-10-31) — batch A of the capture-card north star; tracking: issue #69 (batch B, always-on, shipped in the same series).
+- **Status:** accepted (2026-10-31) — batch A of the capture-card north star; tracking: issue #69 (batch B, always-on, shipped in the same series; the one-click install UX shipped as batch A's closer).
 
 ## Context
 
@@ -29,9 +29,11 @@ The mixer's existing routing modes (Speakers / Cable / Both) now layer with per-
 - Channels without a per-track device fall back to the shared mix cable (the BlackHole-compatible path).
 - Speaker behavior is orthogonal: speakers mode still plays to the default output; cable-only keeps speakers silent; both monitors locally. Per-track and shared routing coexist — e.g. game audio to its device + speakers while mic goes only to its device.
 
-### Installation UX (planned, not yet shipped)
+### Installation UX (shipped — the one-click Install row)
 
-The current `install.sh` is a developer bootstrap. For end users: the app detects missing devices (enumerate output devices, look for the labels), offers a one-click "Install" that triggers an `osascript` admin prompt (native macOS password dialog), copies the bundle, restarts `coreaudiod`, and re-detects. One password, once, forever.
+The settings modal's **Audio output** section carries an **Install** row whenever this desktop can install (macOS + the bundled `.driver` present, pushed as `virtual-audio:state`) **and** the devices are missing from enumeration. Clicking it runs the bundled `install.sh` through `osascript`'s **native administrator password dialog** (`do shell script … with administrator privileges`) — the script replaces the bundle at `/Library/Audio/Plug-Ins/HAL/` and restarts `coreaudiod` (launchd brings it back in ~1 s). The renderer then re-detects for a few seconds until both devices enumerate; per-track routing, the cable option, and the phone's `cableAvailable` mirror all follow the normal detection path — no protocol change. One password, once, forever.
+
+Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **declined** (the password prompt was cancelled — a user decision, not an error; osascript reports it as exit 1 + "User canceled (−128)" on stderr, so the installer captures stderr), **failed** (copy didn't land), **unsupported** (non-macOS). Known costs: a `coreaudiod` restart blips system audio for ~1 s (a live cast's audio may need a moment to recover); install is allowed anytime but is naturally done once. No in-app uninstall — `sudo resources/zfaudio/install.sh --remove` remains the manual path.
 
 ### Platform map
 

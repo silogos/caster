@@ -7,7 +7,9 @@ import type {
   SignalingSdpMessage,
   TrustedDeviceView,
   VcDesktopState,
-  VcPumpCommand
+  VcPumpCommand,
+  VirtualAudioInstallResult,
+  VirtualAudioState
 } from './types'
 
 /**
@@ -88,6 +90,12 @@ export const IPC = {
     report: 'audio-routing:report',
     /** Push: the phone asked to change the mode — the renderer applies it. */
     set: 'audio-routing:set'
+  },
+  virtualAudio: {
+    /** Push: whether this desktop can install the Zero-Friction audio devices (ADR-008). */
+    state: 'virtual-audio:state',
+    /** Renderer → main: run the one-time elevated install (admin prompt on screen). */
+    install: 'virtual-audio:install'
   }
 } as const
 
@@ -138,6 +146,10 @@ export interface DesktopApi {
   reportAudioRouting(report: AudioRoutingReport): void
   /** Subscribes to routing sets arriving from the phone; returns an unsubscribe function. */
   onAudioRoutingSet(listener: (mode: AudioRoutingMode) => void): () => void
+  /** Subscribes to the virtual audio install capability; returns an unsubscribe function. */
+  onVirtualAudioState(listener: (state: VirtualAudioState) => void): () => void
+  /** Runs the one-time elevated install of the Zero-Friction audio devices (ADR-008). */
+  installVirtualAudio(): Promise<VirtualAudioInstallResult>
   /** Turns the frameless preference on/off (the window is recreated, bounds kept). */
   setFrameless(enabled: boolean): void
   /** Subscribes to the frameless preference's effective state; returns an unsubscribe function. */

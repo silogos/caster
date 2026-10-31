@@ -8,7 +8,8 @@ import type {
   SignalingIceMessage,
   SignalingSdpMessage,
   VcDesktopState,
-  VcPumpCommand
+  VcPumpCommand,
+  VirtualAudioState
 } from '../shared/types'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -71,7 +72,9 @@ const desktopApi: DesktopApi = {
   reportAudioRouting: (report) => {
     ipcRenderer.send(IPC.audioRouting.report, report)
   },
-  onAudioRoutingSet: (listener) => subscribe<AudioRoutingMode>(IPC.audioRouting.set, listener)
+  onAudioRoutingSet: (listener) => subscribe<AudioRoutingMode>(IPC.audioRouting.set, listener),
+  onVirtualAudioState: (listener) => subscribe<VirtualAudioState>(IPC.virtualAudio.state, listener),
+  installVirtualAudio: () => ipcRenderer.invoke(IPC.virtualAudio.install)
 }
 
 contextBridge.exposeInMainWorld('desktopApi', desktopApi)

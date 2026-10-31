@@ -118,6 +118,15 @@
           </select>
         </div>
         <p class="modal-note" id="audio-output-note"></p>
+        <!-- ADR-008 install UX: the Zero-Friction loopback devices as a
+             one-click install (macOS, once) — the last capture-card ceremony.
+             Shown only when this desktop can install and the devices are
+             missing; hidden once they exist. -->
+        <div class="window-row" id="virtual-audio-row" hidden>
+          <label class="window-label" for="virtual-audio-install">Virtual audio devices</label>
+          <button class="mixer-button" id="virtual-audio-install" type="button">Install</button>
+        </div>
+        <p class="modal-note" id="virtual-audio-note" hidden></p>
         <!-- Phase14 window controls — receiver window behavior, the desktop's
              own domain (overview.md): the optional session-info window lives
              OUTSIDE the receiver, so window capture (e.g. OBS) records a pure

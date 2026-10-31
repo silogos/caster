@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -22,6 +22,7 @@ import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
 import { SoftcamRegistration, softcamDir } from './vc/registration'
 import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
+import { ZfaudioInstaller, zfaudioDir } from './zfaudio/installer'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -74,6 +75,12 @@ let audioRouting: AudioRoutingReport | null = null
 // The always-on preference (ADR-007 addendum, batch B): the camera starts
 // with every cast by itself — capture-card-style, no per-cast ceremony.
 let vcAutoStart = false
+// The virtual audio installer (ADR-008): macOS-only — the one-time elevated
+// install of the Zero-Friction loopback devices. Null elsewhere.
+let zfaudio: ZfaudioInstaller | null = null
+// The last-pushed vc capability — a recreated window's fresh renderer missed
+// the live pushes, so the settings rows re-assert from this cache.
+let vcSupportedPush: boolean | null = null
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
 function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
@@ -275,9 +282,23 @@ app.whenReady().then(async () => {
   // placeholder button) — availability only, never cast state (ADR-007).
   const vcController = virtualCamera
   void vcController.ready().then(() => {
+    vcSupportedPush = vcController.available
     pushToRenderer(IPC.vc.state, { supported: vcController.available })
     pushToRenderer(IPC.vc.autoStart, vcAutoStart)
   })
+
+  // The virtual audio installer (ADR-008): macOS-only, one-time. The
+  // capability push keys on the bundled driver being present — the renderer's
+  // Install row appears only where installing is possible.
+  if (process.platform === 'darwin') {
+    zfaudio = new ZfaudioInstaller({
+      dir: zfaudioDir(app.isPackaged, process.resourcesPath, app.getAppPath())
+    })
+  }
+  const pushVirtualAudioState = (): void => {
+    pushToRenderer(IPC.virtualAudio.state, { supported: zfaudio?.filesPresent === true })
+  }
+  pushVirtualAudioState()
 
   pairing = new PairingServer({
     port: signaling.actualPort,
@@ -404,6 +425,13 @@ app.whenReady().then(async () => {
     audioRouting = report
     if (changed) signaling.sendAudioRoutingStatus(report)
   })
+  // The one-time elevated install (ADR-008): osascript puts the native admin
+  // password dialog on screen; the result is reported honestly — a declined
+  // prompt is a user decision, not an error.
+  ipcMain.handle(IPC.virtualAudio.install, async (): Promise<VirtualAudioInstallResult> => {
+    if (zfaudio === null) return 'unsupported'
+    return zfaudio.install()
+  })
 
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox
@@ -428,6 +456,12 @@ app.whenReady().then(async () => {
     // The fresh renderer lost every in-flight push — re-assert the live ones.
     if (lastMobileState !== null) pushToRenderer(IPC.pairing.mobileState, lastMobileState)
     virtualCamera?.reassertPump()
+    // The fresh renderer lost every in-flight push — re-assert the capability
+    // ones too (vc:state/autoStart were pushed once at ready; without this the
+    // settings rows vanished after a frameless toggle until restart).
+    if (vcSupportedPush !== null) pushToRenderer(IPC.vc.state, { supported: vcSupportedPush })
+    pushToRenderer(IPC.vc.autoStart, vcAutoStart)
+    pushVirtualAudioState()
     logger.info(LOG_SCOPE, `receiver recreated ${frameless ? 'frameless' : 'framed'}`)
   }
 

@@ -129,3 +129,21 @@ export interface AudioRoutingReport {
   cableAvailable: boolean
 }
 
+/**
+ * The desktop's virtual audio capability (ADR-008): whether this machine can
+ * install the Zero-Friction loopback devices — macOS with the bundled driver
+ * present. Pushed to the renderer for the settings modal's Install row.
+ */
+export interface VirtualAudioState {
+  /** False on other platforms or when the bundled .driver is missing — the row hides. */
+  supported: boolean
+}
+
+/**
+ * The Install button's outcome (ADR-008 install UX): 'installed' verified on
+ * disk, 'declined' = the admin prompt was cancelled (a user decision, not an
+ * error), 'failed' = the elevated copy did not land, 'unsupported' = this
+ * desktop can't install at all (non-macOS).
+ */
+export type VirtualAudioInstallResult = 'installed' | 'declined' | 'failed' | 'unsupported'
+
