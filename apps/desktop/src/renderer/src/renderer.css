@@ -25,6 +25,19 @@ body {
   color: var(--fg);
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Frameless receiver (ADR-007 addendum): the whole window is a drag
+     surface — grab anywhere (video included) to move it; edges still
+     resize. Interactive controls opt out below. */
+  -webkit-app-region: drag;
+}
+
+button,
+input,
+select,
+textarea,
+.cast-overlay,
+.modal {
+  -webkit-app-region: no-drag;
 }
 
 .stage {

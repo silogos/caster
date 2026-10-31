@@ -104,6 +104,10 @@ Live use exposed a UX gap and a product refinement, both from the user:
 - **Settings in the no-input stage**: environment controls (mixer, window preferences) no longer need a live stream — the no-input stage carries a Settings button opening the same modal.
 - **Audio routing mirrored on the phone**: the same both-sided pattern — `audio-routing-query/set/status` (proto 2) let the phone's Audio card pick the desktop's speakers/cable/both route; the desktop's mixer remains the single owner of the truth (a refused cable-without-device surfaces as the next status, never as an error).
 
+### The frameless receiver window (2026-10-31, same live round)
+
+The clarification that followed: not windowless-but-framed, but a window **without window chrome at all** — no title bar, no traffic lights; the receiver is a pure video surface, so a capture never sees a title bar to crop. `frame: false` + the renderer CSS makes the entire window a drag surface (interactive controls opt out via `no-drag`; the video itself is grabbable; edges still resize). Combined with the tray, the app has no on-window navigation by design — move by dragging, resize by edges, quit from the tray.
+
 ### Windowless mode: the menu-bar tray (2026-10-31, the recorded follow-up shipped)
 
 The user's framing: with Window Capture they had to crop the letterboxed window — the cast should flow with **no window at all**. Closing the receiver window now **hides** it instead of ending the app: the hidden renderer keeps decoding (throttling already off since Phase 14), the mixer keeps playing, the virtual camera keeps publishing — Syphon consumers never notice. The app lives in a menu-bar tray (embedded template icon): *Show receiver*, *Virtual camera* (checkbox, rides the same controller), *Quit* — the tray owns the app's lifetime now (`window-all-closed` never quits). macOS hides the Dock icon while windowless; activating the Dock or the tray's Show brings the window back. First-run QR pairing still needs the visible window (physical presence at the desktop is the authority, ADR-002) — the tray's Show is that path.

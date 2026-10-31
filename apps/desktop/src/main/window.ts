@@ -33,6 +33,11 @@ export function createMainWindow(): BrowserWindow {
     backgroundColor: WINDOW_BACKGROUND_COLOR,
     show: false,
     autoHideMenuBar: true,
+    // Frameless (ADR-007 addendum): the receiver is a pure video surface —
+    // no title bar, no traffic lights, nothing for a capture to crop. The
+    // renderer CSS makes the whole window a drag surface (controls opt out),
+    // edges still resize, and the tray owns close/quit.
+    frame: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       spellcheck: false,
