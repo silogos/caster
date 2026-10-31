@@ -22,7 +22,6 @@ import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
 import { SoftcamRegistration, softcamDir } from './vc/registration'
 import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
-import { createCastTray, isQuitting, refreshTrayMenu, requestQuit } from './tray'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -270,10 +269,7 @@ app.whenReady().then(async () => {
     registration: vcRegistration,
     streamSize: () => lastStreamSize,
     sendStatus: (status) => signaling.sendVcStatus(status),
-    onPumpCommand: (command) => {
-      pushToRenderer(IPC.vc.pump, command)
-      refreshTrayMenu(command.mode !== 'off')
-    }
+    onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
   })
   // Capability push for the renderer's own controls (settings section,
   // placeholder button) — availability only, never cast state (ADR-007).
@@ -428,17 +424,6 @@ app.whenReady().then(async () => {
     mainWindow = createMainWindow({ frameless, bounds })
     windowIsFrameless = frameless
     wireMainWindowLifecycle()
-    // Windowless (tray) users stay windowless across the swap — but ONLY if
-    // they were truly in tray mode (dock hidden), not merely mid-startup where
-    // isVisible() is still false before ready-to-show (live finding: the app
-    // "didn't open" because the recreated window was hidden on ready-to-show).
-    const wasDockHidden = app.dock?.isVisible() === false
-    if (wasDockHidden) {
-      mainWindow.once('ready-to-show', () => {
-        mainWindow?.hide()
-        app.dock?.hide()
-      })
-    }
     pushToRenderer(IPC.window.frameless, frameless)
     // The fresh renderer lost every in-flight push — re-assert the live ones.
     if (lastMobileState !== null) pushToRenderer(IPC.pairing.mobileState, lastMobileState)
@@ -562,20 +547,7 @@ app.whenReady().then(async () => {
 
   const wireMainWindowLifecycle = (): void => {
     if (mainWindow === null) return
-    // Windowless mode (ADR-007 follow-up): closing the receiver hides it — the
-    // cast and the virtual camera keep running; the tray owns the app's life.
-    // The renderer stays alive hidden (backgroundThrottling off), so decode,
-    // the mixer, and the VC pump never notice the window being gone.
-    mainWindow.on('close', (event) => {
-      if (!isQuitting()) {
-        event.preventDefault()
-        mainWindow?.hide()
-        app.dock?.hide()
-        logger.info(LOG_SCOPE, 'receiver hidden — running from the menu bar (cast/virtual camera unaffected)')
-      }
-    })
-    // The receiver window is the product: at a real quit (tray/OS), release
-    // the blocker and the overlay with it.
+    // The receiver window is the product: closing it ends the app.
     mainWindow.on('closed', () => {
       stopCastKeepAwake()
       closeSessionInfoWindow()
@@ -584,24 +556,11 @@ app.whenReady().then(async () => {
   mainWindow = createMainWindow()
   wireMainWindowLifecycle()
 
-  const showReceiver = (): void => {
-    app.dock?.show()
-    if (mainWindow === null || mainWindow.isDestroyed()) {
-      mainWindow = createMainWindow()
-    } else {
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  }
-  createCastTray({
-    onShowReceiver: showReceiver,
-    onToggleVirtualCamera: () => virtualCamera?.toggle(),
-    onQuit: () => requestQuit()
-  })
-
   app.on('activate', () => {
-    // macOS: the dock icon re-creates/shows the window with no windows up.
-    showReceiver()
+    // macOS: re-create the window when the dock icon is clicked with no windows.
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = createMainWindow()
+    }
   })
 }).catch((error) => {
   logger.error(LOG_SCOPE, 'startup failed', { error: String(error) })
@@ -609,8 +568,9 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  // The tray owns quitting now (windowless mode, ADR-007) — closing windows
-  // never ends the app on any platform.
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
 })
 
 // App quit: delete the camera without protocol chatter — the socket may be
