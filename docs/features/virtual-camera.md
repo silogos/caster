@@ -31,7 +31,9 @@ Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.
 **macOS (needs the phone in hand — everything else is ready on this machine):**
 
 - [ ] Pair + cast → the phone shows the "Virtual camera" card (Mac reports available, no setup state) → toggle on → receiver swaps to the placeholder → **OBS (Syphon Client source)** lists "Zero-Friction Local Cast" and shows the feed; orientation correct (flip check), letterbox on rotation.
-- [ ] Minimize the receiver mid-VC — OBS keeps receiving; stop cast → the server disappears from OBS instantly.
+- [ ] **No-signal stage (ADR-007 addendum)**: disconnect from the phone mid-VC → OBS shows the **"No input video" still** (server stays listed, no frozen frame); cast again → frames resume; toggle off (desktop Settings row, the placeholder's Turn-off, or the phone) → the server disappears from OBS instantly.
+- [ ] **Desktop toggle**: Settings (also reachable from the No-input stage) → "Virtual camera" row toggles the same state as the phone's card.
+- [ ] Minimize the receiver mid-VC — OBS keeps receiving.
 - [ ] Numbers: pump fps + ms/frame + CPU % at 60 fps (and 120 if the phone's display allows).
 - [ ] If OBS 32.x shows a blank source: re-check with Syphon Recorder (upstream OBS 32.0 Syphon regression — see ADR-007 addendum) before blaming the server.
 
