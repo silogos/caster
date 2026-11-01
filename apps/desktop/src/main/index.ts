@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
 import type { PcId } from '../shared/types'
-import { isPcId } from './signaling/envelope'
+import { asIceMessage, asSdpMessage, asStreamSize, asVcFrame } from './messages'
 import {
   createMainWindow,
   createSessionInfoWindow,
@@ -18,13 +18,8 @@ import { PairingServer } from './pairing/pairingServer'
 import { TrustStore, loadOrCreateDesktopId } from './pairing/trustStore'
 import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
-import { loadSoftcam, type VcCameraBackend } from './vc/softcamLibrary'
-import { SoftcamRegistration, softcamDir } from './vc/registration'
-import { loadSyphonBackend, syphonNoopRegistration } from './vc/syphonPublisher'
-import { loadPipewireBackend, pipewireNoopRegistration } from './vc/pipewirePublisher'
 import { VirtualCameraController } from './vc/virtualCamera'
-import { ZfaudioInstaller, zfaudioDir } from './zfaudio/installer'
-import { PipewireDeviceManager } from './zfaudio/pipewireDevices'
+import { loadDesktopEnvironment, type DesktopEnvironment } from './environment'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -77,26 +72,16 @@ let audioRouting: AudioRoutingReport | null = null
 // The always-on preference (ADR-007 addendum, batch B): the camera starts
 // with every cast by itself — capture-card-style, no per-cast ceremony.
 let vcAutoStart = false
-// The virtual audio installer (ADR-008): macOS-only — the one-time elevated
-// install of the Zero-Friction loopback devices. Null elsewhere.
-let zfaudio: ZfaudioInstaller | null = null
-// Linux's equivalent (issue #75): session-scoped loopback devices via pactl —
-// created at start, removed at quit. Null on other platforms.
-let pipewireAudio: PipewireDeviceManager | null = null
+// The resolved platform environment (environment.ts): kept module-level for
+// the quit hook, which lives outside the startup closure. Its audio half
+// carries the app-run lifecycle (Linux's loopback devices).
+let appEnvironment: DesktopEnvironment | null = null
 // The last-pushed vc capability — a recreated window's fresh renderer missed
 // the live pushes, so the settings rows re-assert from this cache.
 let vcSupportedPush: boolean | null = null
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
-function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { data, width, height } = raw as Record<string, unknown>
-  if (!(data instanceof Uint8Array)) return null
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
-  if ((width as number) <= 0 || (height as number) <= 0) return null
-  if (data.byteLength !== (width as number) * (height as number) * bytesPerPixel) return null
-  return { data, width: width as number, height: height as number }
-}
+
 function pushToRenderer(
   channel: string,
   payload:
@@ -146,30 +131,6 @@ function pushMobileState(state: MobileStateEvent): void {
 function pushWaiting(): void {
   pairedMobileName = null
   pushMobileState({ state: 'waiting' })
-}
-
-/** IPC input from the renderer is untrusted at the process boundary — validate before it reaches the socket. */
-function asSdpMessage(raw: unknown): { pc: PcId; sdp: string } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { pc, sdp } = raw as Record<string, unknown>
-  if (!isPcId(pc) || typeof sdp !== 'string' || sdp.length === 0) return null
-  return { pc, sdp }
-}
-
-function asIceMessage(raw: unknown): { pc: PcId; candidate: unknown } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { pc, candidate } = raw as Record<string, unknown>
-  if (!isPcId(pc) || !('candidate' in (raw as Record<string, unknown>))) return null
-  return { pc, candidate }
-}
-
-/** Renderer input is untrusted at the process boundary — same rule as the SDP/ICE relays above. */
-function asStreamSize(raw: unknown): { width: number; height: number } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { width, height } = raw as Record<string, unknown>
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
-  if ((width as number) <= 0 || (height as number) <= 0) return null
-  return { width: width as number, height: height as number }
 }
 
 // One instance at a time (Phase15 live finding): a second copy used to bind
@@ -258,33 +219,19 @@ app.whenReady().then(async () => {
   })
   await signaling.start(SIGNALING_PORT_DEFAULT)
 
-  // The virtual camera (ADR-007): one controller seam, per-platform backends —
-  // Windows = softcam (UAC registration), macOS = a Syphon publisher (helper
-  // process, no registration), Linux = a PipeWire camera node via the system
-  // gst-launch-1.0 (no vendored helper, no registration). Cast-scoped
-  // lifecycle: the camera dies with the cast (see the teardown hooks below).
-  let vcBackend: VcCameraBackend
-  let vcRegistration: SoftcamRegistration
-  if (process.platform === 'darwin') {
-    const syphonDir = app.isPackaged ? join(process.resourcesPath, 'syphon') : join(app.getAppPath(), 'resources', 'syphon')
-    const syphon = loadSyphonBackend({ dir: syphonDir })
-    vcBackend = syphon
-    vcRegistration = syphonNoopRegistration(syphon.support === 'ok')
-  } else if (process.platform === 'linux') {
-    const pipewire = loadPipewireBackend()
-    vcBackend = pipewire
-    vcRegistration = pipewireNoopRegistration(pipewire.support === 'ok')
-  } else {
-    const softcamDirectory = softcamDir(app.isPackaged, process.resourcesPath, app.getAppPath())
-    vcBackend = loadSoftcam(softcamDirectory)
-    vcRegistration = new SoftcamRegistration({
-      installerPath: join(softcamDirectory, 'softcam_installer.exe'),
-      dllPath: join(softcamDirectory, 'softcam.dll')
-    })
-  }
+  // The platform environment (ADR-007/008 platform map, one module): this
+  // wiring stays platform-free — the environment decides who runs (Syphon +
+  // installer on macOS, PipeWire on Linux, softcam on Windows), and each
+  // adapter self-gates its honest availability.
+  const environment = loadDesktopEnvironment({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath()
+  })
+  appEnvironment = environment
   virtualCamera = new VirtualCameraController({
-    backend: vcBackend,
-    registration: vcRegistration,
+    backend: environment.vcBackend,
+    registration: environment.vcRegistration,
     streamSize: () => lastStreamSize,
     sendStatus: (status) => signaling.sendVcStatus(status),
     onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
@@ -298,32 +245,16 @@ app.whenReady().then(async () => {
     pushToRenderer(IPC.vc.autoStart, vcAutoStart)
   })
 
-  // The virtual audio installer (ADR-008): macOS-only, one-time. The
-  // capability push keys on the bundled driver being present — the renderer's
-  // Install row appears only where installing is possible.
-  if (process.platform === 'darwin') {
-    zfaudio = new ZfaudioInstaller({
-      dir: zfaudioDir(app.isPackaged, process.resourcesPath, app.getAppPath())
-    })
-  }
-  // Linux per-track audio (ADR-008 follow-up, issue #75): the two loopback
-  // devices are created at app start (capture-card style — they sit silent
-  // until a cast routes into them) and removed at quit. The renderer's
-  // existing label detection picks them up; no IPC, no install, no elevation.
-  if (process.platform === 'linux') {
-    pipewireAudio = new PipewireDeviceManager()
-    void pipewireAudio.ensureDevices()
-  }
+  // Virtual audio per platform (ADR-008): macOS carries a one-click install;
+  // Linux creates its loopback devices with the app run (capture-card style —
+  // silent until a cast routes into them); Windows is detection + guidance.
+  environment.startAppAudio?.()
   const pushVirtualAudioState = (): void => {
     // The platform rides on this push (issue #74) so the renderer's cable
     // guidance is honest per OS without any userAgent sniffing.
-    const platform: VirtualAudioState['platform'] =
-      process.platform === 'darwin' || process.platform === 'win32' || process.platform === 'linux'
-        ? process.platform
-        : 'other'
     pushToRenderer(IPC.virtualAudio.state, {
-      supported: zfaudio?.filesPresent === true,
-      platform
+      supported: environment.virtualAudioInstall?.supported === true,
+      platform: environment.platform
     })
   }
   pushVirtualAudioState()
@@ -457,8 +388,9 @@ app.whenReady().then(async () => {
   // password dialog on screen; the result is reported honestly — a declined
   // prompt is a user decision, not an error.
   ipcMain.handle(IPC.virtualAudio.install, async (): Promise<VirtualAudioInstallResult> => {
-    if (zfaudio === null) return 'unsupported'
-    return zfaudio.install()
+    const install = environment.virtualAudioInstall
+    if (install === null) return 'unsupported'
+    return install.install()
   })
 
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
@@ -648,9 +580,10 @@ app.on('window-all-closed', () => {
 
 // App quit: delete the camera without protocol chatter — the socket may be
 // gone (softcam also cleans up on process death, but we never rely on it).
-// Linux's loopback devices go with us (adopted leftovers from a crashed run
-// are not ours to remove — ensure is idempotent next start).
+// The environment's audio half goes with us where the platform has one
+// (Linux's loopback devices; adopted leftovers from a crashed run are not
+// ours to remove — ensure is idempotent next start).
 app.on('will-quit', () => {
   virtualCamera?.dispose()
-  void pipewireAudio?.unloadAll()
+  void appEnvironment?.quitAppAudio?.()
 })
