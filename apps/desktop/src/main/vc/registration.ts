@@ -17,6 +17,20 @@ export const SOFTCAM_CLSID = '{AEF3B972-5FA5-4647-9571-358EB472BC9E}'
 /** Windows exit code for "the operation was canceled by the user" (UAC declined). */
 export const UAC_CANCELLED_EXIT_CODE = 1223
 
+/**
+ * Registration story for platforms whose camera needs none — the Syphon
+ * server / PipeWire node exists exactly while the adapter runs. `filesPresent`
+ * still tracks whether that adapter's files exist, so availability stays
+ * honest. (Shared by syphonPublisher and pipewirePublisher.)
+ */
+export function noopRegistration(filesPresent: boolean): SoftcamRegistration {
+  return {
+    filesPresent,
+    isRegistered: async () => true,
+    register: async () => 'registered'
+  } as unknown as SoftcamRegistration
+}
+
 export type RegistrationResult = 'registered' | 'declined' | 'failed'
 
 /** Runs a command and resolves its exit code; rejects on spawn failure. */

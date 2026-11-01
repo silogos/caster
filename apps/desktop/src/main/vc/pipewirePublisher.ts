@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { logger } from '../log'
-import type { SoftcamRegistration } from './registration'
+import { noopRegistration } from './registration'
 import type { VcCamera, VcCameraBackend, VcCameraHandlers } from './softcamLibrary'
 
 /**
@@ -33,13 +33,7 @@ const GST_LAUNCH = 'gst-launch-1.0'
 const DECLARED_FRAMERATE = '60/1'
 
 /** PipeWire needs no per-machine registration — the node exists while gst runs. */
-export function pipewireNoopRegistration(filesPresent: boolean): SoftcamRegistration {
-  return {
-    filesPresent,
-    isRegistered: async () => true,
-    register: async () => 'registered'
-  } as unknown as SoftcamRegistration
-}
+export const pipewireNoopRegistration = noopRegistration
 
 /** The helper process surface this module uses — fakes in tests, real spawn in production. */
 export interface HelperProcess {

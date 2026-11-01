@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../log'
-import type { SoftcamRegistration } from './registration'
+import { noopRegistration } from './registration'
 import type { VcCamera, VcCameraBackend, VcCameraHandlers } from './softcamLibrary'
 
 /**
@@ -21,13 +21,7 @@ const LOG_SCOPE = 'vc-syphon'
 const FRAME_MAGIC = 0x5a465256
 
 /** Syphon needs no per-machine registration — the helper runs on demand. */
-export function syphonNoopRegistration(filesPresent: boolean): SoftcamRegistration {
-  return {
-    filesPresent,
-    isRegistered: async () => true,
-    register: async () => 'registered'
-  } as unknown as SoftcamRegistration
-}
+export const syphonNoopRegistration = noopRegistration
 
 /** The helper process surface this module uses — fakes in tests, real spawn in production. */
 export interface HelperProcess {
