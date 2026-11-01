@@ -53,6 +53,10 @@ Start at [docs/README.md](docs/README.md). Highlights:
 
 Prerequisites and environment setup are described in [docs/development/setup.md](docs/development/setup.md). The project is developed incrementally: each phase produces implementation + tests + documentation + a coherent commit, then stops for review.
 
+## Troubleshooting
+
+- **Cast dies mid-game on some phones:** while a cast runs, the app holds itself exempt from standard battery saving (a foreground service + a Wi-Fi radio hold), so no setup should be needed. A few aggressive manufacturer ROMs still restrict background apps their own way — if that happens, set the app to **Unrestricted** in the phone's battery settings (see [R11](docs/development/risk-register.md)).
+
 ## Constraints
 
 - Everything runs on the **same local Wi-Fi network**. No internet relay, no STUN/TURN.
