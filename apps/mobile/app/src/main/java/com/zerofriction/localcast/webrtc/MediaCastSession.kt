@@ -798,7 +798,18 @@ class MediaCastSession(
     private val recoveryRunnable = object : Runnable {
         override fun run() {
             if (!active) return
-            restarts.onTick(System.currentTimeMillis())
+            try {
+                restarts.onTick(System.currentTimeMillis())
+            } catch (t: Throwable) {
+                // A policy bug must never kill the process (found live
+                // 2026-11-02: a bad backoff index crashed the app five times
+                // overnight, taking the cast down with it). Same contract as
+                // [buildOnThread]: the unexpected becomes an honest cast
+                // failure — details to the log and the debug message.
+                Log.e(TAG, "recovery tick failed — ending the cast", t)
+                fatal(Failure.Error("recovery: ${t.message ?: t.javaClass.simpleName}"))
+                return
+            }
             if (restarts.busy) {
                 handler?.postDelayed(this, RECOVERY_TICK_MS)
             } else {

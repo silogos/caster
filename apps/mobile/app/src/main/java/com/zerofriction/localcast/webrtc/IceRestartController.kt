@@ -155,8 +155,22 @@ class IceRestartController(
             giveUp(nowMs, "$restartsSent ice restarts exhausted")
             return
         }
-        nextRestartAtMs = nowMs + RESTART_BACKOFF_MS[(minOf(restartsSent, RESTART_BACKOFF_MS.size) - 1)]
+        nextRestartAtMs = nowMs + nextBackoffMs()
     }
+
+    /**
+     * Backoff before the next restart offer — none before the first. A timed
+     * out *full* negotiate ([onNegotiating], restart budget untouched) lands
+     * here with [restartsSent] == 0 and must schedule restart #1 immediately,
+     * not index the ladder backwards (found live 2026-11-02: the negative
+     * index crashed the process five times overnight — the cast died with it).
+     */
+    private fun nextBackoffMs(): Long =
+        if (restartsSent <= 0) {
+            0L
+        } else {
+            RESTART_BACKOFF_MS[minOf(restartsSent, RESTART_BACKOFF_MS.size) - 1]
+        }
 
     private fun giveUp(nowMs: Long, summary: String) {
         badSinceMs = null
