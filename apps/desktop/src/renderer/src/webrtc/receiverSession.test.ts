@@ -278,6 +278,43 @@ describe('ReceiverSession — ICE', () => {
     expect(h.candidates).toHaveLength(2)
     expect(h.candidates[1]).toEqual({ pc: 'media', candidate: null })
   })
+
+  // Issue #86: mid-cast, the mobile's ICE-restart ladder sends a fresh offer
+  // for the SAME pc id over a healthy socket (fresh ICE credentials after a
+  // transient UDP outage). On the wire it is an ordinary sdp-offer — the
+  // loopback here proves the desktop's answerer handles it end to end: the
+  // old answerer is dropped, the fresh one answers, the new ICE candidates
+  // reach the fresh pc, and the video sink re-attaches to the new stream.
+  it('a mid-cast re-offer (ICE restart) replaces the answerer and re-attaches the sink', async () => {
+    const restart = makeHarness()
+    await restart.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    const firstPc = restart.pcs[0]
+    firstPc.connectionState = 'connected'
+    firstPc.onconnectionstatechange?.()
+    const firstStream = { id: 'stream-1' }
+    firstPc.ontrack?.({ track: { kind: 'video' }, streams: [firstStream] })
+
+    // The transient UDP outage: the old pc fails — the sink must keep the
+    // last frame (recovery is the mobile's call, never a clear here).
+    firstPc.connectionState = 'failed'
+    firstPc.onconnectionstatechange?.()
+    expect(restart.sink.cleared).toBe(0)
+
+    // The mobile restarts ICE: a fresh offer for pc=media.
+    await restart.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    expect(firstPc.closedCount).toBe(1) // stale answerer dropped
+    expect(restart.pcs).toHaveLength(2)
+    expect(restart.answers).toHaveLength(2) // the fresh offer got its answer
+    // Candidates of the restarted ICE land on the fresh pc.
+    await restart.session.handleIceCandidate({ pc: 'media', candidate: ICE_INIT })
+    expect(restart.pcs[1].addedRemoteCandidates).toEqual([ICE_INIT])
+
+    // The fresh pc's stream re-attaches — video resumes without a re-pair.
+    const secondStream = { id: 'stream-2' }
+    restart.pcs[1].ontrack?.({ track: { kind: 'video' }, streams: [secondStream] })
+    expect(restart.sink.shown).toEqual([firstStream, secondStream])
+    expect(restart.sink.cleared).toBe(0) // never blanked through the recovery
+  })
 })
 
 describe('ReceiverSession — rendering and teardown', () => {  it('renders the media stream on the video sink and the mic stream on the audio sink', async () => {
