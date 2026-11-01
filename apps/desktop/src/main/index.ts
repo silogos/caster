@@ -614,6 +614,17 @@ app.whenReady().then(async () => {
       stopCastKeepAwake()
       closeSessionInfoWindow()
     })
+    // A fresh page drops every push sent before it finished loading — and
+    // the startup capability pushes fire even earlier, before the first
+    // window exists (found live: on a cold start the Install row and the VC
+    // rows never appeared although the backends were ready). Re-assert from
+    // the caches whenever the page (re)loads — pairing needs none of this,
+    // the renderer pulls its session at startup.
+    mainWindow.webContents.on('did-finish-load', () => {
+      if (vcSupportedPush !== null) pushToRenderer(IPC.vc.state, { supported: vcSupportedPush })
+      pushToRenderer(IPC.vc.autoStart, vcAutoStart)
+      pushVirtualAudioState()
+    })
   }
   mainWindow = createMainWindow()
   wireMainWindowLifecycle()
