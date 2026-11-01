@@ -40,7 +40,7 @@ Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **d
 | Platform | Virtual audio input device | Status |
 |---|---|---|
 | **macOS** | HAL plugin (libASPL, MIT) — this ADR | **shipped (batch A)** |
-| **Windows** | Kernel driver + Microsoft signing — not viable for this project | OBS use case solved by WASAPI process loopback (Application Audio Capture, zero-install); call apps via VB-Cable (pragmatic) |
+| **Windows** | Kernel driver + Microsoft signing — not viable for this project | OBS use case solved by WASAPI process loopback (Application Audio Capture, zero-install); call apps via VB-Cable (pragmatic) — **detected as a cable target + platform-honest guidance** (issue #74: `findCableOutputDevice` third tier, `virtual-audio:state` carries the platform) |
 | **Linux** | PipeWire virtual source (user-space) | follow-up |
 
 ## Consequences

@@ -27,9 +27,12 @@ export const isRoutingMode = (value: unknown): value is RoutingMode =>
   typeof value === 'string' && (ROUTING_MODES as readonly string[]).includes(value)
 
 /**
- * Find the virtual cable output (BlackHole on macOS). Matched on the label,
- * case-insensitive, among output devices only — BlackHole also appears as an
- * input device (that's the one OBS reads), and that side is not ours.
+ * Find the virtual cable output. Matched on the label, case-insensitive,
+ * among output devices only — cables also appear as input devices (that's
+ * the side OBS reads), and that side is not ours. Tier order (issue #74):
+ * caster's own Zero-Friction devices first (per-track, ADR-008), then
+ * BlackHole (macOS), then VB-Cable (Windows) — the platforms don't compete,
+ * the order only decides the rare machine with several installed.
  */
 export const findCableOutputDevice = (
   devices: readonly AudioDeviceInfo[]
@@ -43,15 +46,16 @@ export const findCableOutputDevice = (
   )
   if (ours.length > 0) return ours[0]
 
-  const matches = devices.filter(
-    (device) =>
-      device.kind === 'audiooutput' &&
-      /blackhole/i.test(device.label) &&
-      device.deviceId !== ''
-  )
-  // Multiple channels variants (2ch/64ch) are equivalent for our purpose;
-  // the first match keeps behavior stable between launches.
-  return matches[0] ?? null
+  const cableLabels = [/blackhole/i, /vb-audio|cable output/i]
+  for (const label of cableLabels) {
+    const matches = devices.filter(
+      (device) => device.kind === 'audiooutput' && label.test(device.label) && device.deviceId !== ''
+    )
+    // Multiple channels variants (2ch/64ch) are equivalent for our purpose;
+    // the first match keeps behavior stable between launches.
+    if (matches.length > 0) return matches[0]
+  }
+  return null
 }
 
 /**

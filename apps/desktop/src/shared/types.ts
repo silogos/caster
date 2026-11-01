@@ -132,11 +132,15 @@ export interface AudioRoutingReport {
 /**
  * The desktop's virtual audio capability (ADR-008): whether this machine can
  * install the Zero-Friction loopback devices — macOS with the bundled driver
- * present. Pushed to the renderer for the settings modal's Install row.
+ * present. Pushed to the renderer for the settings modal's Install row. The
+ * platform rides along (issue #74) so the cable guidance copy can be honest
+ * per OS — the renderer itself stays platform-free.
  */
 export interface VirtualAudioState {
   /** False on other platforms or when the bundled .driver is missing — the row hides. */
   supported: boolean
+  /** The main process's OS — decides the no-cable guidance text. */
+  platform: 'darwin' | 'win32' | 'linux' | 'other'
 }
 
 /**

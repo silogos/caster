@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult } from '../shared/types'
+import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { isPcId } from './signaling/envelope'
 import {
@@ -103,6 +103,7 @@ function pushToRenderer(
     | VcPumpCommand
     | VcDesktopState
     | AudioRoutingMode
+    | VirtualAudioState
     | boolean
   ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
@@ -296,7 +297,16 @@ app.whenReady().then(async () => {
     })
   }
   const pushVirtualAudioState = (): void => {
-    pushToRenderer(IPC.virtualAudio.state, { supported: zfaudio?.filesPresent === true })
+    // The platform rides on this push (issue #74) so the renderer's cable
+    // guidance is honest per OS without any userAgent sniffing.
+    const platform: VirtualAudioState['platform'] =
+      process.platform === 'darwin' || process.platform === 'win32' || process.platform === 'linux'
+        ? process.platform
+        : 'other'
+    pushToRenderer(IPC.virtualAudio.state, {
+      supported: zfaudio?.filesPresent === true,
+      platform
+    })
   }
   pushVirtualAudioState()
 
