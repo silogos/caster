@@ -187,6 +187,29 @@ describe('ReceiverSession — answering', () => {
     expect(h.pcs[1].closedCount).toBe(1)
     expect(h.answers).toEqual([{ pc: 'media', sdp: ANSWER_SDP }])
   })
+
+  // Review finding: two rapid offers — the first still mid-negotiation when
+  // the second supersedes it. The STALE answerer's failure (its pc was closed
+  // under it) must not tear down or clear the sink of the fresh pc that now
+  // owns the pcId.
+  it('a superseded offer failing late does not kill its replacement', async () => {
+    const gate = new Gate()
+    const h = makeHarness(gate)
+    const first = h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    // The second offer supersedes the first (stops pc[0]) while the first's
+    // setRemoteDescription still waits on the shared gate.
+    const second = h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
+    expect(h.pcs[0].closedCount).toBe(1) // superseded immediately
+    // The stale negotiation resumes on a dead pc and fails from here on.
+    h.pcs[0].failAt = 'createAnswer'
+    gate.open()
+    await second
+    await first
+    // The fresh pc is untouched: alive, never closed, sink never cleared.
+    expect(h.pcs[1].closedCount).toBe(0)
+    expect(h.sink.cleared).toBe(0)
+    expect(h.answers).toHaveLength(1) // only the fresh offer's answer
+  })
 })
 
 describe('ReceiverSession — ICE', () => {
@@ -257,8 +280,7 @@ describe('ReceiverSession — ICE', () => {
   })
 })
 
-describe('ReceiverSession — rendering and teardown', () => {
-  it('renders the media stream on the video sink and the mic stream on the audio sink', async () => {
+describe('ReceiverSession — rendering and teardown', () => {  it('renders the media stream on the video sink and the mic stream on the audio sink', async () => {
     const h = makeHarness()
     await h.session.handleSdpOffer({ pc: 'media', sdp: OFFER_SDP })
     await h.session.handleSdpOffer({ pc: 'mic', sdp: OFFER_SDP })
