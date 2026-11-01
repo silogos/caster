@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { cpSync, existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { logger } from '../log'
 
@@ -37,7 +38,24 @@ export interface InstallerOptions {
   run?: CommandRunner
   /** Injectable for tests; default is fs.existsSync. */
   exists?: PathChecker
+  /**
+   * Injectable for tests; default copies script + driver to a TCC-free
+   * staging dir and returns the staged script's path (see below).
+   */
+  stage?: (dir: string) => string
 }
+
+/**
+ * Where the elevated install runs from. Found live (#72): an app running from
+ * a TCC-protected folder (~/Documents, ~/Downloads — dev today, but any user
+ * who runs the app from there) makes the elevated root shell fail with
+ * "Operation not permitted" reading the bundled script — `do shell script`
+ * does not inherit the app's folder permissions. The system temp dir has no
+ * such protection, so the app (which CAN read its own resources) stages the
+ * script + driver there first, and the elevation copies from the staging
+ * copy. Left behind on purpose: the OS sweeps temp.
+ */
+const STAGING_DIR = join(tmpdir(), 'zfc-zfaudio-install')
 
 /** The admin prompt can sit on screen while the user digs out their password. */
 const INSTALL_TIMEOUT_MS = 120_000
@@ -75,17 +93,33 @@ const defaultRunner = (command: string, args: string[]): Promise<{ code: number;
 const isUserCancelled = (stderr: string): boolean =>
   /user cancel+ed/i.test(stderr) || stderr.includes('-128')
 
+const defaultStage = (dir: string): string => {
+  const scriptPath = join(dir, 'install.sh')
+  rmSync(STAGING_DIR, { recursive: true, force: true })
+  // install.sh cds to its own directory and expects the driver beside it —
+  // the staged copies keep that shape, so the script runs unmodified.
+  cpSync(scriptPath, join(STAGING_DIR, 'install.sh'))
+  cpSync(join(dir, 'ZeroFrictionAudio.driver'), join(STAGING_DIR, 'ZeroFrictionAudio.driver'), {
+    recursive: true
+  })
+  return join(STAGING_DIR, 'install.sh')
+}
+
 export class ZfaudioInstaller {
+  private readonly dir: string
   private readonly scriptPath: string
   private readonly driverPath: string
   private readonly run: CommandRunner
   private readonly exists: PathChecker
+  private readonly stage: (dir: string) => string
 
   constructor(options: InstallerOptions) {
+    this.dir = options.dir
     this.scriptPath = join(options.dir, 'install.sh')
     this.driverPath = join(options.dir, 'ZeroFrictionAudio.driver')
     this.run = options.run ?? defaultRunner
     this.exists = options.exists ?? existsSync
+    this.stage = options.stage ?? defaultStage
   }
 
   /** Whether the bundled driver + install script actually exist on disk. */
@@ -110,7 +144,16 @@ export class ZfaudioInstaller {
       logger.warn(LOG_SCOPE, 'install requested but the bundled driver is missing')
       return 'failed'
     }
-    const shellCommand = `/bin/bash ${shellQuote(this.scriptPath)}`
+    // Stage first, as the app (which can read its own resources): the
+    // elevated shell cannot read through TCC-protected folders (#72).
+    let stagedScript: string
+    try {
+      stagedScript = this.stage(this.dir)
+    } catch (error) {
+      logger.warn(LOG_SCOPE, 'staging the installer failed', { error: String(error) })
+      return 'failed'
+    }
+    const shellCommand = `/bin/bash ${shellQuote(stagedScript)}`
     const appleScript = `do shell script ${appleQuote(shellCommand)} with administrator privileges`
     try {
       const { code, stderr } = await this.run('osascript', ['-e', appleScript])
