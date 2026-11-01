@@ -79,7 +79,7 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 
 - `iceServers: []` — **host candidates only, no STUN/TURN.** Peers are on the same subnet by requirement.
 - **mDNS caveat (risk R4):** Chromium and recent libwebrtc obfuscate host candidates as `*.local` mDNS names. Some routers/APs block mDNS, breaking connectivity even on the same LAN. Phase 4 validated the *plumbing*; Phase5 validated the first real resolution on the test LAN — **Chromium's default mDNS-obfuscated candidates resolved successfully on the device** (mitigation 1 sufficed there). Remaining mitigations, in order of preference: 2. disable candidate obfuscation where the platform exposes a switch (Electron command line / libwebrtc field trial). 3. candidate filtering plus the QR's `hosts[]` as ground truth. Hostile-AP behavior is exercised in Phase15.
-- ICE restart is preferred over full re-pairing for transient network changes.
+- ICE restart is preferred over full re-pairing for transient network changes — implemented (ADR-009): a bounded restart ladder survives the live-debugged transient-UDP-outage class (healthy TCP, dead UDP for tens of seconds) without user action.
 
 ### Codec policy
 
@@ -105,11 +105,13 @@ States (both sides): pairing → connecting → negotiating → connecting(ICE) 
 
 | Event | Behavior |
 |---|---|
-| ICE `disconnected` | Wait up to 10 s for recovery (Wi-Fi blips); then ICE restart on the affected PC. |
-| WebSocket drop while session valid | Mobile retries with backoff 1s → 2s → 5s → 10s → 30s cap, while `e` not passed; PC objects are rebuilt on re-auth. Desktop keeps the session and shows "Waiting for mobile…". |
+| ICE `disconnected` | Survivable by default: a 10 s grace window (Wi-Fi blips heal alone); a disconnect that outlives it enters the ICE-restart ladder below. |
+| ICE `failed` (or a disconnect past the grace) | **The ICE-restart ladder** (issue #86, [ADR-009](../decisions/ADR-009-cast-resilience-ice-restart-wifilock.md)): the mobile — the offerer — sends a fresh offer with fresh ICE credentials on the *same* pc (`restartIce`, tracks/DTLS survive). Restart #1 fires immediately; each offer gets 15 s to reconnect; a failed attempt backs off 2 s → 5 s; at most 3 restarts per bad stretch. Any `connected` resets the budget. The ladder closing (restart exhaustion, or a bad stretch ≥ 60 s) surfaces the existing connection-lost failure — a genuinely dead network fails honestly within a bounded window (~≤60 s). The desktop needs nothing new: a restart offer is an ordinary `sdp-offer`, and its answerer is rebuilt per offer with sinks re-attached. The `mic` pc stays mic-local on failure (no ladder of its own — ADR-009 limitations). |
+| WebSocket drop while session valid | Mobile retries with backoff 1s → 2s → 5s → 10s → 30s cap, while `e` not passed; PC objects are rebuilt on re-auth. Desktop keeps the session and shows "Waiting for mobile…". A re-auth's full renegotiation joins the ladder's deadline watch without spending the restart budget. |
 | Heartbeat timeout (>15 s) | Treated as WebSocket drop (above). |
 | Session expired | No auto-retry; mobile prompts re-scan; desktop regenerates QR. **Not applicable to a trusted session** (ADR-006): its reconnects are bounded by attempt count (~3 min), not expiry, and end in `connect-unreachable` with the saved entry kept. |
 | Trusted session's ladder exhausted | Mobile shows the unreachable failure + "Scan QR code"/"Forget this desktop" escapes; the saved entry stays (the desktop may be off). |
+| Cast failure of any kind (ICE ladder included) | The session is *parked*, never `bye`d over a healthy socket (PR #85): the desktop keeps its session and the phone reconnects in one tap. |
 | `bye` from either side | Immediate, clean teardown of PCs + socket; desktop to fresh QR. |
 | Mobile app killed / service stopped | OS-level socket close → desktop heartbeat timeout path. |
 

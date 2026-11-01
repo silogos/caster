@@ -47,6 +47,13 @@ import org.webrtc.VideoTrack
  * session's send parameters — H.264 first, VP8 fallback ([SdpCodecOrderer]),
  * the config's bitrate window and degradation preference on the sender.
  *
+ * Resilience (issue #86, webrtc.md §Disconnect): a transient LAN UDP outage
+ * (band-steering, deprioritized background UDP, radio stress under game
+ * load) no longer kills the cast — [IceRestartController] drives bounded ICE
+ * restarts (`restartIce` + a fresh offer on the same pc), and only a bad
+ * stretch that outlives the whole ladder ends the cast honestly
+ * ([Failure.ConnectionLost]).
+ *
  * Threading: libwebrtc demands every PC call from one thread, so all work runs
  * on a private HandlerThread; signaling events arrive on transport threads and
  * are posted over. The signaling listener is registered here and removed on
@@ -185,6 +192,20 @@ class MediaCastSession(
         private set
 
     private var displayListener: DisplayManager.DisplayListener? = null
+
+    /**
+     * The ICE-restart policy (issue #86): bounded restarts before the honest
+     * ConnectionLost. All calls happen on the session thread (libwebrtc
+     * delivers pc callbacks on the creating thread); the commands it fires
+     * run inline — [restartIce] / [fatal].
+     */
+    private val restarts = IceRestartController(
+        onRestart = { attempt -> restartIce(attempt) },
+        onGiveUp = { summary ->
+            Log.w(TAG, "ice recovery exhausted — stopping the cast ($summary)")
+            fatal(Failure.ConnectionLost)
+        },
+    )
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -415,8 +436,31 @@ class MediaCastSession(
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
         }
         onState(State.NEGOTIATING)
+        restarts.onNegotiating(System.currentTimeMillis())
+        createAndSendOffer(newPc)
+    }
 
-        newPc.createOffer(
+    /**
+     * One ICE restart (issue #86): fresh ICE credentials on the **same** pc —
+     * tracks, senders, and DTLS state survive; only the ICE agent restarts.
+     * The desktop answers like any offer (it rebuilds its answerer per offer
+     * and re-attaches its sinks — webrtc.md). Runs on the session thread,
+     * fired by [restarts].
+     */
+    private fun restartIce(attempt: Int) {
+        val currentPc = pc ?: return
+        Log.i(TAG, "ice restart #$attempt — fresh offer with new ice credentials")
+        // Candidates from here on belong to the restarted ICE — queue them
+        // until the new answer's remote description lands (mirrors negotiate).
+        remoteDescriptionSet = false
+        pendingCandidates.clear()
+        currentPc.restartIce()
+        createAndSendOffer(currentPc)
+    }
+
+    /** createOffer → codec order → setLocalDescription → offer over signaling. */
+    private fun createAndSendOffer(target: PeerConnection) {
+        target.createOffer(
             object : SdpObserver {
                 override fun onCreateSuccess(original: SessionDescription) {
                     // Codec policy lives in the offer (webrtc.md): the
@@ -428,7 +472,7 @@ class MediaCastSession(
                             SdpCodecOrderer.preferenceFor(config.preferredCodec),
                         ),
                     )
-                    newPc.setLocalDescription(
+                    target.setLocalDescription(
                         object : SdpObserver {
                             override fun onSetSuccess() {
                                 signaling.sendSdpOffer(PC_ID, munged.description)
@@ -638,16 +682,28 @@ class MediaCastSession(
             Log.i(TAG, "connection state: $newState")
             when (newState) {
                 PeerConnection.PeerConnectionState.CONNECTED -> {
+                    if (restarts.busy) Log.i(TAG, "connection recovered — ice restart ladder reset")
+                    restarts.onConnected(System.currentTimeMillis())
+                    cancelRecoveryWatchdog()
                     onState(State.STREAMING)
                     // Silence detection only counts while actually connected (audio.md).
                     audio?.setStreaming(true)
                     scheduleStats()
                 }
+                PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                    // Transient by default (webrtc.md): the grace window and
+                    // the restart ladder own the verdict, not this event.
+                    Log.w(TAG, "ice disconnected — recovery ladder armed")
+                    restarts.onDisconnected(System.currentTimeMillis())
+                    scheduleRecoveryWatchdog()
+                }
                 PeerConnection.PeerConnectionState.FAILED -> {
-                    // Recovery is the offerer's job (ICE restart / rebuild) —
-                    // webrtc.md; the desktop never renegotiates on its own.
-                    Log.w(TAG, "ice failed — stopping the cast")
-                    fatal(Failure.ConnectionLost)
+                    // Recovery is the offerer's job (ICE restart — webrtc.md;
+                    // the desktop never renegotiates on its own). The ladder
+                    // bounds it; only its exhaustion ends the cast.
+                    Log.w(TAG, "ice failed — attempting recovery")
+                    restarts.onFailed(System.currentTimeMillis())
+                    scheduleRecoveryWatchdog()
                 }
                 else -> Unit
             }
@@ -731,6 +787,35 @@ class MediaCastSession(
         handler?.postDelayed(statsRunnable, statsIntervalMs)
     }
 
+    // ---- ICE-recovery watchdog (issue #86) — the restart ladder's clock ----
+
+    /**
+     * Ticks the restart policy while a bad stretch is active. The stats
+     * poller can't be this clock (it only starts after a first CONNECTED, and
+     * getStats dries up on a dead pc), so recovery carries its own timer —
+     * armed on disconnect/failure, self-canceling on recovery.
+     */
+    private val recoveryRunnable = object : Runnable {
+        override fun run() {
+            if (!active) return
+            restarts.onTick(System.currentTimeMillis())
+            if (restarts.busy) {
+                handler?.postDelayed(this, RECOVERY_TICK_MS)
+            } else {
+                cancelRecoveryWatchdog()
+            }
+        }
+    }
+
+    private fun scheduleRecoveryWatchdog() {
+        handler?.removeCallbacks(recoveryRunnable)
+        handler?.postDelayed(recoveryRunnable, RECOVERY_TICK_MS)
+    }
+
+    private fun cancelRecoveryWatchdog() {
+        handler?.removeCallbacks(recoveryRunnable)
+    }
+
     // ---- teardown ----
 
     private fun teardown() {
@@ -743,6 +828,7 @@ class MediaCastSession(
         displayListener = null
         onState(State.CLOSED)
         handler?.removeCallbacks(statsRunnable)
+        cancelRecoveryWatchdog()
         closePc()
         try {
             capturer?.stopCapture()
@@ -791,6 +877,12 @@ class MediaCastSession(
 
         /** webrtc.md: each side polls getStats ~1 Hz. */
         const val STATS_INTERVAL_MS = 1_000L
+
+        /**
+         * Recovery-watchdog tick — finer than the smallest backoff rung
+         * (2 s) so restarts fire on time, coarse enough to cost nothing.
+         */
+        const val RECOVERY_TICK_MS = 500L
 
         private const val PC_ID = "media"
         private const val VIDEO_TRACK_ID = "zfc-video"

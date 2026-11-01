@@ -9,6 +9,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -169,6 +170,9 @@ class CastService : Service() {
         private const val EXTRA_FPS = "fps"
         private const val EXTRA_BITRATE_MIN = "bitrateMinBps"
         private const val EXTRA_BITRATE_MAX = "bitrateMaxBps"
+
+        /** The Wi-Fi radio hold's name in system dumps (issue #86). */
+        private const val WIFI_LOCK_TAG = "localcast:cast"
 
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
@@ -393,6 +397,15 @@ class CastService : Service() {
     /** Thermal monitoring (Phase11) — runs for exactly the cast's lifetime. */
     private var thermalSource: ThermalSource? = null
 
+    /**
+     * The Wi-Fi radio hold (issue #86): held for exactly the cast's lifetime,
+     * released on every teardown path. Keeps the radio out of aggressive
+     * power-save while the caster app sits in the background during a game —
+     * one half of surviving transient mid-game UDP outages (the other half is
+     * the media session's ICE-restart ladder).
+     */
+    private var wifiLock: WifiManager.WifiLock? = null
+
     /** Auto quality (Phase12, thermal.md) — null when off (the user's switch) or without a cast. */
     private var adaptive: AdaptiveQualityController? = null
 
@@ -506,6 +519,7 @@ class CastService : Service() {
         // refuses a microphone-typed start without RECORD_AUDIO.
         createChannel()
         startCastForeground(micOn = false)
+        acquireWifiLock()
 
         val newSession = MediaCastSession(
             context = applicationContext,
@@ -723,6 +737,39 @@ class CastService : Service() {
     }
 
     /**
+     * Issue #86: `WIFI_MODE_FULL_LOW_LATENCY` (minSdk 29 makes it always
+     * available) — the strongest hold, and the only effective one on
+     * Android 14+, where the classic `WIFI_MODE_FULL_HIGH_PERF` is treated as
+     * plain FULL. Non-reference-counted: one acquire, one release, on this
+     * service's own lifecycle edges.
+     */
+    private fun acquireWifiLock() {
+        val wifiManager = applicationContext.getSystemService(WifiManager::class.java) ?: run {
+            Log.w(TAG, "no WifiManager — casting without the radio hold")
+            return
+        }
+        val lock = wifiManager
+            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, WIFI_LOCK_TAG)
+            .apply { setReferenceCounted(false) }
+        try {
+            lock.acquire()
+            wifiLock = lock
+            Log.i(TAG, "wifi lock acquired (low-latency) for the cast")
+        } catch (t: Throwable) {
+            Log.w(TAG, "wifi lock acquire failed — casting without it: ${t.message}")
+        }
+    }
+
+    private fun releaseWifiLock() {
+        val lock = wifiLock ?: return
+        wifiLock = null
+        if (lock.isHeld) {
+            lock.release()
+            Log.i(TAG, "wifi lock released")
+        }
+    }
+
+    /**
      * Auto quality (Phase12, thermal.md): the pure policy machine gets every
      * ~1 Hz sender sample (session thread) plus the latest thermal reading,
      * and announces changes — each one applied live on the media session,
@@ -925,6 +972,7 @@ class CastService : Service() {
         unregisterMicDeviceWatcher()
         _micRouting.value = null
         stopThermalMonitoring()
+        releaseWifiLock()
         stopAutoQuality()
         unwireVirtualCamera(signaling)
         val currentSignaling = signaling
@@ -972,6 +1020,7 @@ class CastService : Service() {
         unregisterMicDeviceWatcher()
         _micRouting.value = null
         stopThermalMonitoring()
+        releaseWifiLock()
         stopAutoQuality()
         unwireVirtualCamera(signaling)
         signaling?.let { current ->

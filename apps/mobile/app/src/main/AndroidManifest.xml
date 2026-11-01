@@ -21,6 +21,11 @@
          playback-capture AudioRecord (and the WebRTC ADM), even though no
          microphone sample is ever captured; requested at runtime before a cast. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Wi-Fi radio hold for the cast's lifetime (issue #86): WifiLock needs
+         WAKE_LOCK. Keeps the radio out of aggressive power-save while the
+         caster app is backgrounded during a game — one half of surviving
+         transient mid-game UDP outages. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="true"
