@@ -165,6 +165,37 @@ class IceRestartControllerTest {
         assertEquals(listOf(1, 1), h.restarts)
     }
 
+    // Found live 2026-11-02 (the overnight crash, issue #88): a full
+    // negotiate (cast start / re-auth) that never connects reaches
+    // attemptFailed with restartsSent == 0 — the backoff indexed -1 and
+    // ArrayIndexOutOfBoundsException killed the process, five times. Both
+    // entry paths are pinned here: the deadline expiry via the tick, and a
+    // `failed` arriving while the negotiate is in flight.
+    @Test
+    fun `a timed-out full negotiate schedules the first restart immediately - the overnight crash`() {
+        val h = Harness()
+        h.controller.onDisconnected(0)
+        h.controller.onNegotiating(1_000) // cast start / re-auth rebuild
+        // Deadline expires with no FAILED event and no restart ever sent.
+        h.tick(1_000 + IceRestartController.RESTART_DEADLINE_MS + 1)
+        assertEquals(0, h.restarts.size) // scheduled, not yet fired
+        // Backoff is zero before the first restart: it fires on the next tick.
+        h.tick(1_000 + IceRestartController.RESTART_DEADLINE_MS + 501)
+        assertEquals(listOf(1), h.restarts)
+        assertTrue(h.giveUps.isEmpty())
+    }
+
+    @Test
+    fun `a failed event during a full negotiate schedules the first restart - no negative index`() {
+        val h = Harness()
+        h.controller.onNegotiating(0)
+        h.controller.onFailed(2_000) // in-flight negotiate dies — was the crash
+        assertEquals(0, h.restarts.size) // nothing immediate…
+        h.tick(2_000) // …zero backoff: restart #1 fires on the tick
+        assertEquals(listOf(1), h.restarts)
+        assertTrue(h.giveUps.isEmpty())
+    }
+
     @Test
     fun `a failed event during a backoff never bypasses it`() {
         val h = Harness()

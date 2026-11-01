@@ -33,7 +33,7 @@ Fifteen-plus seconds of dead UDP outlives libwebrtc's ICE consent (~3 missed STU
 
 - The mic pc has no restart ladder of its own (scope: the media pc is the cast's lifeline; the mic is per-toggle and cheap to re-toggle). Revisit if mic users hit the same class of outage.
 - The sustained-failure bound (60 s) is policy, not physics: a pathological AP that steers for 55 s repeatedly would keep the cast alive through each cycle — intended (that network is annoying but usable), and the bound caps the worst case.
-- On-device verification of the recovery path (forced UDP outage mid-cast) is owed — recorded in [features/reliability.md](../features/reliability.md).
+- On-device verification: a mid-cast desktop-Wi-Fi off→on outage was survived on the real rig (2026-11-02, no session restart, no churn — L7 PASS / N8 partial, [features/reliability.md](../features/reliability.md)); the ladder's own log lines and the healthy-TCP (band-steer) profile remain to be captured.
 
 ## Rejected alternatives
 
