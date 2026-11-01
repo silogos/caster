@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync } from 'node:fs'
 import { ZfaudioInstaller, ZFAUDIO_DEST, zfaudioDir } from './installer'
 import { join } from 'node:path'
 
@@ -19,8 +20,13 @@ const fsWith = (...paths: string[]) => (path: string) => paths.includes(path)
 
 const BUNDLE_DIR = '/Applications/Zero-Friction Local Cast.app/Contents/Resources/zfaudio'
 
+const STAGED_SCRIPT = '/var/folders/xx/zfc-zfaudio-install/install.sh'
+
 const makeInstaller = (overrides: Partial<ConstructorParameters<typeof ZfaudioInstaller>[0]> = {}) =>
-  new ZfaudioInstaller({ dir: BUNDLE_DIR, ...overrides })
+  // Default stage is faked (a fixed staged path) so the outcome tests below
+  // exercise osascript handling, not the filesystem; the real default
+  // (copying script + driver into the temp staging dir) has its own test.
+  new ZfaudioInstaller({ dir: BUNDLE_DIR, stage: () => STAGED_SCRIPT, ...overrides })
 
 describe('ZfaudioInstaller (ADR-008 one-time install)', () => {
   it('detects an existing install by the system HAL path', () => {
@@ -38,7 +44,7 @@ describe('ZfaudioInstaller (ADR-008 one-time install)', () => {
     ).toBe(true)
   })
 
-  it('installs through osascript with administrator privileges, running the bundled install.sh', async () => {
+  it('installs through osascript with administrator privileges, running the STAGED install.sh (TCC, #72)', async () => {
     const fake = runnerWith(() => ({ code: 0, stderr: '' }))
     const installer = makeInstaller({
       exists: fsWith(
@@ -46,6 +52,7 @@ describe('ZfaudioInstaller (ADR-008 one-time install)', () => {
         join(BUNDLE_DIR, 'ZeroFrictionAudio.driver'),
         ZFAUDIO_DEST
       ),
+      stage: () => '/var/folders/xx/zfc-zfaudio-install/install.sh',
       run: fake.run
     })
     expect(await installer.install()).toBe('installed')
@@ -55,8 +62,9 @@ describe('ZfaudioInstaller (ADR-008 one-time install)', () => {
     expect(call.args[0]).toBe('-e')
     const script = call.args[1]
     expect(script).toContain('with administrator privileges')
-    // The path (with its space) survives the shell + AppleScript quoting.
-    expect(script).toContain(`/bin/bash '${BUNDLE_DIR}/install.sh'`)
+    // The elevated shell runs the STAGED copy — never the TCC-protected bundle.
+    expect(script).toContain(`/bin/bash '/var/folders/xx/zfc-zfaudio-install/install.sh'`)
+    expect(script).not.toContain(BUNDLE_DIR)
   })
 
   it('reports declined when the password prompt was cancelled (exit 1 + "User canceled")', async () => {
@@ -103,6 +111,36 @@ describe('ZfaudioInstaller (ADR-008 one-time install)', () => {
     const installer = makeInstaller({ exists: fsWith(), run: fake.run })
     expect(await installer.install()).toBe('failed')
     expect(fake.calls).toHaveLength(0)
+  })
+
+  it('a staging failure reports failed without touching osascript', async () => {
+    const fake = runnerWith(() => ({ code: 0, stderr: '' }))
+    const installer = makeInstaller({
+      exists: fsWith(join(BUNDLE_DIR, 'install.sh'), join(BUNDLE_DIR, 'ZeroFrictionAudio.driver')),
+      stage: () => {
+        throw new Error('EACCES')
+      },
+      run: fake.run
+    })
+    expect(await installer.install()).toBe('failed')
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('the default staging copies script + driver beside each other in the temp dir', async () => {
+    // The repo's real bundle staged by the REAL default: the staged tree keeps
+    // install.sh's "driver next to me" contract, in a TCC-free location.
+    let stagedPath = ''
+    const installer = new ZfaudioInstaller({
+      dir: join('resources', 'zfaudio'),
+      run: runnerWith((_command, args) => {
+        stagedPath = args[1].match(/'([^']+)'/)?.[1] ?? ''
+        return { code: 1, stderr: '' } // don't actually install — inspect staging only
+      }).run
+    })
+    await installer.install()
+    expect(stagedPath).toContain('zfc-zfaudio-install')
+    expect(existsSync(stagedPath)).toBe(true)
+    expect(existsSync(join(stagedPath, '..', 'ZeroFrictionAudio.driver', 'Contents'))).toBe(true)
   })
 })
 
