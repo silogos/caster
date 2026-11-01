@@ -895,13 +895,14 @@ class CastService : Service() {
             message
         }
         _state.value = CastState.Failed(shown)
-        // The pairing session survives a cast-only failure (projection
-        // revoked, a pipeline error — the desktop is fine, a retry needs no
-        // new scan). The socket is dead when the desktop ended it or the
-        // connection was lost — but since ADR-006 the *saved session* survives
-        // those too (unless the desktop's bye was `forget`, which the holder
-        // clears itself): Home offers a one-tap Connect instead of a rescan.
-        endCast(keepSession = failure !== MediaCastSession.Failure.DesktopEnded && failure !== MediaCastSession.Failure.ConnectionLost)
+        // Every cast failure keeps the session (ADR-006): the saved entry
+        // survives AND the socket is parked, not byed — a failure is not a
+        // user decision, and the desktop must keep the session for the
+        // one-tap reconnect. (Found live 2026-11-01: an ICE failure mid-game
+        // ran the disconnect path and sent `bye user-ended` over a perfectly
+        // healthy socket — the desktop regenerated a fresh QR for nothing
+        // and the log filled with misleading "user ended" sequences.)
+        endCast(keepSession = true)
     }
 
     /**

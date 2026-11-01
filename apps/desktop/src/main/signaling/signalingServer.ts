@@ -369,7 +369,7 @@ export class SignalingServer {
       // ws delivers text frames as Buffers; the protocol is JSON text (webrtc.md).
       this.onMessage(conn, data.toString())
     })
-    socket.on('close', () => this.onClose(conn))
+    socket.on('close', (code, reason) => this.onClose(conn, code, reason.toString()))
     socket.on('error', (error) => logger.warn(LOG_SCOPE, `socket error from ${remote}`, { error: String(error) }))
   }
 
@@ -726,7 +726,8 @@ export class SignalingServer {
   private startHeartbeat(conn: ConnectionState): void {
     conn.lastSeenAt = this.now()
     conn.heartbeatTimer = setInterval(() => {
-      if (this.now() - conn.lastSeenAt > this.heartbeatTimeoutMs) {
+      const silentForMs = this.now() - conn.lastSeenAt
+      if (silentForMs > this.heartbeatTimeoutMs) {
         logger.info(LOG_SCOPE, `mobile ${conn.remote} silent > ${this.heartbeatTimeoutMs} ms — closing`)
         this.clearHeartbeatTimer(conn)
         conn.socket.close(1000, 'heartbeat-timeout')
@@ -736,13 +737,21 @@ export class SignalingServer {
     }, this.heartbeatIntervalMs)
   }
 
-  private onClose(conn: ConnectionState): void {
+  private onClose(conn: ConnectionState, code?: number, reason?: string): void {
     this.clearHandshakeTimer(conn)
     this.clearHeartbeatTimer(conn)
     this.connections.delete(conn.socketId)
     if (conn.phase === 'authorized') {
       this.store.release(conn.socketId)
-      logger.info(LOG_SCOPE, 'authorized mobile disconnected — reconnect window open until expiry')
+      // The close code is the diagnosis: 1000 heartbeat-timeout = the phone
+      // went silent (power-save/doze suspects); 1000 bye = a deliberate end;
+      // 1006/1001/no-code = TCP reset or the radio dropping without a close
+      // frame (Wi-Fi/AP side).
+      logger.info(LOG_SCOPE, 'authorized mobile disconnected — reconnect window open until expiry', {
+        closeCode: code ?? null,
+        closeReason: reason || null,
+        silentMs: this.now() - conn.lastSeenAt
+      })
       this.options.onMobileDisconnected?.({
         sid: conn.sid ?? '',
         deviceId: conn.hello?.deviceId,
