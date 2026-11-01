@@ -1,0 +1,41 @@
+name: CI
+
+# The repo's guarantees (AGENTS.md: never claim it works without testing) rest
+# on suites that were run manually until now. These are exactly the locally
+# green commands — no deploy, no secrets (LAN-only product, nothing to leak).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17 # the build's JVM target (build.gradle.kts)
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew testDebugUnitTest --console=plain
