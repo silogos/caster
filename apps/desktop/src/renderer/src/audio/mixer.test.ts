@@ -444,3 +444,69 @@ describe('AudioMixer — audio output routing (issue #54)', () => {
     expect(mainContext.gains[0].connectedTo).toEqual([mainContext.destinations[0]])
   })
 })
+
+describe('AudioMixer — per-track cable routing (ADR-008 batch A + review fixes)', () => {
+  const attachBoth = (mixer: AudioMixer): void => {
+    mixer.attachStream('game', { id: 'game-stream' })
+    mixer.attachStream('mic', { id: 'mic-stream' })
+  }
+
+  it('builds one cable context per track, sinked to its own device', () => {
+    const contexts: FakeContext[] = []
+    const { mixer } = makeMixer({
+      createAudioContext: (options) => {
+        const context = new FakeContext()
+        contexts.push(context)
+        if (options?.sinkId !== undefined) context.sinkId = options.sinkId
+        return context
+      }
+    })
+    attachBoth(mixer)
+    mixer.setPerTrackCableDevices({ game: 'zf-game', mic: 'zf-mic' })
+    mixer.setRoutingMode('cable', 'zf-game')
+    // main + one cable context per track
+    expect(contexts).toHaveLength(3)
+    expect(contexts.filter((context) => context.sinkId === 'zf-game')).toHaveLength(1)
+    expect(contexts.filter((context) => context.sinkId === 'zf-mic')).toHaveLength(1)
+  })
+
+  it('switching back to speakers closes the per-track contexts (the review leak)', () => {
+    const contexts: FakeContext[] = []
+    const { mixer } = makeMixer({
+      createAudioContext: (options) => {
+        const context = new FakeContext()
+        contexts.push(context)
+        if (options?.sinkId !== undefined) context.sinkId = options.sinkId
+        return context
+      }
+    })
+    attachBoth(mixer)
+    mixer.setPerTrackCableDevices({ game: 'zf-game', mic: 'zf-mic' })
+    mixer.setRoutingMode('cable', 'zf-game')
+    mixer.setRoutingMode('speakers')
+    const cableContexts = contexts.slice(1)
+    for (const context of cableContexts) {
+      expect(context.closed).toBe(true)
+    }
+  })
+
+  it('a changed device id rebuilds that track context on the new sink', () => {
+    const contexts: FakeContext[] = []
+    const { mixer } = makeMixer({
+      createAudioContext: (options) => {
+        const context = new FakeContext()
+        contexts.push(context)
+        if (options?.sinkId !== undefined) context.sinkId = options.sinkId
+        return context
+      }
+    })
+    attachBoth(mixer)
+    mixer.setPerTrackCableDevices({ game: 'zf-game', mic: 'zf-mic' })
+    mixer.setRoutingMode('cable', 'zf-game')
+    mixer.setPerTrackCableDevices({ game: 'zf-game-2', mic: 'zf-mic' })
+    const gameContexts = contexts.filter((context) => context.sinkId === 'zf-game' || context.sinkId === 'zf-game-2')
+    expect(gameContexts).toHaveLength(2)
+    expect(gameContexts[0].closed).toBe(true) // the old sink is gone
+    expect(gameContexts[1].sinkId).toBe('zf-game-2')
+  })
+})

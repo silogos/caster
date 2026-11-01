@@ -127,6 +127,8 @@ export class AudioMixer {
   private perTrackSend: Partial<Record<MixerChannel, MediaStreamAudioDestinationNodeLike>> = {}
   private perTrackCableContexts: Partial<Record<MixerChannel, AudioContextLike>> = {}
   private perTrackCableSources: Partial<Record<MixerChannel, MediaStreamAudioSourceNodeLike>> = {}
+  /** The sink each per-track context was built with — a changed device id means rebuild. */
+  private perTrackSinkIds: Partial<Record<MixerChannel, string>> = {}
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -244,6 +246,28 @@ export class AudioMixer {
     if (context === null) return
     const wantsCable = this.routingMode !== 'speakers'
 
+    // Retire per-track contexts whose channel no longer routes to one:
+    // the device vanished, OR the route left cable mode entirely (review
+    // finding: speakers-mode kept the contexts alive forever — the shared
+    // cable context closes on the same switch, the per-track ones must too),
+    // OR the assigned device id changed (the context is pinned to its sink).
+    // Runs BEFORE the rewire so a stale context is never reused for the new
+    // assignment.
+    for (const channel of CHANNELS) {
+      const deviceId = this.perTrackDeviceIds[channel]
+      const staleSink = deviceId !== undefined && this.perTrackSinkIds[channel] !== deviceId
+      if (
+        this.perTrackCableContexts[channel] !== undefined &&
+        (!wantsCable || deviceId === undefined || staleSink)
+      ) {
+        this.perTrackCableContexts[channel]?.close?.()
+        delete this.perTrackCableContexts[channel]
+        delete this.perTrackCableSources[channel]
+        delete this.perTrackSend[channel]
+        delete this.perTrackSinkIds[channel]
+      }
+    }
+
     // Per-track path (batch A): each channel with its own device gets a
     // dedicated send + cable context — its audio arrives at its own input
     // device, not the shared mix cable.
@@ -270,16 +294,6 @@ export class AudioMixer {
       }
     }
 
-    // Clean up per-track contexts whose channels lost their devices
-    for (const channel of CHANNELS) {
-      if (this.perTrackCableContexts[channel] !== undefined && this.perTrackDeviceIds[channel] === undefined) {
-        this.perTrackCableContexts[channel]?.close?.()
-        delete this.perTrackCableContexts[channel]
-        delete this.perTrackCableSources[channel]
-        delete this.perTrackSend[channel]
-      }
-    }
-
     this.applyCableBridge(wantsCable)
   }
 
@@ -291,6 +305,7 @@ export class AudioMixer {
     if (this.perTrackCableContexts[channel] === undefined) {
       try {
         this.perTrackCableContexts[channel] = this.options.createAudioContext({ sinkId: deviceId })
+        this.perTrackSinkIds[channel] = deviceId
       } catch (error) {
         this.options.log('error', `creating the ${channel} cable AudioContext failed`, {
           error: String(error)

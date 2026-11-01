@@ -143,12 +143,21 @@ export class ReceiverSession {
       this.options.signaling.sendSdpAnswer(pcId, answer.sdp)
       this.options.log('info', `sdp answer sent (pc=${pcId})`, { sdpBytes: answer.sdp.length })
       // Candidates the mobile trickled while the answer was being built.
-      const queued = state.pendingRemoteCandidates
-      state.pendingRemoteCandidates = []
-      for (const candidate of queued) {
-        await pc.addIceCandidate(candidate)
+      if (this.active.get(pcId) === state) {
+        const queued = state.pendingRemoteCandidates
+        state.pendingRemoteCandidates = []
+        for (const candidate of queued) {
+          await pc.addIceCandidate(candidate)
+        }
       }
     } catch (error) {
+      // A superseding offer replaced this answerer mid-await — its failure
+      // must not tear down (or clear the sink of) the FRESH pc now living
+      // under this pcId.
+      if (this.active.get(pcId) !== state) {
+        this.options.log('warn', `superseded sdp-offer failed (pc=${pcId}) — ignored, a newer offer owns the pc`, { error: String(error) })
+        return
+      }
       this.options.log('error', `answering sdp-offer failed (pc=${pcId})`, { error: String(error) })
       this.stop(pcId)
       this.clearSink(pcId)
