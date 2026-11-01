@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
 import type { PcId } from '../shared/types'
-import { isPcId } from './signaling/envelope'
+import { asIceMessage, asSdpMessage, asStreamSize, asVcFrame } from './messages'
 import {
   createMainWindow,
   createSessionInfoWindow,
@@ -81,15 +81,7 @@ let appEnvironment: DesktopEnvironment | null = null
 let vcSupportedPush: boolean | null = null
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
-function asVcFrame(raw: unknown, bytesPerPixel: number): { data: Uint8Array; width: number; height: number } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { data, width, height } = raw as Record<string, unknown>
-  if (!(data instanceof Uint8Array)) return null
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
-  if ((width as number) <= 0 || (height as number) <= 0) return null
-  if (data.byteLength !== (width as number) * (height as number) * bytesPerPixel) return null
-  return { data, width: width as number, height: height as number }
-}
+
 function pushToRenderer(
   channel: string,
   payload:
@@ -139,30 +131,6 @@ function pushMobileState(state: MobileStateEvent): void {
 function pushWaiting(): void {
   pairedMobileName = null
   pushMobileState({ state: 'waiting' })
-}
-
-/** IPC input from the renderer is untrusted at the process boundary — validate before it reaches the socket. */
-function asSdpMessage(raw: unknown): { pc: PcId; sdp: string } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { pc, sdp } = raw as Record<string, unknown>
-  if (!isPcId(pc) || typeof sdp !== 'string' || sdp.length === 0) return null
-  return { pc, sdp }
-}
-
-function asIceMessage(raw: unknown): { pc: PcId; candidate: unknown } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { pc, candidate } = raw as Record<string, unknown>
-  if (!isPcId(pc) || !('candidate' in (raw as Record<string, unknown>))) return null
-  return { pc, candidate }
-}
-
-/** Renderer input is untrusted at the process boundary — same rule as the SDP/ICE relays above. */
-function asStreamSize(raw: unknown): { width: number; height: number } | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { width, height } = raw as Record<string, unknown>
-  if (!Number.isInteger(width) || !Number.isInteger(height)) return null
-  if ((width as number) <= 0 || (height as number) <= 0) return null
-  return { width: width as number, height: height as number }
 }
 
 // One instance at a time (Phase15 live finding): a second copy used to bind
