@@ -1,6 +1,6 @@
 # Desktop Application Architecture (Electron)
 
-Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)). The **virtual camera** (ADR-007, 2026-10-30) adds the `vc/` modules and a fourth receiver stage — see §Virtual camera.
+Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)). The **virtual camera** (ADR-007, 2026-10-30) adds the `vc/` modules and a fourth receiver stage — see §Virtual camera. The **tray lifecycle** (ADR-010, 2026-11-03) makes the tray — not the window — the app's lifetime: closing the receiver hides it, and the saved phone's one-tap Connect always finds the desktop — see §Tray lifecycle.
 
 ## Role
 
@@ -32,6 +32,8 @@ Electron + TypeScript (electron-vite scaffold). Rationale and alternatives: [ADR
 │  SignalingServer: WebSocket (ws), auth, message routing │
 │  NetworkInfo: enumerate LAN IPs (multi-interface aware) │
 │  WindowManager: window lifecycle, powerSaveBlocker      │
+│  tray/: CastTray + the pure lifecycle state machine     │
+│      (close-to-tray, ADR-010) and the tray menu model   │
 │  vc/: VirtualCameraController (state machine, ADR-007)  │
 │      + softcamLibrary (koffi FFI), registration (UAC)   │
 └───────────────┬─────────────────────────────────────────┘
@@ -75,7 +77,7 @@ The receiver window is the product's "output device" for streamers: OBS Window C
 - Minimal UI: **no visible UI over the video** while casting — a hover-revealed overlay carries the status line and the settings trigger; the mixer and the window controls live in the modal it opens.
 - Smooth rendering: the `<video>` element is composited directly (no canvas copy) unless a measured reason appears. **Chromium's window throttling is disabled** (`webPreferences.backgroundThrottling: false`, receiver and session-info windows alike): with the default on, the moment another app takes focus and the receiver window is occluded/backgrounded on macOS, Chromium stops presenting frames — decode keeps running (the getStats fps still reads), but nothing is painted and `requestVideoFrameCallback` stalls, so the video visibly freezes while unfocused. The receiver is the cast's output device; it must keep painting regardless of focus.
 - **Session-info lives off-cast** (Phase14): the optional session-info window is a *second* BrowserWindow — small, frameless, always-on-top, draggable, closable — outside the captured window. It exists only while a cast is live and the user wants it (settings toggle, off by default; the overlay's ✕ and the checkbox share one state pushed from the main process). The status line is formatted by one pure module (`sessionInfoLine.ts`) rendered in both places.
-- **Stay-awake** (Phase14): `powerSaveBlocker` (`prevent-display-sleep`) is started when a cast goes live and stopped when it ends — a 30-minute session must not stall on display sleep or a screensaver firing into the captured feed. Closing the receiver window mid-cast releases the blocker and the session-info window with it.
+- **Stay-awake** (Phase14): `powerSaveBlocker` (`prevent-display-sleep`) is started when a cast goes live and stopped when it ends — a 30-minute session must not stall on display sleep or a screensaver firing into the captured feed. Closing the receiver window mid-cast no longer ends anything (§Tray lifecycle, ADR-010): the cast — blocker, session-info window, decode, mixer, virtual camera — keeps running hidden.
 
 Remaining: the acceptance itself — the 30+ min OBS Window Capture session on real hardware ([features/obs-streaming.md](../features/obs-streaming.md)).
 
@@ -87,7 +89,18 @@ The desktop can re-publish the incoming cast for other apps to consume — per-p
 - **Frame path (no preview while active)**: the renderer consumes **decoded frames directly** via `MediaStreamTrackProcessor` (works hidden/minimized — `requestVideoFrameCallback` would not, being presentation-driven), draws each frame into a **WebGL canvas whose shader letterboxes to the camera's fixed dims and produces the backend's pixel format on the GPU** — BGR24 packed for Windows, BGRA for macOS — and ships the raw buffer over IPC (`vc:frame`); the main process does zero per-pixel work (Windows: `scSendFrame`; macOS: header+bytes to the helper's stdin → Metal texture → Syphon). Output follows the cast 1:1 (30/60/120 fps — no cap; the phone's quality console remains the only fps control). softcam runs **unpaced** (`framerate 0`) so it never sleeps inside `scSendFrame`.
 - **Camera dims** are fixed at creation from the stream size (`vcDims`: ≤1920×1080, multiples of 4); rotation/quality steps afterwards letterbox inside them.
 - **Receiver stage**: while the camera publishes, the video preview is replaced by the **VC-active placeholder** (`vcActiveView.ts` — the no-input stage's language; mixer still reachable via the hover overlay). Stage map: QR hero → no-input → live video ⇄ VC-active placeholder.
-- **Lifecycle (ADR-007 addendum)**: the toggle is **both-sided** — the phone's card and a desktop-side control (settings-modal row + a Turn-off button on the placeholder) drive the same controller. On macOS the Syphon server **outlives casts**: when the cast drops, the renderer publishes one **"No input video" still** through the same GPU path and the server keeps serving it (OBS never freezes on a stale frame); a fresh cast resumes frames automatically; the toggle or app quit kills the server. Both backends idle on the no-input still between casts (batch B — the capture-card shape; Windows included, reversing the earlier dies-with-cast choice). An always-on preference (default off) starts the camera with every cast by itself. Every terminal path (vc-stop, backend death, app quit) deletes the camera. Closing the receiver window **hides it** — the windowless/tray mode (ADR-007 addendum): cast, mixer, and the virtual camera keep running from the menu bar (Show receiver / Virtual camera / Quit); only the tray's Quit ends the app. The no-input stage carries a **Settings** button — environment controls (mixer, window) never needed a live stream.
+- **Lifecycle (ADR-007 addendum)**: the toggle is **both-sided** — the phone's card and a desktop-side control (settings-modal row + a Turn-off button on the placeholder) drive the same controller. On macOS the Syphon server **outlives casts**: when the cast drops, the renderer publishes one **"No input video" still** through the same GPU path and the server keeps serving it (OBS never freezes on a stale frame); a fresh cast resumes frames automatically; the toggle or app quit kills the server. Both backends idle on the no-input still between casts (batch B — the capture-card shape; Windows included, reversing the earlier dies-with-cast choice). An always-on preference (default off) starts the camera with every cast by itself. Every terminal path (vc-stop, backend death, app quit) deletes the camera. Closing the receiver window **hides it** (§Tray lifecycle, ADR-010): cast, mixer, and the virtual camera keep running from the tray; only Quit ends the app. The no-input stage carries a **Settings** button — environment controls (mixer, window) never needed a live stream.
+
+## Tray lifecycle (ADR-010, 2026-11-03)
+
+The desktop's lifetime belongs to the **tray**, not the window — the receiver is an appliance that keeps listening:
+
+- **Close → tray, unconditionally.** Closing the receiver window hides it (macOS: the Dock icon goes with it — a menu-bar app); the signaling server and trust store stay alive, so a saved phone's one-tap **Connect** always lands (ADR-006's promise finished). The ways back: the tray's *Open window*, a relaunch attempt (second-instance) or Dock activation, or the next cast start.
+- **Close-mid-cast keeps the cast** — decode, the mixer, the session-info window, and the virtual camera keep running hidden (`backgroundThrottling: false`; MSTP is decode-side): *close the window, OBS keeps receiving* — the vcam workflow made explicit.
+- **A cast starting while hidden auto-opens the window** — the phone's Connect/scan flow needs zero desktop interaction.
+- **Tray menu** (`tray/trayMenu.ts`, pure + tested): status line in the session-info vocabulary (`Waiting…` / `Connected to <phone>` + cast summary / `Waiting for <phone> to reconnect…`), *Open window*, *Forget phone* (the `bye forget` revocation, one path with the no-input stage's Disconnect), *Virtual camera* checkbox (where supported), *Launch at login* (off by default; macOS/Windows), *Quit*.
+- **Quit is the only exit** and every quit path (tray Quit, Cmd+Q, OS logout/shutdown) walks the clean `bye desktop-quit` — a plain reason, so the trust survives plain quits (ADR-006) — then quits through the normal teardown. The lifecycle rules live in one pure, unit-tested state machine (`tray/trayLifecycle.ts`); visibility is an explicit intent there, never inferred from `isVisible()` (the bug that killed the first, reverted attempt).
+- **App Nap / hidden throttling** on macOS: mitigations already shipped (`backgroundThrottling: false`, MSTP pump, keep-alive `<audio>`, and `prevent-display-sleep` during casts — a power assertion disables App Nap); on-macOS verification is on the manual matrix ([features/tray.md](../features/tray.md)).
 - Packaging: win-only `extraResources` for `resources/softcam/`; mac-only `extraResources` for `resources/syphon/` (helper + framework + license, built from source by `build.sh`); koffi `asarUnpack`ed.
 
 ## Virtual audio devices (ADR-008, 2026-10-31)
@@ -101,8 +114,10 @@ Idle → ShowingQR (session + QR generated)
      → MobilePaired (auth succeeded)
      → Negotiating (SDP/ICE)
      → Receiving (video/audio playing)
-     → (mobile disconnects | window closed) → ShowingQR (new session)
+     → (mobile disconnects | bye | session expired) → ShowingQR / No-input (new session)
 ```
+
+Since ADR-010 a closed window is none of these states' business: closing hides the receiver (the app keeps running from the tray), and only Quit ends the app — the quit walk sends the clean `bye` first.
 
 Disconnect behavior: on WebSocket loss or ICE failure, the desktop shows "Waiting for mobile…" and a fresh QR only after the old session expires or is explicitly cancelled, so a momentarily dropped Wi-Fi does not force re-pairing (reconnect rules: [webrtc.md](webrtc.md)).
 

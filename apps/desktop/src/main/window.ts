@@ -23,9 +23,16 @@ export const CAST_MIN_HEIGHT = 240
 /**
  * Window lifecycle for the receiver. In later phases this module also owns the
  * powerSaveBlocker during an active cast (docs/architecture/desktop.md).
+ *
+ * `show: false` (issue #94, ADR-010): a window recreated while the receiver
+ * is in tray mode comes up hidden — visibility is an explicit intent owned by
+ * the lifecycle machine, never inferred from window state here.
  */
-export function createMainWindow(options: { frameless?: boolean; bounds?: Electron.Rectangle } = {}): BrowserWindow {
+export function createMainWindow(
+  options: { frameless?: boolean; bounds?: Electron.Rectangle; show?: boolean } = {}
+): BrowserWindow {
   const frameless = options.frameless === true
+  const showOnReady = options.show !== false
   const window = new BrowserWindow({
     width: options.bounds?.width ?? WINDOW_DEFAULT_WIDTH,
     height: options.bounds?.height ?? WINDOW_DEFAULT_HEIGHT,
@@ -54,9 +61,11 @@ export function createMainWindow(options: { frameless?: boolean; bounds?: Electr
     }
   })
 
-  window.on('ready-to-show', () => {
-    window.show()
-  })
+  if (showOnReady) {
+    window.on('ready-to-show', () => {
+      window.show()
+    })
+  }
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     // Dev: load the vite dev server (openDevTools alone leaves the window
