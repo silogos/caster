@@ -106,6 +106,14 @@ class MicRecordSubstituter(
     }
 
     /**
+     * The live record's rate, or null when no substituted record is
+     * recording — the input to `MicDeviceResolver.isLiveReroutable` (a
+     * cross-rate device switch cannot reroute in place; the caller rebuilds
+     * the mic session instead).
+     */
+    fun liveRecordRateHz(): Int? = activeTwin?.sampleRate
+
+    /**
      * Reroute the **live** record to [source] — `setPreferredDevice` works on
      * a running AudioRecord, so the input switches mid-cast with no session
      * rebuild (the realtime half of the Home picker; the design doc is

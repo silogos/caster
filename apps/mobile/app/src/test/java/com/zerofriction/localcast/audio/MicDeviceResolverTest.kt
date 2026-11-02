@@ -98,4 +98,46 @@ class MicDeviceResolverTest {
         // e.g. TYPE_TELEPHONY — an input type no kind accepts; never a crash.
         assertEquals(MicDeviceSource.BUILTIN, MicDeviceResolver.kindForType(AudioDeviceInfo.TYPE_TELEPHONY))
     }
+
+    // ---- captureRateHz / isLiveReroutable: the round-4 per-device contract ----
+
+    @Test
+    fun `the capture rate follows the kind - builtin shares the game path, wired and usb run native, sco runs hfp`() {
+        // The round-2 contract (16 kHz, the game's voice-chat path) is
+        // builtin-specific; forcing it onto wired/USB mis-fed both captures
+        // (round 4). Each kind captures at its own path's rate.
+        assertEquals(MicDeviceResolver.SHARED_VOICE_INPUT_RATE_HZ, MicDeviceResolver.captureRateHz(MicDeviceSource.BUILTIN))
+        assertEquals(MicDeviceResolver.USB_ANALOG_INPUT_RATE_HZ, MicDeviceResolver.captureRateHz(MicDeviceSource.WIRED_HEADSET))
+        assertEquals(MicDeviceResolver.USB_ANALOG_INPUT_RATE_HZ, MicDeviceResolver.captureRateHz(MicDeviceSource.USB))
+        assertEquals(MicDeviceResolver.HFP_VOICE_INPUT_RATE_HZ, MicDeviceResolver.captureRateHz(MicDeviceSource.BLUETOOTH))
+    }
+
+    @Test
+    fun `a cross-rate switch is not live-reroutable`() {
+        // An AudioRecord's rate is fixed at creation — builtin (16 kHz) to
+        // USB (48 kHz) in either direction must rebuild the mic session,
+        // never reroute the running record onto a mis-matched path.
+        val connected = setOf(AudioDeviceInfo.TYPE_BUILTIN_MIC, AudioDeviceInfo.TYPE_USB_DEVICE)
+        assertEquals(false, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.SHARED_VOICE_INPUT_RATE_HZ, MicDeviceSource.USB, connected))
+        assertEquals(false, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.USB_ANALOG_INPUT_RATE_HZ, MicDeviceSource.BUILTIN, connected))
+    }
+
+    @Test
+    fun `a same-rate switch stays live`() {
+        // Wired ↔ USB are both 48 kHz native; builtin ↔ SCO are both 16 kHz.
+        val analog = setOf(AudioDeviceInfo.TYPE_BUILTIN_MIC, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE)
+        val sco = setOf(AudioDeviceInfo.TYPE_BUILTIN_MIC, AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+        assertEquals(true, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.USB_ANALOG_INPUT_RATE_HZ, MicDeviceSource.USB, analog))
+        assertEquals(true, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.USB_ANALOG_INPUT_RATE_HZ, MicDeviceSource.WIRED_HEADSET, analog))
+        assertEquals(true, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.SHARED_VOICE_INPUT_RATE_HZ, MicDeviceSource.BLUETOOTH, sco))
+    }
+
+    @Test
+    fun `an unconnected pick keeps the builtin contract and stays live`() {
+        // Selecting an external kind with nothing connected resolves to the
+        // builtin mic (16 kHz) — a running builtin record takes it in place,
+        // and the reroute reports the fallback via onRouted.
+        val connected = setOf(AudioDeviceInfo.TYPE_BUILTIN_MIC)
+        assertEquals(true, MicDeviceResolver.isLiveReroutable(MicDeviceResolver.SHARED_VOICE_INPUT_RATE_HZ, MicDeviceSource.USB, connected))
+    }
 }
