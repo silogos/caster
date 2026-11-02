@@ -54,6 +54,14 @@ class MicCastSession(
     private val onState: (MicState) -> Unit = {},
     /** The effective mic routing after every (re)route — display plumbing (Home). */
     private val onMicRouted: (effective: MicDeviceSource, fallbackFrom: MicDeviceSource?) -> Unit = { _, _ -> },
+    /**
+     * A capture-side death while the session records an **external** kind
+     * (record init/start/read error) — the service's cue to degrade to the
+     * built-in mic, a rebuild this session cannot do itself (its rate and
+     * device were fixed at build). Delivered on the session thread; never
+     * fired for the built-in kind (that path parks as Failed).
+     */
+    private val onCaptureDied: (MicDeviceSource) -> Unit = {},
     statsIntervalMs: Long = STATS_INTERVAL_MS,
 ) {
 
@@ -133,6 +141,12 @@ class MicCastSession(
     /** True between [start] and teardown — guards late signaling callbacks. */
     private var active = false
 
+    /** Reconnect ladder position (reliability.md A8) — reset on CONNECTED. */
+    private var reconnectAttempts = 0
+
+    /** The pending renegotiate, cancellable at teardown. */
+    private var reconnectRunnable: Runnable? = null
+
     fun start() {
         check(!active) { "mic session already started" }
         active = true
@@ -148,22 +162,26 @@ class MicCastSession(
     }
 
     /**
-     * Switch the **live** mic input to [source]. True: the substituted record
-     * took the new device in place (`setPreferredDevice`, no rebuild — same
-     * contract rate on both sides). False: the switch crosses capture rates
-     * (e.g. builtin ↔ USB, ADR-004 round 4) or no substituted record is
-     * live — an `AudioRecord`'s rate is fixed at creation, so the caller
-     * rebuilds this session to apply the pick (the caller keeps the setting
-     * for the next mic start either way). The effective routing comes back
-     * via [onMicRouted].
+     * Switch the **live** mic input to [source].
+     * [MicDeviceSwitch.APPLIED_LIVE] — the substituted record took the new
+     * device in place (`setPreferredDevice`, no rebuild; same contract rate
+     * on both sides). [MicDeviceSwitch.NEEDS_REBUILD] — the switch crosses
+     * capture rates (e.g. builtin ↔ USB, ADR-004 round 4): an
+     * `AudioRecord`'s rate is fixed at creation, so the caller rebuilds this
+     * session to apply the pick. [MicDeviceSwitch.DEFERRED] — no substituted
+     * record is live (the session is still building, or the substitution is
+     * degraded): the caller just keeps the setting for the next mic start;
+     * rebuilding here would tear down a session that is seconds old (the
+     * live-found toggle-churn race). The effective routing comes back via
+     * [onMicRouted].
      */
-    fun setMicDevice(source: MicDeviceSource): Boolean {
-        val liveRateHz = substituter?.liveRecordRateHz() ?: return false
+    fun setMicDevice(source: MicDeviceSource): MicDeviceSwitch {
+        val liveRateHz = substituter?.liveRecordRateHz() ?: return MicDeviceSwitch.DEFERRED
         val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val connectedTypes = am?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.map { it.type } ?: emptyList()
-        if (!MicDeviceResolver.isLiveReroutable(liveRateHz, source, connectedTypes)) return false
+        if (!MicDeviceResolver.isLiveReroutable(liveRateHz, source, connectedTypes)) return MicDeviceSwitch.NEEDS_REBUILD
         post { substituter?.reroute(source) }
-        return true
+        return MicDeviceSwitch.APPLIED_LIVE
     }
 
     /**
@@ -224,13 +242,13 @@ class MicCastSession(
                     }
                 })
                 .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
-                    override fun onWebRtcAudioRecordInitError(errorMessage: String) = micFailed("record init: $errorMessage")
+                    override fun onWebRtcAudioRecordInitError(errorMessage: String) = captureFailed("record init: $errorMessage")
                     override fun onWebRtcAudioRecordStartError(
                         errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
                         errorMessage: String,
-                    ) = micFailed("record start ($errorCode): $errorMessage")
+                    ) = captureFailed("record start ($errorCode): $errorMessage")
 
-                    override fun onWebRtcAudioRecordError(errorMessage: String) = micFailed("record: $errorMessage")
+                    override fun onWebRtcAudioRecordError(errorMessage: String) = captureFailed("record: $errorMessage")
                 })
                 .createAudioDeviceModule()
             substituter = MicRecordSubstituter(context, adm, micDevice, onMicRouted)
@@ -419,12 +437,18 @@ class MicCastSession(
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
             Log.i(TAG, "connection state: $newState")
             when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED -> scheduleStats()
+                PeerConnection.PeerConnectionState.CONNECTED -> {
+                    reconnectAttempts = 0
+                    scheduleStats()
+                }
 
-                // Mic-local only: the user turned the mic off on the other
-                // side, or the mic link died — the cast (media pc) is the
-                // media session's business, never touched from here.
-                PeerConnection.PeerConnectionState.FAILED -> micFailed("ice failed")
+                // A dead mic pc is not a dead mic (live finding 2026-11-02:
+                // a connection reset kept the cast but parked the mic as
+                // Failed until re-toggled). Ride the reconnect ladder —
+                // same shape as the signaling ladder — and only a spent
+                // budget parks the session. The cast (media pc) is never
+                // touched from here either way.
+                PeerConnection.PeerConnectionState.FAILED -> scheduleReconnectOrPark("ice failed")
                 else -> Unit
             }
         }
@@ -501,6 +525,8 @@ class MicCastSession(
         }
         audioManager = null
         handler?.removeCallbacks(statsRunnable)
+        reconnectRunnable?.let { handler?.removeCallbacks(it) }
+        reconnectRunnable = null
         closePc()
         audioTrack?.dispose()
         audioTrack = null
@@ -533,6 +559,54 @@ class MicCastSession(
             if (active) stopLocal(MicState.Failed)
         }
     }
+
+    /**
+     * Transport death → renegotiate on the [MicReconnectPolicy] ladder; a
+     * spent budget parks the session as Failed (reliability.md A8,
+     * formalized after the live finding: a connection reset kept the cast
+     * but lost the mic). Runs on the session thread (pc observer callbacks
+     * arrive there).
+     */
+    private fun scheduleReconnectOrPark(reason: String) {
+        val backoffMs = MicReconnectPolicy.backoffMsFor(reconnectAttempts)
+        if (backoffMs === null) {
+            micFailed("$reason — reconnect budget spent (${MicReconnectPolicy.MAX_ATTEMPTS} attempts)")
+            return
+        }
+        reconnectAttempts++
+        Log.w(
+            TAG,
+            "mic pc failed ($reason) — renegotiating in ${backoffMs}ms " +
+                "(attempt $reconnectAttempts/${MicReconnectPolicy.MAX_ATTEMPTS})",
+        )
+        reconnectRunnable?.let { handler?.removeCallbacks(it) }
+        val runnable = Runnable {
+            reconnectRunnable = null
+            if (active) negotiate()
+        }
+        reconnectRunnable = runnable
+        handler?.postDelayed(runnable, backoffMs)
+    }
+
+    /**
+     * A capture-side death. External kind → hand the service the built-in
+     * degrade ([onCaptureDied]; the rebuild is the service's to drive — this
+     * session's rate and device were fixed at build). Built-in kind, or a
+     * degrade session that itself died → park as Failed, the pre-existing
+     * contract. Runs on the ADM's recording thread; both paths post over.
+     */
+    private fun captureFailed(detail: String) {
+        val kind = resolveMicKind()
+        if (kind != MicDeviceSource.BUILTIN) {
+            Log.w(TAG, "capture died on $kind ($detail) — offering the service the builtin degrade")
+            post { if (active) onCaptureDied(kind) }
+        } else {
+            micFailed(detail)
+        }
+    }
+
+    /** The outcome of a live device pick ([setMicDevice]) — see its doc. */
+    enum class MicDeviceSwitch { APPLIED_LIVE, NEEDS_REBUILD, DEFERRED }
 
     companion object {
         private const val TAG = "MicCastSession"

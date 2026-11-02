@@ -59,7 +59,7 @@ Pending items from [microphone.md](microphone.md), [game-audio.md](game-audio.md
 | A5 | Mute paths | Sender-side game-audio mute and desktop mixer mute each silence only their own stream; unmute restores | — |
 | A6 | Reverse-direction platform silence (ADR-004): cast mic ON first, then a privacy-sensitive capture starts (e.g. game voice chat with the pre-fix source) | `MicState.Silenced` surfaces in plain words and recovers when the winner stops | — |
 | A7 | Mic while app backgrounded (fixed `microphone` FGS type) | Mic stays clean with the app in the background (the silencing was found live; the fixed behavior needs this formal listen) | — |
-| A8 | Mic pc through a Wi-Fi flap (mic ON) | Mic pc follows the reconnect ladder cleanly; no stuck states (Phase8 observed the ladder re-authing ×3 — formalize with mic on) | — |
+| A8 | Mic pc through a Wi-Fi flap (mic ON) | Mic pc renegotiates on its own ladder (1→2→5→10→30 s, 5 attempts — `MicReconnectPolicy`) and the mic returns without a re-toggle; only a spent budget parks `Failed`. Found live 2026-11-02 in the *old* shape: the flap kept screen + game audio (media pc rides #87) but parked the mic as Failed (issue #92). Device verification pending | — |
 | A9 | Echo sanity: speaker vs headset | Speaker + mic on → desktop hears the echo (documented R10; recommend headphones); headset → clean | — |
 | A10 | Mic quality through the APM (noise suppression strength) | Subjective listen recorded; no chipmunk/delay (the 2026-09-23 verification holds on this build) | — |
 | A11 | Mixer: independence + clipping + drift | Independent volume/mute per stream; unity gain defaults don't clip; no drift over a long session (rides T5) | — |

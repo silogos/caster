@@ -174,6 +174,13 @@ class CastService : Service() {
         /** The Wi-Fi radio hold's name in system dumps (issue #86). */
         private const val WIFI_LOCK_TAG = "localcast:cast"
 
+        /**
+         * How long the device set must stay quiet before the mic follows the
+         * selection again (a flapping input keeps deferring the timer — one
+         * rebuild per storm, not one per bounce; live finding 2026-11-02).
+         */
+        private const val MIC_DEVICE_SETTLE_MS = 2_000L
+
         /** Start args travel via a holder — a Service Intent can only carry parceled values, not the live signaling client. */
         private var pendingStart: StartArgs? = null
 
@@ -394,6 +401,12 @@ class CastService : Service() {
      */
     private var micDeviceWatcher: AudioDeviceCallback? = null
 
+    /** The pending device-settle action — cancelled per new event, at teardown. */
+    private var pendingMicSettle: Runnable? = null
+
+    /** Service-thread hops (capture-death degrade arrives on a session thread). */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     /** Thermal monitoring (Phase11) — runs for exactly the cast's lifetime. */
     private var thermalSource: ThermalSource? = null
 
@@ -584,9 +597,10 @@ class CastService : Service() {
             micSession = null
             unregisterMicDeviceWatcher()
             _micRouting.value = null
+            // The dying session's onState(Off) is identity-guarded away
+            // (startMicSession) — the off fact is the service's to state.
+            _micState.value = MicState.Off
             startCastForeground(micOn = false)
-            // The session's onState(Off) republishes; the summary needs the
-            // flag flipped after it.
             sendSessionInfo(mic = false)
             return
         }
@@ -598,16 +612,36 @@ class CastService : Service() {
         startMicSession()
     }
 
-    private fun startMicSession() {
+    /**
+     * [degradedFrom] ≠ null builds the session on the built-in mic whatever
+     * the config says — the capture-death degrade (a dead external input
+     * that never sent an unplug event; the fallback fact reaches the UI via
+     * [MicRoutingUiState.fallbackFrom]).
+     *
+     * Every callback is identity-guarded (`micSession === newMic`): teardown
+     * is asynchronous (the dying session's thread publishes its terminal
+     * state whenever its stop lands), and an unguarded late `Off` was shown
+     * live to land *after* the replacement's `Active` — the UI then showed
+     * the mic off while it recorded, and the next toggle inverted.
+     */
+    private fun startMicSession(degradedFrom: MicDeviceSource? = null) {
         val currentSignaling = signaling
         if (currentSignaling === null) return
-        val newMic = MicCastSession(
+        lateinit var newMic: MicCastSession
+        newMic = MicCastSession(
             context = applicationContext,
             signaling = currentSignaling,
-            micDevice = config?.micDevice ?: MicDeviceSource.BUILTIN,
-            onState = { micState -> _micState.value = micState },
+            micDevice = degradedFrom ?: config?.micDevice ?: MicDeviceSource.BUILTIN,
+            onState = { micState -> if (micSession === newMic) _micState.value = micState },
             onMicRouted = { effective, fallbackFrom ->
-                _micRouting.value = MicRoutingUiState(effective, fallbackFrom)
+                if (micSession === newMic) {
+                    _micRouting.value = MicRoutingUiState(effective, fallbackFrom ?: degradedFrom)
+                }
+            },
+            onCaptureDied = { kind ->
+                if (micSession === newMic) {
+                    mainHandler.post { if (micSession === newMic) rebuildMicSession(fallbackFrom = kind) }
+                }
             },
         )
         micSession = newMic
@@ -617,67 +651,104 @@ class CastService : Service() {
         // before the app can be backgrounded, or Android11+ mutes the mic.
         startCastForeground(micOn = true)
         sendSessionInfo(mic = true)
-        Log.i(TAG, "mic session started")
+        Log.i(TAG, "mic session started${if (degradedFrom !== null) " (degraded from ${degradedFrom.label})" else ""}")
     }
 
     /**
      * A mid-cast mic-device pick (Home picker). The cast's live config
      * follows the pick — the store write stays the caller's ("settings live
      * in the store, the service reads fresh"); this copy keeps the *running*
-     * cast aligned, the same pattern as live quality. With the mic on, a
-     * same-rate switch reroutes the live record in place; a cross-rate
-     * switch (ADR-004 round 4) or a degraded substitution rebuilds the mic
-     * session — an `AudioRecord`'s rate is fixed at creation. With the mic
-     * off the pick just sits in the config for the next mic-on.
+     * cast aligned, the same pattern as live quality. With the mic on:
+     * same-rate switch → the live record reroutes in place; cross-rate
+     * switch → the session rebuilds (an `AudioRecord`'s rate is fixed at
+     * creation); no live record yet → the pick is kept and applies at the
+     * next mic start (a rebuild here would tear down a seconds-old session
+     * — the live-found toggle-churn race). With the mic off the pick just
+     * sits in the config for the next mic-on.
      */
     private fun applyMicDevice(device: MicDeviceSource) {
         config = config?.copy(micDevice = device)
         val mic = micSession ?: return
-        if (!mic.setMicDevice(device)) rebuildMicSession()
+        when (mic.setMicDevice(device)) {
+            MicCastSession.MicDeviceSwitch.APPLIED_LIVE -> Unit
+            MicCastSession.MicDeviceSwitch.NEEDS_REBUILD -> rebuildMicSession()
+            MicCastSession.MicDeviceSwitch.DEFERRED ->
+                Log.i(TAG, "mic pick stored — no live record yet, it applies at the next mic start")
+        }
     }
 
     /**
      * Tear the mic session down and build it fresh on the current config's
      * device selection — the only way to change the capture rate mid-cast
-     * (round 4). Brief and mic-local: a ~1–2 s gap, the cast itself is
-     * untouched, and the FGS keeps its microphone type throughout
-     * ([startMicSession] re-asserts it).
+     * (round 4). [fallbackFrom] routes the rebuild onto the built-in mic
+     * (the capture-death degrade). Brief and mic-local: a ~1–2 s gap, the
+     * cast itself is untouched, and the FGS keeps its microphone type
+     * throughout ([startMicSession] re-asserts it). The dying session's
+     * late publishes are identity-guarded away — the replacement's states
+     * are the only ones the UI sees.
      */
-    private fun rebuildMicSession() {
+    private fun rebuildMicSession(fallbackFrom: MicDeviceSource? = null) {
         val current = micSession ?: return
         current.stop()
         micSession = null
         unregisterMicDeviceWatcher()
         _micRouting.value = null
-        startMicSession()
+        startMicSession(degradedFrom = fallbackFrom)
     }
 
     /**
      * Registers [micDeviceWatcher] (idempotent) while a mic session records.
+     * Device add/remove events are **settled**, not obeyed instantly: a
+     * flapping external input (live finding: the USB headset bounced every
+     * ~5 s) would otherwise rebuild the mic session per bounce. After the
+     * quiet period the mic simply follows the *selected* kind again —
+     * resolving to the phone mic when the selection is gone (the
+     * plain-words fallback) and back onto the selection when it returns.
      */
     private fun registerMicDeviceWatcher() {
         if (micDeviceWatcher !== null) return
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val watcher = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                onMicDevicesChanged(addedDevices)
+            }
+
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                // A removed input can only matter to a non-builtin routing;
-                // rerouting the (still-selected) kind lets the resolver fall
-                // back to the phone mic and report the fact via onMicRouted.
-                // Cross-rate (the removed device was e.g. the 48 kHz
-                // wired/USB input): the record cannot change rate
-                // mid-flight, so the mic session rebuilds on the builtin
-                // contract instead (ADR-004 round 4).
-                val routing = _micRouting.value ?: return
-                if (routing.effective == MicDeviceSource.BUILTIN) return
-                val mic = micSession ?: return
-                if (!mic.setMicDevice(routing.effective)) rebuildMicSession()
+                onMicDevicesChanged(removedDevices)
             }
         }
         micDeviceWatcher = watcher
         am.registerAudioDeviceCallback(watcher, null)
     }
 
+    /** Input-side device churn → one settle timer (output-only churn is irrelevant). */
+    private fun onMicDevicesChanged(changed: Array<out AudioDeviceInfo>) {
+        if (changed.all { it.isSink }) return
+        val selected = config?.micDevice ?: return
+        if (selected == MicDeviceSource.BUILTIN && _micRouting.value?.effective == MicDeviceSource.BUILTIN) return
+        scheduleMicDeviceSettle()
+    }
+
+    /** Rescheduled per event — a flap keeps deferring it; a real change lets it fire. */
+    private fun scheduleMicDeviceSettle() {
+        pendingMicSettle?.let { mainHandler.removeCallbacks(it) }
+        val settle = Runnable {
+            pendingMicSettle = null
+            val selected = config?.micDevice ?: return@Runnable
+            val mic = micSession ?: return@Runnable
+            when (mic.setMicDevice(selected)) {
+                MicCastSession.MicDeviceSwitch.APPLIED_LIVE -> Unit
+                MicCastSession.MicDeviceSwitch.NEEDS_REBUILD -> rebuildMicSession()
+                MicCastSession.MicDeviceSwitch.DEFERRED -> Unit
+            }
+        }
+        pendingMicSettle = settle
+        mainHandler.postDelayed(settle, MIC_DEVICE_SETTLE_MS)
+    }
+
     private fun unregisterMicDeviceWatcher() {
+        pendingMicSettle?.let { mainHandler.removeCallbacks(it) }
+        pendingMicSettle = null
         val watcher = micDeviceWatcher ?: return
         micDeviceWatcher = null
         (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.unregisterAudioDeviceCallback(watcher)
