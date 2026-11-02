@@ -464,7 +464,7 @@ class CastService : Service() {
             ACTION_SET_MIC_DEVICE -> {
                 val label = intent.getStringExtra(EXTRA_MIC_DEVICE)
                 val device = MicDeviceSource.fromLabel(label ?: "")
-                if (device !== null) micSession?.setMicDevice(device)
+                if (device !== null) applyMicDevice(device)
                 return START_NOT_STICKY
             }
             ACTION_RESTORE_QUALITY -> {
@@ -621,6 +621,38 @@ class CastService : Service() {
     }
 
     /**
+     * A mid-cast mic-device pick (Home picker). The cast's live config
+     * follows the pick — the store write stays the caller's ("settings live
+     * in the store, the service reads fresh"); this copy keeps the *running*
+     * cast aligned, the same pattern as live quality. With the mic on, a
+     * same-rate switch reroutes the live record in place; a cross-rate
+     * switch (ADR-004 round 4) or a degraded substitution rebuilds the mic
+     * session — an `AudioRecord`'s rate is fixed at creation. With the mic
+     * off the pick just sits in the config for the next mic-on.
+     */
+    private fun applyMicDevice(device: MicDeviceSource) {
+        config = config?.copy(micDevice = device)
+        val mic = micSession ?: return
+        if (!mic.setMicDevice(device)) rebuildMicSession()
+    }
+
+    /**
+     * Tear the mic session down and build it fresh on the current config's
+     * device selection — the only way to change the capture rate mid-cast
+     * (round 4). Brief and mic-local: a ~1–2 s gap, the cast itself is
+     * untouched, and the FGS keeps its microphone type throughout
+     * ([startMicSession] re-asserts it).
+     */
+    private fun rebuildMicSession() {
+        val current = micSession ?: return
+        current.stop()
+        micSession = null
+        unregisterMicDeviceWatcher()
+        _micRouting.value = null
+        startMicSession()
+    }
+
+    /**
      * Registers [micDeviceWatcher] (idempotent) while a mic session records.
      */
     private fun registerMicDeviceWatcher() {
@@ -631,9 +663,14 @@ class CastService : Service() {
                 // A removed input can only matter to a non-builtin routing;
                 // rerouting the (still-selected) kind lets the resolver fall
                 // back to the phone mic and report the fact via onMicRouted.
+                // Cross-rate (the removed device was e.g. the 48 kHz
+                // wired/USB input): the record cannot change rate
+                // mid-flight, so the mic session rebuilds on the builtin
+                // contract instead (ADR-004 round 4).
                 val routing = _micRouting.value ?: return
                 if (routing.effective == MicDeviceSource.BUILTIN) return
-                micSession?.setMicDevice(routing.effective)
+                val mic = micSession ?: return
+                if (!mic.setMicDevice(routing.effective)) rebuildMicSession()
             }
         }
         micDeviceWatcher = watcher

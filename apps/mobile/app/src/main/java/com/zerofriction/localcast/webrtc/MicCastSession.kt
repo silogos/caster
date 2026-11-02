@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
+import com.zerofriction.localcast.audio.MicDeviceResolver
 import com.zerofriction.localcast.audio.MicRecordSubstituter
 import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.audio.MicSilenceMonitor
@@ -147,13 +148,34 @@ class MicCastSession(
     }
 
     /**
-     * Switch the **live** mic input to [source] — the substituted record is
-     * rerouted in place (no session rebuild); a plain no-op when no
-     * substituted record is live (the caller keeps the setting for the next
-     * mic start instead). The effective routing comes back via [onMicRouted].
+     * Switch the **live** mic input to [source]. True: the substituted record
+     * took the new device in place (`setPreferredDevice`, no rebuild — same
+     * contract rate on both sides). False: the switch crosses capture rates
+     * (e.g. builtin ↔ USB, ADR-004 round 4) or no substituted record is
+     * live — an `AudioRecord`'s rate is fixed at creation, so the caller
+     * rebuilds this session to apply the pick (the caller keeps the setting
+     * for the next mic start either way). The effective routing comes back
+     * via [onMicRouted].
      */
-    fun setMicDevice(source: MicDeviceSource) {
+    fun setMicDevice(source: MicDeviceSource): Boolean {
+        val liveRateHz = substituter?.liveRecordRateHz() ?: return false
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val connectedTypes = am?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.map { it.type } ?: emptyList()
+        if (!MicDeviceResolver.isLiveReroutable(liveRateHz, source, connectedTypes)) return false
         post { substituter?.reroute(source) }
+        return true
+    }
+
+    /**
+     * The kind the mic session actually captures with at build time — the
+     * selection resolved against the connected inputs (a selected-but-
+     * unconnected kind keeps the builtin contract), the same resolution
+     * [MicRecordSubstituter] applies at record start.
+     */
+    private fun resolveMicKind(): MicDeviceSource {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return MicDeviceSource.BUILTIN
+        val connectedTypes = am.getDevices(AudioManager.GET_DEVICES_INPUTS).map { it.type }
+        return MicDeviceResolver.kindForType(MicDeviceResolver.resolveType(micDevice, connectedTypes))
     }
 
     // ---- Everything below runs (or is posted to) the session thread ----
@@ -177,19 +199,21 @@ class MicCastSession(
             // privacy-insensitive twin so the concurrent-capture policy
             // doesn't silence every other app — the reason PUBG's voice chat
             // died when the cast mic came on.
-            // Addendum (device round 2): the input rate matches the on-device
-            // voice-chat rate — when the game's 16 kHz capture runs
-            // concurrently, the shared HAL path reconfigures to it, and a
-            // 48 kHz record on that path received raw 16 kHz data (the
-            // desktop heard chipmunk).
             // Addendum (round 3, user-directed): the source is `MIC` — the
             // exact source the game's voice chat uses, so the audio policy
             // hosts both captures identically (the voice source kept being
             // split onto the back mic, which the preferred-device request
             // could not move).
+            // Addendum (round 4): the input rate follows the **resolved**
+            // device kind, not one constant — the builtin contract's 16 kHz
+            // (round 2, the game-shared path) forced onto wired/USB paths
+            // made the audio policy reconfigure the shared input profile and
+            // mis-feed both captures (chipmunk on the cast mic *and* the
+            // game's voice chat, found live 2026-11-02); external kinds
+            // record at their native rate instead (MicDeviceResolver).
             val adm = JavaAudioDeviceModule.builder(context)
                 .setAudioSource(MicRecordSubstituter.CAPTURE_SOURCE)
-                .setInputSampleRate(SHARED_VOICE_INPUT_RATE_HZ)
+                .setInputSampleRate(MicDeviceResolver.captureRateHz(resolveMicKind()))
                 .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
                     override fun onWebRtcAudioRecordStart() {
                         substituter?.onRecordStart()
@@ -513,14 +537,9 @@ class MicCastSession(
     companion object {
         private const val TAG = "MicCastSession"
 
-        /**
-         * ADR-004 addendum: the input rate the twin shares with on-device
-         * voice chat (PUBG captures 16 kHz stereo; dumpsys evidence). Running
-         * the ADM at the same rate keeps our capture aligned with the shared
-         * HAL path when both capture concurrently — no resampling mismatch
-         * (chipmunk), and no reconfiguration churn at toggle time.
-         */
-        const val SHARED_VOICE_INPUT_RATE_HZ = 16_000
+        // ADR-004 round 4: the input-rate contract lives in
+        // MicDeviceResolver (per-kind, JVM-tested) — the builtin 16 kHz
+        // (SHARED_VOICE_INPUT_RATE_HZ) plus the external kinds' native rates.
 
         /** webrtc.md: each side polls getStats ~1 Hz. */
         const val STATS_INTERVAL_MS = 1_000L

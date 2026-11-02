@@ -24,6 +24,34 @@ object MicDeviceResolver {
     const val FALLBACK_TYPE = AudioDeviceInfo.TYPE_BUILTIN_MIC
 
     /**
+     * ADR-004 round 2: the rate the **built-in** capture shares with on-device
+     * voice chat — PUBG captures 16 kHz on the builtin mic (dumpsys evidence,
+     * 2026-09-23), and running at the same rate keeps the cast mic aligned
+     * with the shared HAL path when both capture concurrently. This contract
+     * is builtin-specific: it does **not** extend to external kinds (round 4).
+     */
+    const val SHARED_VOICE_INPUT_RATE_HZ = 16_000
+
+    /**
+     * ADR-004 round 4: the native rate of wired and USB input paths (USB
+     * Audio Class and every wired-headset HAL profile run 48 kHz). Forcing
+     * the builtin contract's 16 kHz onto these paths while a game captures
+     * concurrently made the audio policy reconfigure the shared input
+     * profile and mis-feed *both* captures (chipmunk on the cast mic and the
+     * game's voice chat, found live 2026-11-02) — the record asks for the
+     * path's native rate instead, so each input keeps its own profile.
+     */
+    const val USB_ANALOG_INPUT_RATE_HZ = 48_000
+
+    /**
+     * ADR-004 round 4: the HFP wideband ceiling. Bluetooth SCO is a
+     * phone-call link (8 kHz narrowband / 16 kHz wideband), so 16 kHz is the
+     * honest client rate for it — the framework resamples narrowband up.
+     * Unverified on device (the SCO caveat in the UI stands).
+     */
+    const val HFP_VOICE_INPUT_RATE_HZ = 16_000
+
+    /**
      * The input device types each kind accepts, in preference order.
      * Output-only twins are deliberately absent (wired headphones, Bluetooth
      * A2DP have no microphone).
@@ -59,4 +87,27 @@ object MicDeviceResolver {
      */
     fun kindForType(type: Int): MicDeviceSource =
         TYPES_BY_SOURCE.entries.firstOrNull { (_, types) -> type in types }?.key ?: MicDeviceSource.BUILTIN
+
+    /**
+     * The capture contract rate for a kind (ADR-004 round 4 — per-device,
+     * not one-size): builtin keeps the game-shared 16 kHz; wired/USB record
+     * at their native 48 kHz; Bluetooth SCO at the HFP wideband ceiling.
+     * Callers pass the **resolved** kind (a selected-but-unconnected kind
+     * falls back to builtin and must keep the builtin contract).
+     */
+    fun captureRateHz(kind: MicDeviceSource): Int = when (kind) {
+        MicDeviceSource.BUILTIN -> SHARED_VOICE_INPUT_RATE_HZ
+        MicDeviceSource.WIRED_HEADSET, MicDeviceSource.USB -> USB_ANALOG_INPUT_RATE_HZ
+        MicDeviceSource.BLUETOOTH -> HFP_VOICE_INPUT_RATE_HZ
+    }
+
+    /**
+     * Whether a running record at [recordRateHz] can take [source] with a
+     * plain `setPreferredDevice` (live reroute): only when the resolved kind
+     * of the new selection captures at the same rate the record already
+     * runs — an `AudioRecord`'s rate is fixed at creation, so a cross-rate
+     * switch (e.g. builtin ↔ USB) needs a mic-session rebuild instead.
+     */
+    fun isLiveReroutable(recordRateHz: Int, source: MicDeviceSource, connectedTypes: Collection<Int>): Boolean =
+        captureRateHz(kindForType(resolveType(source, connectedTypes))) == recordRateHz
 }
