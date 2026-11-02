@@ -106,6 +106,11 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Feature 2026-11c — Hotspot pairing mode (cast with no shared Wi-Fi) ✅ implemented — awaiting on-device matrix
+*(Not a numbered phase: user-requested via issue #96, shipped off-phase like its siblings; decides [ADR-011](../decisions/ADR-011-hotspot-pairing-mode.md) — the LAN-only interpretation gate: a phone-hosted `LocalOnlyHotspot` shares no internet, so peers stay direct and local; the invariant's intent holds. The "c" leaves room for the parallel tray-lifecycle feature (#94, ADR-010) landing as 2026-11b.)*
+**Scope:** the #1 user-facing error (*"Couldn't reach the desktop…"*) gains a way out — **the phone hosts a local-only hotspot, the desktop joins, the guided-manual flow pairs them over the hotspot subnet** (failure-card hint → SSID/password on Home + under the scanner → join on the desktop → scan its fresh QR). **Zero protocol change** (`v` stays 1). Mobile: pure `hotspot/HotspotMachine` (JVM-tested) + the `HotspotControl` platform wrapper (version-split permission NEARBY_WIFI_DEVICES/ACCESS_FINE_LOCATION; the awkwardly-versioned `startLocalOnlyHotspot` — direct call 33+, reflection to the API-26 method below; honest OS-revoked); the hint gate shows the escape **exactly** for `connect-unreachable`. Desktop: QR freshness — `ensureFreshSession` regenerates a *pending* session when the machine's IPv4 set changes (authorized sessions never regenerate for this reason); the payload carries the session's creation-time snapshot. The hotspot is explicit (the cast runs over it; Stop is the only normal exit); OEM variance joins R11's watch list. Rejected alternatives (Wi-Fi Direct, desktop-hosted AP, USB/ADB) recorded in the ADR.
+**Accept:** mobile JVM 249/249 (12 new) + `assembleDebug`; desktop vitest 262/262 (4 new) + typecheck + build; on-device matrix (permission path → join → QR pair over the hotspot → full cast incl. both audio tracks → clean teardown; OS-revoked mid-cast degradation; **no mobile data used**) — [features/pairing.md](../features/pairing.md) §Hotspot pairing mode, pending both devices in hand. *(Implemented 2026-11-03.)*
+
 ## Definition of Done (every phase)
 
 ```text

@@ -26,6 +26,17 @@
          caster app is backgrounded during a game — one half of surviving
          transient mid-game UDP outages. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Hotspot pairing mode (issue #96, ADR-011): startLocalOnlyHotspot is
+         gated on location below Android 13 and on the nearby-devices
+         permission from 13 (the Wi-Fi API migration); neverForLocation
+         asserts we derive no location from it. A local-only hotspot shares
+         no internet — the LAN-only posture holds. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
 
     <application
         android:allowBackup="true"

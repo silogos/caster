@@ -225,4 +225,21 @@
     <string name="home_connecting">Connecting…</string>
     <string name="home_scan_qr">Scan QR code</string>
     <string name="home_terminate">Terminate</string>
+
+    <!-- Hotspot pairing mode (issue #96, ADR-011): no shared Wi-Fi → the
+         phone hosts, the desktop joins, then the normal QR scan pairs them
+         over the hotspot subnet. Plain words only (AGENTS.md). -->
+    <string name="hotspot_hint_button">Not on the same network? Start a hotspot</string>
+    <string name="hotspot_turning_on">Turning on hotspot…</string>
+    <string name="hotspot_active_title">Hotspot on — join it on the desktop</string>
+    <string name="hotspot_credentials_line">Wi-Fi: %1$s · Password: %2$s</string>
+    <string name="hotspot_join_hint">Join this Wi-Fi on the desktop, then scan the QR code it shows. The hotspot stays on while you cast.</string>
+    <string name="hotspot_stop">Stop hotspot</string>
+    <string name="hotspot_retry">Try again</string>
+    <string name="hotspot_error_permission">Hotspot needs one more permission. Tap Try again to allow it.</string>
+    <string name="hotspot_error_not_supported">This phone can\'t host a hotspot (device or carrier policy).</string>
+    <string name="hotspot_error_no_channel">The radio is busy — turn off tethering or other hotspots, then try again.</string>
+    <string name="hotspot_error_incompatible_mode">A phone setting is blocking the hotspot. Check tethering settings and try again.</string>
+    <string name="hotspot_error_os_revoked">The system turned the hotspot off.</string>
+    <string name="hotspot_error_unknown">Couldn\'t start the hotspot. Try again.</string>
 </resources>
