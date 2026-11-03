@@ -284,7 +284,15 @@ class MediaCastSession(
     private fun buildOnThread() {
         try {
             PeerConnectionFactory.initialize(
-                PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions(),
+                PeerConnectionFactory.InitializationOptions.builder(context)
+                    // Multichannel (stereo) send is gated behind this trial in
+                    // libwebrtc's audio send path — without it the capture is
+                    // downmixed to mono through the audio processing module
+                    // even with stereo negotiated (found live 2026-11-04;
+                    // see webrtc issue 41481053). The mic pc stays trial-free:
+                    // mono voice is by design.
+                    .setFieldTrials(MULTICHANNEL_SEND_FIELD_TRIAL)
+                    .createInitializationOptions(),
             )
             val egl = EglBase.create()
             eglBase = egl
@@ -358,10 +366,14 @@ class MediaCastSession(
             if (newAudio !== null) {
                 val constraints = MediaConstraints().apply {
                     // Captured playback is finished audio (audio.md): refuse
-                    // the APM's mic-shaped processing on it.
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "false"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                    // the APM's mic-shaped processing on it — every stage of
+                    // it, not just the three big ones.
+                    listOf(
+                        "googEchoCancellation", "googEchoCancellation2", "googDAEchoCancellation",
+                        "googAutoGainControl", "googAutoGainControl2",
+                        "googNoiseSuppression", "googNoiseSuppression2",
+                        "googHighpassFilter", "googTypingNoiseDetection",
+                    ).forEach { mandatory.add(MediaConstraints.KeyValuePair(it, "false")) }
                 }
                 val newAudioSource = newFactory.createAudioSource(constraints)
                 audioSource = newAudioSource
@@ -897,6 +909,9 @@ class MediaCastSession(
 
     companion object {
         private const val TAG = "MediaCastSession"
+
+        /** Un-gates libwebrtc's stereo/multichannel send path (see initialize). */
+        private const val MULTICHANNEL_SEND_FIELD_TRIAL = "WebRTC-Audio-MultiChannelSend/Enabled/"
 
         /** webrtc.md: each side polls getStats ~1 Hz. */
         const val STATS_INTERVAL_MS = 1_000L
