@@ -51,6 +51,9 @@ class PlaybackCaptureAudioSource(
 ) {
     val state: GameAudioState get() = monitor.state.value
 
+    /** For the start-of-capture diagnostics ([AudioPolicySinkProbe]). */
+    private val appContext: Context = context
+
     /** Fed on the ADM's recording thread alongside the silence monitor. */
     private val stereoContentProbe = StereoContentProbe()
 
@@ -159,7 +162,10 @@ class PlaybackCaptureAudioSource(
                 TAG,
                 "playback capture active: ${capture.sampleRate} Hz, ${capture.channelCount} ch, ${capture.audioFormat}",
             )
-            if (capture.channelCount == 2) probePlatformCapture(liveProjection, capture.sampleRate)
+            if (capture.channelCount == 2) {
+                probePlatformCapture(liveProjection, capture.sampleRate)
+                AudioPolicySinkProbe.run(appContext)
+            }
         } catch (t: Throwable) {
             captureFailed("substituting playback capture failed: ${t.message}")
         }
@@ -178,7 +184,12 @@ class PlaybackCaptureAudioSource(
         byteBufferField: java.lang.reflect.Field,
     ): AudioRecord {
         val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
-        return buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes)
+        return try {
+            buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes)
+        } catch (t: Throwable) {
+            Log.w(TAG, "index-mask build failed (${t.message}) — falling back to the position mask")
+            buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes, channelIndexMask = false)
+        }
     }
 
     private fun buildCaptureRecord(
@@ -186,17 +197,24 @@ class PlaybackCaptureAudioSource(
         sampleRate: Int,
         channelCount: Int,
         readBytes: Int,
+        channelIndexMask: Boolean = false,
     ): AudioRecord {
-        val channelMask = if (channelCount == 2) {
-            AudioFormat.CHANNEL_IN_STEREO
+        // Channel *index* mask first, position mask as fallback (both found
+        // live 2026-11-03: this ROM's playback-capture remix delivers one
+        // channel for position-mask records, and rejects index-mask input
+        // outright — "Unsupported channel configuration for input" — so the
+        // position mask is the default and index stays a probe-only flavor).
+        val mask = if (channelCount == 2) {
+            if (channelIndexMask) STEREO_CHANNEL_INDEX_MASK else AudioFormat.CHANNEL_IN_STEREO
         } else {
             AudioFormat.CHANNEL_IN_MONO
         }
-        val format = AudioFormat.Builder()
+        val formatBuilder = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(sampleRate)
-            .setChannelMask(channelMask)
-            .build()
+        val format =
+            if (channelCount == 2 && channelIndexMask) formatBuilder.setChannelIndexMask(mask).build()
+            else formatBuilder.setChannelMask(mask).build()
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
             // audio.md usage filter: media, game, unknown — voice apps are
             // never capturable by platform design (their users' privacy).
@@ -206,7 +224,7 @@ class PlaybackCaptureAudioSource(
             .build()
         // The recording thread reads byteBuffer.capacity() per iteration —
         // the capture record's buffer must hold at least that much.
-        val minBytes = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+        val minBytes = AudioRecord.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT)
         return AudioRecord.Builder()
             .setAudioFormat(format)
             .setBufferSizeInBytes(maxOf(minBytes, readBytes))
@@ -229,8 +247,19 @@ class PlaybackCaptureAudioSource(
             val fresh = try {
                 buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes)
             } catch (t: Throwable) {
-                Log.w(TAG, "capture rebuild failed: ${t.message}")
-                return
+                try {
+                    Log.w(TAG, "index-mask rebuild failed (${t.message}) — retrying with the position mask")
+                    buildCaptureRecord(
+                        liveProjection,
+                        context.sampleRate,
+                        context.channelCount,
+                        context.readBytes,
+                        channelIndexMask = false,
+                    )
+                } catch (t2: Throwable) {
+                    Log.w(TAG, "capture rebuild failed: ${t2.message}")
+                    return
+                }
             }
             if (fresh.state != AudioRecord.STATE_INITIALIZED) {
                 fresh.release()
@@ -253,52 +282,46 @@ class PlaybackCaptureAudioSource(
     }
 
     /**
-     * Reads a second playback-capture record **outside the ADM** for ~3 s at
-     * capture start (concurrent captures of the mix are allowed), reporting
-     * the same stereo-content aggregate. The found-live L-only capture
-     * (stereo tracks in AudioFlinger, `mean|R|=0` in the ADM's PCM) needed a
-     * splitter: if this standalone record is also one-channel-dead, the
-     * platform's tap delivers mono content; if it is stereo, the fold lives
-     * in the ADM/swap path. Diagnostic numbers only.
+     * Reads standalone playback-capture records **outside the ADM** for ~2 s
+     * per channel-mask flavor at capture start (concurrent captures of the
+     * mix are allowed), reporting the same stereo-content aggregate for each.
+     * The found-live one-channel tap (stereo tracks in AudioFlinger, one
+     * channel zero in the ADM's PCM) needed both a splitter (platform vs
+     * ADM/swap path) and a mask comparison — AudioFlinger's index-mask remix
+     * route differs from the position-mask one. Diagnostic numbers only.
      */
     private fun probePlatformCapture(projection: MediaProjection, sampleRate: Int) {
         Thread({
-            try {
-                val minBytes = AudioRecord.getMinBufferSize(
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_STEREO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                )
-                val format = AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                    .build()
-                val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
-                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                    .build()
-                val record = AudioRecord.Builder()
-                    .setAudioFormat(format)
-                    .setBufferSizeInBytes(minBytes * 4)
-                    .setAudioPlaybackCaptureConfig(captureConfig)
-                    .build()
-                record.startRecording()
-                val probe = StereoContentProbe(framesPerReport = sampleRate)
-                val buffer = ByteArray(minBytes)
-                var reports = 0
-                while (reports < 3) {
-                    val read = record.read(buffer, 0, buffer.size)
-                    if (read <= 0) break
-                    probe.onSamples(buffer.copyOf(read))?.let { report ->
-                        Log.i(TAG, "platform capture check: ${report.summarize()}")
-                        reports++
+            for (mask in listOf(false to "position mask", true to "index mask")) {
+                try {
+                    val minBytes = AudioRecord.getMinBufferSize(
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_STEREO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                    val record = buildCaptureRecord(
+                        projection,
+                        sampleRate,
+                        channelCount = 2,
+                        readBytes = minBytes * 4,
+                        channelIndexMask = mask.first,
+                    )
+                    record.startRecording()
+                    val probe = StereoContentProbe(framesPerReport = sampleRate)
+                    val buffer = ByteArray(minBytes)
+                    var reports = 0
+                    while (reports < 2) {
+                        val read = record.read(buffer, 0, buffer.size)
+                        if (read <= 0) break
+                        probe.onSamples(buffer.copyOf(read))?.let { report ->
+                            Log.i(TAG, "platform capture check (${mask.second}): ${report.summarize()}")
+                            reports++
+                        }
                     }
+                    stopAndRelease(record)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "platform capture check (${mask.second}) failed: ${t.message}")
                 }
-                stopAndRelease(record)
-            } catch (t: Throwable) {
-                Log.w(TAG, "platform capture check failed: ${t.message}")
             }
         }, "platform-capture-probe").start()
     }
@@ -330,6 +353,9 @@ class PlaybackCaptureAudioSource(
 
     companion object {
         private const val TAG = "PlaybackCaptureAudio"
+
+        /** Channel-index mask bits 0,1 — the first two channels, L and R. */
+        private const val STEREO_CHANNEL_INDEX_MASK = 0x3
 
         /**
          * Lazy lookups, never class-init: a library update that renames the
