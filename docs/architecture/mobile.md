@@ -27,6 +27,7 @@ Small, explicit modules — no giant `CastManager` (see AGENTS.md):
 com.zerofriction.localcast/
 ├── ui/            # Compose screens: Scan (the launch screen), Home (the connected hub: quality console + audio), CastSettings (the gear — Advanced only)
 ├── pairing/       # QR scan, payload parsing, pairing state machine, saved-session store (SavedDesktops + TrustVault, ADR-006)
+├── hotspot/       # Hotspot pairing mode (ADR-011): pure HotspotMachine + the LocalOnlyHotspot platform wrapper (HotspotControl)
 ├── signaling/     # WebSocket client, protocol envelope, message types
 ├── webrtc/        # PeerConnectionFactory setup, the two PeerConnections, track wiring, encoder-factory policy
 ├── capture/       # MediaProjection virtual display + video frame source
@@ -58,6 +59,7 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
 | `POST_NOTIFICATIONS` | Cast-in-progress notification (required for FGS visibility) | Runtime, before first cast |
 | `RECORD_AUDIO` | Playback-capture AudioRecord + the WebRTC ADM's initial mic record (Phase7), and microphone capture itself on the `mic` PC (Phase 8 — off by default, toggled live during the cast) | Runtime, before first cast (non-fatal: denial = video-only cast + mic needs-permission state) |
 | `CAMERA` | QR code scanning only | Runtime, at scan screen |
+| `ACCESS_FINE_LOCATION` (≤ Android 12) / `NEARBY_WIFI_DEVICES` (13+, `neverForLocation`) | Hotspot pairing mode (ADR-011): `startLocalOnlyHotspot` is gated on location below 13 and on the nearby-devices permission from 13 | Runtime, when the user starts a hotspot from the unreachable-failure card |
 
 `MediaProjection` consent is a system dialog per session, not a manifest permission.
 

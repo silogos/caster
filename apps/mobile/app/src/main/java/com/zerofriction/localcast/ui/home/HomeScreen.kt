@@ -58,6 +58,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import com.zerofriction.localcast.hotspot.HotspotControl
+import com.zerofriction.localcast.hotspot.HotspotMachine
+import com.zerofriction.localcast.hotspot.hotspotHintFor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -224,6 +227,18 @@ fun HomeScreen(
         if (granted) CastService.requestToggleMic(context)
     }
 
+    // Hotspot pairing mode (issue #96, ADR-011): the failure card's escape
+    // for the no-shared-network case. The permission the OS ties to
+    // local-only hotspots is version-dependent (HotspotControl decides).
+    val hotspotState by HotspotControl.state.collectAsStateWithLifecycle()
+    val hotspotPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        HotspotControl.permissionResult(granted, context)
+    }
+    val startHotspot: () -> Unit = {
+        if (HotspotControl.hasPermission(context)) HotspotControl.start(context)
+        else hotspotPermissionLauncher.launch(HotspotControl.requiredPermission())
+    }
+
     HomeContent(
         castState = castState,
         connection = connection,
@@ -295,6 +310,9 @@ fun HomeScreen(
             onDisconnected()
         },
         onOpenSettings = onOpenSettings,
+        hotspotState = hotspotState,
+        onStartHotspot = startHotspot,
+        onStopHotspot = { HotspotControl.stop() },
     )
 }
 
@@ -322,15 +340,18 @@ fun HomeContent(
     onToggleVirtualCamera: () -> Unit = {},
     audioRouting: AudioRoutingUiState = AudioRoutingUiState(),
     onSetAudioRouting: (String) -> Unit = {},
-    onShareScreen: () -> Unit = {},
-    onStopShareScreen: () -> Unit = {},
-    onDisconnect: () -> Unit = {},
-    onTerminate: () -> Unit = {},
-    onConnectSaved: () -> Unit = {},
-    onScanQr: () -> Unit = {},
-    onTerminateSaved: () -> Unit = {},
-    onOpenSettings: () -> Unit = {},
-) {
+        onShareScreen: () -> Unit = {},
+        onStopShareScreen: () -> Unit = {},
+        onDisconnect: () -> Unit = {},
+        onTerminate: () -> Unit = {},
+        onConnectSaved: () -> Unit = {},
+        onScanQr: () -> Unit = {},
+        onTerminateSaved: () -> Unit = {},
+        onOpenSettings: () -> Unit = {},
+        hotspotState: HotspotMachine.State = HotspotMachine.State.Idle,
+        onStartHotspot: () -> Unit = {},
+        onStopHotspot: () -> Unit = {},
+    ) {
     val casting = castState is CastState.Casting
     val annunc = annunciatorFor(castState)
     val connected = connection is ConnectedDesktop.State.Connected
@@ -447,6 +468,9 @@ fun HomeContent(
         // ---- A failed reconnect (ADR-06): why it failed, plus the two
         // escapes — scan a QR instead, or forget this desktop entirely (the
         // saved entry is kept on plain failures: the desktop may just be off).
+        // The unreachable case (the #1 error — no shared network) gains the
+        // hotspot escape (issue #96): the failure becomes a three-step
+        // solution instead of a dead end.
         if (resumeFailure != null && !connected) {
             Spacer(Modifier.height(8.dp))
             CastCard {
@@ -458,7 +482,25 @@ fun HomeContent(
                     CastTextButton(text = stringResource(R.string.home_scan_qr), onClick = onScanQr)
                     CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminateSaved)
                 }
+                if (hotspotHintFor(resumeFailure.error)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        modifier = Modifier.padding(start = 16.dp, bottom = 12.dp),
+                    ) {
+                        CastTextButton(text = stringResource(R.string.hotspot_hint_button), onClick = onStartHotspot)
+                    }
+                }
             }
+        }
+
+        // ---- Hotspot pairing mode (issue #96, ADR-011): the phone hosts the
+        // network the desktop joins; SSID + password live here while the
+        // guided-manual flow runs (start → join on the desktop → scan its
+        // fresh QR). The hotspot is explicit: it stays on while casting and
+        // only the Stop button (or the OS) ends it. ----
+        if (hotspotState != HotspotMachine.State.Idle) {
+            Spacer(Modifier.height(8.dp))
+            HotspotCard(state = hotspotState, onStop = onStopHotspot, onRetry = onStartHotspot)
         }
 
         // ---- The transport control: amber to go, outlined to stop ----
@@ -721,6 +763,79 @@ private fun resumeFailureMessage(error: PairingError): String = stringResource(
         PairingError.BUSY -> R.string.pairing_error_busy
         PairingError.DESKTOP_FORGOT -> R.string.pairing_error_desktop_forgotten
         else -> R.string.pairing_error_bad_auth
+    }
+)
+
+/**
+ * The hotspot card (issue #96, ADR-011) — the guided-manual flow's anchor:
+ * credentials while Active, honesty while Starting/Failed. Every failure is
+ * plain words with a one-tap retry; OS revocation says so.
+ */
+@Composable
+private fun HotspotCard(
+    state: HotspotMachine.State,
+    onStop: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    CastCard {
+        when (state) {
+            HotspotMachine.State.Idle -> {}
+            HotspotMachine.State.NeedPermission, HotspotMachine.State.Starting -> {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(16.dp))
+                    Text(text = stringResource(R.string.hotspot_turning_on), fontSize = 14.sp)
+                }
+            }
+
+            is HotspotMachine.State.Active -> {
+                IconListRow(iconRes = R.drawable.ic_info, title = stringResource(R.string.hotspot_active_title))
+                Text(
+                    text = stringResource(
+                        R.string.hotspot_credentials_line,
+                        state.ssid,
+                        state.password,
+                    ),
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, end = 16.dp),
+                )
+                HintText(stringResource(R.string.hotspot_join_hint))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    modifier = Modifier.padding(start = 16.dp, bottom = 12.dp),
+                ) {
+                    CastTextButton(text = stringResource(R.string.hotspot_stop), onClick = onStop)
+                }
+            }
+
+            is HotspotMachine.State.Failed -> {
+                IconListRow(iconRes = R.drawable.ic_warning, title = hotspotFailureMessage(state.reason), err = true)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
+                ) {
+                    CastTextButton(text = stringResource(R.string.hotspot_retry), onClick = onRetry)
+                }
+            }
+        }
+    }
+}
+
+/** The hotspot failure table — plain words per AGENTS.md, codes stay in logs. */
+@Composable
+private fun hotspotFailureMessage(reason: HotspotMachine.Reason): String = stringResource(
+    when (reason) {
+        HotspotMachine.Reason.PERMISSION_DECLINED -> R.string.hotspot_error_permission
+        HotspotMachine.Reason.NOT_SUPPORTED -> R.string.hotspot_error_not_supported
+        HotspotMachine.Reason.NO_CHANNEL -> R.string.hotspot_error_no_channel
+        HotspotMachine.Reason.INCOMPATIBLE_MODE -> R.string.hotspot_error_incompatible_mode
+        HotspotMachine.Reason.OS_REVOKED -> R.string.hotspot_error_os_revoked
+        HotspotMachine.Reason.UNKNOWN -> R.string.hotspot_error_unknown
     }
 )
 

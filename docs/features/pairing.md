@@ -82,6 +82,32 @@ Shipped 2026-10-30. One QR pairing now establishes a **persistent session** reme
 - **Mobile**: JVM **207/207** (new: `HandshakeTest` HKDF mirror vectors, `SavedDesktopCodecTest` round-trip/degrade, `PairingClientTest` — resume hello shape/trust-key mac/grant with derived key on QR and identity-only grant on resume/`unknown-device`→`DESKTOP_FORGOT`/`bye forget` on disconnect, `SignalingClientResumeTest` — resume wire shape, grant without key, `unknown-device` mapping, bounded ladder ending unreachable); `assembleDebug` green.
 - **Remaining (needs both devices in hand)**: the on-device matrix — pair once → kill & relaunch the desktop (opens on No-input + Disconnect) → phone Home **Connect** → cast without any QR; mobile Disconnect → desktop QR hero; desktop Disconnect → phone Connect falls back to scan automatically; notification Stop keeps the session; Wi-Fi blip mid-cast auto-reconnects; unreachable desktop → bounded failure card with the escapes.
 
+## Hotspot pairing mode: cast with no shared Wi-Fi (ADR-011, 2026-11-03)
+
+Shipped 2026-11-03 (issue #96). When there is no shared network — the `connect-unreachable` failure, the only one with no other way out — the **phone hosts a local-only hotspot** (no internet shared; LAN-only preserved) and the desktop joins it. Full decision record + rejected alternatives (Wi-Fi Direct, desktop-hosted AP, USB/ADB): [ADR-011](../decisions/ADR-011-hotspot-pairing-mode.md); protocol spec: [pairing.md](../architecture/pairing.md) §Hotspot pairing mode. **Zero protocol change** — `v` stays 1.
+
+### What shipped
+
+- **Mobile** (`hotspot/`): the pure **`HotspotMachine`** (Idle → NeedPermission → Starting → Active(ssid, password) / Failed(reason), explicit Stop, one-tap retry, JVM-tested incl. stale-callback races) + **`HotspotControl`** — the `LocalOnlyHotspot` wrapper (app-scoped, the `ConnectedDesktop` precedent): version-split permission (`NEARBY_WIFI_DEVICES` 13+ / `ACCESS_FINE_LOCATION` below), the awkwardly-versioned `startLocalOnlyHotspot` (direct `(callback, Handler)` call on 33+, reflection to the API-26 single-arg method below 33), credentials from `SoftApConfiguration`/`WifiConfiguration`, `onStopped` → honest OS-revoked. Every failure lands in plain words (permission declined / not supported / no channel / incompatible mode / OS revoked / unknown).
+- **The failure-hint gate** (`hotspotHintFor`, tested): the *"Not on the same network? Start a hotspot"* escape appears on the Home failure card **exactly** for `CONNECT_UNREACHABLE` — the one error that means "no shared network". The card carries the guided flow: credentials on Home (+ a quiet line under the scanner so they stay readable during the join), join on the desktop, scan its fresh QR.
+- **Desktop — QR freshness**: `PairingServer.ensureFreshSession` regenerates a **pending** session when the machine's IPv4 set changes (the desktop joins the hotspot after its QR was generated; the old QR would advertise dead addresses). Authorized sessions (live cast / reconnect window) never regenerate for this reason; the payload carries the session's creation-time snapshot; a reordered interface list alone is not a change. 4 new vitest cases.
+- **Honesty**: the hotspot is explicit and user-owned (the cast runs *over* it — nothing auto-stops it; Stop is the only normal exit); OS revocation mid-cast degrades through the ADR-009 paths; OEM/carrier variance joins R11's watch list.
+
+### Verification
+
+- **Mobile**: JVM **249/249** (12 new — the machine's acceptance matrix + the hint gate); `assembleDebug` green.
+- **Desktop**: vitest **262/262** (4 new sweep tests), typecheck + production build green.
+- **Remaining (needs both devices in hand)** — the on-device matrix:
+
+| Case | Expectation | Result |
+|---|---|---|
+| Hotspot start, permission path included (fresh install) | Permission prompt (13+ nearby-devices / below location) → Active with SSID + password on screen | ☐ |
+| Desktop joins, QR pair over the hotspot subnet | The desktop's regenerated QR carries the hotspot-subnet IP; phone scans, pairs, no protocol difference | ☐ |
+| Full cast incl. both audio tracks over the hotspot | Video + game audio + mic flow; clean teardown | ☐ |
+| **No mobile data used** during a hotspot cast | LocalOnlyHotspot shares no internet — a phone with mobile data off still hosts and casts | ☐ |
+| OS revokes the hotspot mid-cast | Honest degradation (ADR-009 paths — parked session, one-tap return), not a stuck UI | ☐ |
+| Stop hotspot after the cast | Reservation closed, card gone, plain-Wi-Fi casts unaffected | ☐ |
+
 ## Known limitations (by design in this phase)
 
 - ~~The mobile session lives with the scan screen~~ — since Phase 6 the cast service owns it, and since the persistent-pairing feature (ADR-006) the saved session outlives everything but Disconnect ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)).

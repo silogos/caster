@@ -80,6 +80,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
+import com.zerofriction.localcast.hotspot.HotspotControl
+import com.zerofriction.localcast.hotspot.HotspotMachine
 import com.zerofriction.localcast.pairing.DeviceIdentity
 import com.zerofriction.localcast.pairing.KeystoreTrustVault
 import com.zerofriction.localcast.pairing.SavedDesktops
@@ -175,6 +177,12 @@ fun ScanContent(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasCameraPermission = granted
     }
+    // Hotspot pairing mode (issue #96): while the phone hosts the network the
+    // desktop is joining, its SSID + password stay readable under the scanner
+    // — the guided flow's step 2 happens exactly here.
+    val hotspotState by HotspotControl.state.collectAsStateWithLifecycle()
+    val hotspotLine = (hotspotState as? HotspotMachine.State.Active)
+        ?.let { stringResource(R.string.hotspot_credentials_line, it.ssid, it.password) }
 
     Scaffold { innerPadding ->
         when (val state = pairingState) {
@@ -229,6 +237,7 @@ fun ScanContent(
                                 is PairingClient.State.Failed -> MaterialTheme.colorScheme.error
                                 else -> MaterialTheme.colorScheme.onSurface
                             },
+                            infoText = hotspotLine,
                             torchOn = torchOn,
                             onTorchToggle = { torchOn = !torchOn },
                         )
@@ -323,6 +332,8 @@ private fun ScannerOverlay(
     torchOn: Boolean,
     onTorchToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Optional quiet line under the stage — the hotspot credentials (issue #96). */
+    infoText: String? = null,
 ) {
     // The cutout's rect in canvas-local coordinates — measured from the
     // (invisible) stage placeholder so text layout below it can wrap freely.
@@ -432,6 +443,25 @@ private fun ScannerOverlay(
                         .widthIn(max = 300.dp),
                 )
             }
+        }
+
+        // The hotspot credentials (issue #96): quiet, above the torch — the
+        // user at the desktop reads them while aiming the scanner.
+        if (infoText != null) {
+            Text(
+                text = infoText,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 88.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(10.dp),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
         }
 
         // Torch (the prototype's .torch): one icon; the fill state carries on/off.

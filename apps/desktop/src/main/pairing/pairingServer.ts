@@ -34,6 +34,13 @@ export interface PairingSessionRecord {
   state: SessionState
   /** Socket id of the authorized connection; null while none is connected (reconnect window). */
   authorizedSocketId: string | null
+  /**
+   * The interface addresses this session's QR was built from (issue #96): a
+   * pending QR advertising addresses the machine no longer has is a dead end
+   * — the sweep regenerates when they change, and the payload always carries
+   * the snapshot, never a later live reading.
+   */
+  hosts: string[]
 }
 
 export interface PairingServerOptions {
@@ -88,7 +95,7 @@ export class PairingServer {
     const sid = randomBytes(SESSION_ID_BYTES).toString('base64url')
     const secret = randomBytes(SESSION_SECRET_BYTES)
     const expiresAt = Math.floor(this.now() / 1000) + SESSION_TTL_SECONDS
-    const record: PairingSessionRecord = { sid, secret, expiresAt, state: 'pending', authorizedSocketId: null }
+    const record: PairingSessionRecord = { sid, secret, expiresAt, state: 'pending', authorizedSocketId: null, hosts }
     this.session = record
 
     const view = await this.buildView(record)
@@ -153,13 +160,18 @@ export class PairingServer {
 
   /**
    * Regenerate when the current session has expired (pending *or* authorized),
-   * or when a previous creation attempt failed. Returns true when a fresh
-   * session was created. Called from a slow sweep in the app entry — timers
-   * stay at the edges so unit tests can drive the clock.
+   * when a previous creation attempt failed, or — hotspot freshness (issue
+   * #96, ADR-011) — when a *pending* session's host snapshot no longer
+   * matches the machine's interfaces (the desktop joined the phone's hotspot
+   * or switched networks; the old QR would advertise dead addresses). Returns
+   * true when a fresh session was created. Called from a slow sweep in the
+   * app entry — timers stay at the edges so unit tests can drive the clock.
    *
    * Phase15: an *authorized* session whose socket is still connected defers
    * regeneration — the TTL governs the pending QR and the reconnect window,
-   * never a live cast (live finding: casts died at exactly 600 s).
+   * never a live cast (live finding: casts died at exactly 600 s). The same
+   * protection keeps host-change regeneration away from authorized sessions
+   * entirely (live cast or reconnect window — both must survive).
    */
   async ensureFreshSession(): Promise<boolean> {
     if (this.session === null) {
@@ -173,6 +185,10 @@ export class PairingServer {
       await this.createSession()
       return true
     }
+    if (this.session.state === 'pending' && !hostsEqual(this.hosts(), this.session.hosts)) {
+      await this.createSession()
+      return true
+    }
     return false
   }
 
@@ -182,7 +198,7 @@ export class PairingServer {
       const payload: QrPayloadV1 = {
         v: 1,
         t: 'zfc',
-        h: this.hosts(),
+        h: record.hosts,
         p: this.port,
         s: record.sid,
         k: record.secret.toString('base64url'),
@@ -193,6 +209,14 @@ export class PairingServer {
     }
     return { qrDataUrl, expiresAt: record.expiresAt }
   }
+}
+
+/** Set equality (order-independent) — a reordered interface list is not a change. */
+function hostsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sorted = [...a].sort()
+  const other = [...b].sort()
+  return sorted.every((host, index) => host === other[index])
 }
 
 /** Compact JSON — no whitespace, key order as in the spec example. */

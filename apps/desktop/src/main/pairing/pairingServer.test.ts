@@ -169,4 +169,65 @@ describe('session lifecycle', () => {
     expect(await server.ensureFreshSession()).toBe(true)
     expect(views[views.length - 1]).toMatchObject({ expiresAt: FIXED_NOW_MS / 1000 + SESSION_TTL_SECONDS })
   })
+
+  // Hotspot freshness (issue #96, ADR-011): the desktop joins the phone's
+  // hotspot AFTER its QR was generated — a stale pending QR would advertise
+  // dead addresses and the guided-manual flow would die on connect. The
+  // sweep regenerates a pending session whose interface set changed; an
+  // authorized session (live cast or reconnect window) must never regenerate
+  // for this reason.
+  it('regenerates a pending session when the interface set changes', async () => {
+    let hosts = [...TEST_HOSTS]
+    const server = createTestServer({ hosts: () => hosts })
+    await server.createSession()
+    const staleSid = server.currentSid as string
+
+    // The desktop joins the phone's hotspot: a new interface address appears.
+    hosts = [...TEST_HOSTS, '192.168.49.27']
+    expect(await server.ensureFreshSession()).toBe(true)
+
+    expect(server.currentSid).not.toBe(staleSid)
+    expect(server.lookup(staleSid)).toBeNull()
+    const freshView = await server.currentView()
+    expect(freshView).not.toBeNull()
+    const payload = await scanQrPayload(freshView!)
+    expect(payload.h).toContain('192.168.49.27')
+  })
+
+  it('the QR payload carries the session snapshot, not a later live reading', async () => {
+    let hosts = [...TEST_HOSTS]
+    const server = createTestServer({ hosts: () => hosts })
+    await server.createSession()
+
+    hosts = ['10.0.0.9']
+    const view = await server.currentView()
+    expect(view).not.toBeNull()
+    const payload = await scanQrPayload(view!)
+    expect(payload.h).toEqual(TEST_HOSTS)
+    // …and the sweep is what notices (the test above).
+  })
+
+  it('a reordered interface list alone does not regenerate', async () => {
+    let hosts = [...TEST_HOSTS]
+    const server = createTestServer({ hosts: () => hosts })
+    await server.createSession()
+    const sid = server.currentSid
+
+    hosts = [...TEST_HOSTS].reverse()
+    expect(await server.ensureFreshSession()).toBe(false)
+    expect(server.currentSid).toBe(sid)
+  })
+
+  it('an authorized session never regenerates on a host change', async () => {
+    let hosts = [...TEST_HOSTS]
+    const server = createTestServer({ hosts: () => hosts })
+    await server.createSession()
+    const sid = server.currentSid as string
+    expect(server.authorize(sid, 'sock-1')).toBe('authorized')
+
+    hosts = ['192.168.49.27']
+    expect(await server.ensureFreshSession()).toBe(false)
+    expect(server.currentSid).toBe(sid)
+    expect(server.lookup(sid)?.state).toBe('authorized')
+  })
 })
