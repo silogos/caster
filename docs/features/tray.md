@@ -9,6 +9,10 @@ Shipped 2026-11-03 ([ADR-010](../decisions/ADR-010-desktop-tray-lifecycle.md), i
 - **Wiring** (`index.ts`): every close hides the receiver (macOS: Dock icon goes with it — a menu-bar app; a relaunch attempt/second-instance, Dock activation, or the tray brings it back); `window-all-closed` never quits; every quit path (tray Quit, Cmd+Q, OS logout/shutdown) funnels through `before-quit` → one bounded walk: plain `bye desktop-quit` (trust survives, ADR-006) → ≤300 ms settle → real quit through the normal `will-quit` teardown. A window recreate (frameless toggle) while hidden comes up hidden (`createMainWindow({ show: false })`).
 - Desktop vitest **279/279** (21 new across the two pure modules), typecheck + production build green; 7 s smoke run of the built app (signaling binds, tray constructs, no errors).
 
+### Fixed in review (2026-11-03, first live use)
+
+- **The tray icon was invisible** — the embedded icon base64 (reused from the reverted 2026-10-31 attempt) was a **corrupt PNG**: valid header, broken IDAT (`file` accepted it; `sips`/decoders did not), so `nativeImage` loaded it empty and the tray rendered blank. The smoke run above verified construction, not pixels — a gap this fix records honestly. The icon is now **generated** (`apps/desktop/scripts/gen-tray-icon.py`: the Google-Cast mark — screen + dot + two arcs — 4×-supersampled, CRC-correct) and embedded as **1×22 + 2×44 template representations** (`addRepresentation`), so it is crisp on retina and follows the menu bar's light/dark. Verified: `sips` parses both PNGs, the ASCII alpha render shows the glyph, and the relaunched app carries a visible tray item on the reviewer's menu bar.
+
 ## Manual matrix (extends the Phase 6 lifecycle matrix, desktop-side — pending the phone in hand)
 
 | Case | Expectation | Result |
