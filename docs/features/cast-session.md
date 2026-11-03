@@ -26,7 +26,7 @@ Phase5's cast died with the scan screen (the pairing session was ViewModel-scope
 | Failure | Trigger | User message |
 |---|---|---|
 | `ProjectionRevoked` | `onStop` callback — status-bar chip, system revoke, **single-app share ended by leaving the app** | "The screen cast was stopped." |
-| `DesktopEnded` | `bye` from the desktop (window closed) — previously tore down silently and left the FGS stuck | "The desktop ended the session. Scan again to connect." |
+| `DesktopEnded` | `bye` from the desktop (session ended there; a window close did this before ADR-010's tray lifecycle) — previously tore down silently and left the FGS stuck | "The desktop ended the session. Scan again to connect." |
 | `ConnectionLost` | ICE `FAILED`, or terminal signaling failure (ladder exhausted / session expired) | "The connection to the desktop was lost. Scan the QR code to reconnect." |
 | `Error` | pipeline build failures | "Couldn't start the cast. Please try again." |
 

@@ -58,4 +58,4 @@ Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.
 
 ## Known limitations (recorded in ADR-007)
 
-Windows device name is the DLL's built-in **"Softcam"**; Windows ARM64 reports unavailable (no arm64 softcam build); macOS reaches **OBS/VJ apps only** (call apps wait on the CMIO entitlement door); audio routing for call consumers is v1-out-of-scope (video-only); closing the receiver window still ends the app (tray mode = follow-up).
+Windows device name is the DLL's built-in **"Softcam"**; Windows ARM64 reports unavailable (no arm64 softcam build); macOS reaches **OBS/VJ apps only** (call apps wait on the CMIO entitlement door); audio routing for call consumers is v1-out-of-scope (video-only); closing the receiver window hides it since [ADR-010](../decisions/ADR-010-desktop-tray-lifecycle.md) — the camera (like the cast) keeps running from the tray.

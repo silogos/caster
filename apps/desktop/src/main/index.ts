@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
+import type { CastSessionInfo, MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { asIceMessage, asSdpMessage, asStreamSize, asVcFrame } from './messages'
 import {
@@ -20,6 +20,18 @@ import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { VirtualCameraController } from './vc/virtualCamera'
 import { loadDesktopEnvironment, type DesktopEnvironment } from './environment'
+import {
+  CastTray,
+  loginItemSupported,
+  readLaunchAtLogin,
+  writeLaunchAtLogin
+} from './tray/tray'
+import { trayStatusLine, type TrayConnectionStatus } from './tray/trayMenu'
+import {
+  initialReceiverLifecycleState,
+  receiverLifecycle,
+  type ReceiverLifecycleEvent
+} from './tray/trayLifecycle'
 import { logger } from './log'
 
 // All cast configuration lives on the mobile app; this process owns sockets,
@@ -29,6 +41,13 @@ import { logger } from './log'
 const LOG_SCOPE = 'app'
 /** How often the app checks whether the session needs regenerating. */
 const EXPIRY_SWEEP_INTERVAL_MS = 1_000
+/**
+ * Quit walk (issue #94): after the clean `bye`, give the socket this long to
+ * flush before exiting — bounded so an OS shutdown is never held up.
+ */
+const QUIT_BYE_SETTLE_MS = 300
+/** Plain bye reason for the quit walk — deliberately NOT `forget`: quits keep the trust (ADR-006). */
+const BYE_QUIT = 'desktop-quit'
 
 let mainWindow: BrowserWindow | null = null
 let pairing: PairingServer | null = null
@@ -79,6 +98,14 @@ let appEnvironment: DesktopEnvironment | null = null
 // The last-pushed vc capability — a recreated window's fresh renderer missed
 // the live pushes, so the settings rows re-assert from this cache.
 let vcSupportedPush: boolean | null = null
+// The tray lifecycle (issue #94, ADR-010): the tray owns the app's lifetime —
+// closing the receiver hides it (signaling + trust stay alive, the saved
+// phone's one-tap Connect always finds the desktop), a cast starting while
+// hidden re-opens the window, and Quit is the only exit (clean `bye` walk).
+let lifecycle = initialReceiverLifecycleState
+let castTray: CastTray | null = null
+/** The quit walk ran — before-quit must let the second app.quit() through. */
+let quitWalkStarted = false
 
 /** IPC input from the renderer is untrusted at the process boundary — one packed frame. */
 
@@ -120,6 +147,36 @@ function pushMobileState(state: MobileStateEvent): void {
   if (sessionInfoWindow !== null && !sessionInfoWindow.isDestroyed()) {
     sessionInfoWindow.webContents.send(IPC.pairing.mobileState, state)
   }
+  refreshTrayMenu()
+}
+
+/**
+ * The tray's status row follows the same pushes the renderer gets (issue
+ * #94): one vocabulary with the session-info line — Waiting… / Connected to
+ * <phone> (+ the cast summary while casting) / Waiting for <phone> to
+ * reconnect… during the reconnect window.
+ */
+function refreshTrayMenu(): void {
+  if (castTray === null) return
+  const mobile = lastMobileState
+  let status: TrayConnectionStatus = 'waiting'
+  let info: CastSessionInfo | null = null
+  if (mobile?.state === 'connected') {
+    status = 'connected'
+  } else if (mobile?.state === 'session-info') {
+    status = 'connected'
+    info = mobile.info
+  } else if (mobile?.state === 'disconnected') {
+    status = 'reconnecting'
+  }
+  castTray.update({
+    statusLine: trayStatusLine(status, pairedMobileName, info),
+    trustedPhoneName: trust?.get()?.name ?? null,
+    vcSupported: vcSupportedPush === true,
+    vcActive: virtualCamera?.isActive === true,
+    loginItemSupported: loginItemSupported(),
+    launchAtLogin: readLaunchAtLogin()
+  })
 }
 
 /**
@@ -136,18 +193,17 @@ function pushWaiting(): void {
 // One instance at a time (Phase15 live finding): a second copy used to bind
 // an ephemeral signaling port and show a QR advertising a port nobody
 // scanned — two windows, two QRs, one very confused user (R7/R9 territory).
-// The duplicate logs and quits; launching again just focuses the live window.
+// The duplicate logs and quits; launching again just focuses the live window
+// — and since the tray (issue #94), "launching again" is also how a user
+// re-opens a hidden receiver that no longer has a Dock icon.
 const gotInstanceLock = app.requestSingleInstanceLock()
 if (!gotInstanceLock) {
   logger.info(LOG_SCOPE, 'another instance is already running — this copy exits')
   app.quit()
 }
-app.on('second-instance', () => {
-  if (mainWindow !== null && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  }
-})
+/** Routed from second-instance/activate once the lifecycle dispatcher exists. */
+let onRelaunchAttempt: () => void = () => {}
+app.on('second-instance', () => onRelaunchAttempt())
 
 app.whenReady().then(async () => {
   // A duplicate copy: quit was already requested — never bind sockets or
@@ -182,6 +238,9 @@ app.whenReady().then(async () => {
       }
     },
     onBye: (reason) => {
+      // The quit walk's own bye (or one arriving mid-walk): regenerating a
+      // session for an app on its way out is wasted work — nothing will see it.
+      if (lifecycle.quitting) return
       logger.info(LOG_SCOPE, 'session ended', { reason })
       const trustedName = trust?.get()?.name ?? null
       pairing
@@ -233,7 +292,10 @@ app.whenReady().then(async () => {
     backend: environment.vcBackend,
     registration: environment.vcRegistration,
     streamSize: () => lastStreamSize,
-    sendStatus: (status) => signaling.sendVcStatus(status),
+    sendStatus: (status) => {
+      signaling.sendVcStatus(status)
+      refreshTrayMenu() // the tray's Virtual camera checkbox rides the same state
+    },
     onPumpCommand: (command) => pushToRenderer(IPC.vc.pump, command)
   })
   // Capability push for the renderer's own controls (settings section,
@@ -243,6 +305,7 @@ app.whenReady().then(async () => {
     vcSupportedPush = vcController.available
     pushToRenderer(IPC.vc.state, { supported: vcController.available })
     pushToRenderer(IPC.vc.autoStart, vcAutoStart)
+    refreshTrayMenu()
   })
 
   // Virtual audio per platform (ADR-008): macOS carries a one-click install;
@@ -295,8 +358,9 @@ app.whenReady().then(async () => {
   })
   // The desktop Disconnect (the no-input stage's button, ADR-006): revoke the
   // persistent trust and return to the QR hero — bye 'forget' to a connected
-  // phone, a silent revoke when it is offline.
-  ipcMain.handle(IPC.pairing.disconnect, () => {
+  // phone, a silent revoke when it is offline. The tray's Forget phone (issue
+  // #94) drives the exact same revocation — one path, two surfaces.
+  const forgetPhone = (): void => {
     if (signaling.hasAuthorizedConnection()) {
       signaling.sendBye(BYE_FORGET)
       return
@@ -306,6 +370,9 @@ app.whenReady().then(async () => {
       ?.createSession()
       .then(() => pushWaiting())
       .catch((error) => logger.error(LOG_SCOPE, 'regeneration after disconnect failed', { error: String(error) }))
+  }
+  ipcMain.handle(IPC.pairing.disconnect, () => {
+    forgetPhone()
   })
   ipcMain.handle(IPC.pairing.regenerate, () => {
     signaling.disconnectAuthorized()
@@ -409,7 +476,7 @@ app.whenReady().then(async () => {
     if (mainWindow !== null && !mainWindow.isDestroyed()) {
       mainWindow.destroy() // a real teardown — bypasses the close-to-hide path
     }
-    mainWindow = createMainWindow({ frameless, bounds })
+    mainWindow = createMainWindow({ frameless, bounds, show: lifecycle.receiverVisible })
     windowIsFrameless = frameless
     wireMainWindowLifecycle()
     pushToRenderer(IPC.window.frameless, frameless)
@@ -464,11 +531,58 @@ app.whenReady().then(async () => {
     pushOverlayState(enabled)
   }
 
+  // ---- Tray lifecycle (issue #94, ADR-010) ----
+  // The pure machine (trayLifecycle.ts) decides; this applies its effects to
+  // the real window/dock/app. One dispatcher — the window's close, the tray,
+  // relaunch attempts, and every quit path route through it, so the lifecycle
+  // rules exist in exactly one place.
+  const dispatchLifecycle = (event: ReceiverLifecycleEvent): void => {
+    const result = receiverLifecycle(lifecycle, event)
+    lifecycle = result.state
+    switch (result.effect.kind) {
+      case 'none':
+        return
+      case 'hide-receiver':
+        // macOS: a windowless receiver is a menu-bar app — no Dock icon; the
+        // tray (and a relaunch attempt) are the ways back.
+        if (process.platform === 'darwin') app.dock?.hide()
+        if (mainWindow !== null && !mainWindow.isDestroyed()) mainWindow.hide()
+        logger.info(LOG_SCOPE, 'receiver hidden — running from the tray (signaling, trust, cast, virtual camera unaffected)')
+        return
+      case 'show-receiver':
+        if (process.platform === 'darwin') app.dock?.show()
+        if (mainWindow === null || mainWindow.isDestroyed()) {
+          mainWindow = createMainWindow()
+          wireMainWindowLifecycle()
+        } else {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+        }
+        return
+      case 'bye-then-quit':
+        // Clean teardown (issue #94 acceptance): bye to a connected phone
+        // (plain reason — trust survives plain quits, ADR-006), a bounded
+        // settle for the socket to flush, then the real quit — the will-quit
+        // teardown (camera delete, platform audio) runs as before.
+        quitWalkStarted = true
+        if (signaling.hasAuthorizedConnection()) {
+          logger.info(LOG_SCOPE, 'quitting — sending clean bye (the trust survives)')
+          signaling.sendBye(BYE_QUIT)
+        }
+        setTimeout(() => app.quit(), QUIT_BYE_SETTLE_MS)
+        return
+    }
+  }
+
   // Window behavior (overview.md: the receiver's own control — never a cast
   // setting). While a cast fills the window, the waiting layout's minimums
   // are relaxed so portrait streams can fill it; on cast end they're restored.
   ipcMain.handle(IPC.window.castActive, (_event, raw) => {
     castActive = raw === true
+    // A cast starting against a tray-only desktop opens the receiver window
+    // (issue #94) — the one-tap Connect promise needs no desktop interaction.
+    if (castActive) dispatchLifecycle({ type: 'cast-started' })
     if (mainWindow === null || mainWindow.isDestroyed()) return
     if (castActive) {
       enterCastWindowLayout(mainWindow)
@@ -541,7 +655,21 @@ app.whenReady().then(async () => {
 
   const wireMainWindowLifecycle = (): void => {
     if (mainWindow === null) return
-    // The receiver window is the product: closing it ends the app.
+    // Close-to-tray (issue #94, ADR-010): closing the receiver never ends
+    // the app — it hides the window while the tray keeps the signaling
+    // server and trust store alive (a saved phone's Connect always lands).
+    // The guard steps aside only for a quit in flight: the walk needs the
+    // window to actually close so the app can exit.
+    mainWindow.on('close', (event) => {
+      const result = receiverLifecycle(lifecycle, { type: 'window-close' })
+      lifecycle = result.state
+      if (result.effect.kind !== 'hide-receiver') return
+      event.preventDefault()
+      if (process.platform === 'darwin') app.dock?.hide()
+      mainWindow?.hide()
+      logger.info(LOG_SCOPE, 'receiver hidden — running from the tray')
+    })
+    // A real close (the quit walk's destroy) — release the blocker and overlay.
     mainWindow.on('closed', () => {
       stopCastKeepAwake()
       closeSessionInfoWindow()
@@ -561,11 +689,35 @@ app.whenReady().then(async () => {
   mainWindow = createMainWindow()
   wireMainWindowLifecycle()
 
-  app.on('activate', () => {
-    // macOS: re-create the window when the dock icon is clicked with no windows.
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow()
-    }
+  // The tray is the app's handle from here on (issue #94, ADR-010): status
+  // line, Open window, Forget phone, Virtual camera, Launch at login, Quit.
+  // Quit is the only exit — closing the window just hides it.
+  castTray = new CastTray({
+    onOpenWindow: () => dispatchLifecycle({ type: 'open-receiver' }),
+    onForgetPhone: forgetPhone,
+    onToggleVirtualCamera: () => virtualCamera?.toggle(),
+    onSetLaunchAtLogin: (enabled) => {
+      writeLaunchAtLogin(enabled)
+      refreshTrayMenu()
+    },
+    onQuit: () => dispatchLifecycle({ type: 'quit-requested' })
+  })
+  refreshTrayMenu()
+
+  // A relaunch attempt (second instance) or the Dock icon re-opens the
+  // receiver — with the Dock hidden in tray mode, the second-instance path
+  // is the macOS user's natural "open the app again".
+  onRelaunchAttempt = () => dispatchLifecycle({ type: 'open-receiver' })
+  app.on('activate', () => dispatchLifecycle({ type: 'open-receiver' }))
+
+  // Every quit path walks the clean bye exactly once: OS-level quits (Cmd+Q,
+  // logout, shutdown) arrive as before-quit; the tray's Quit goes through the
+  // same dispatcher. The second quit() passes through, and the will-quit
+  // teardown (camera delete, platform audio) runs as before.
+  app.on('before-quit', (event) => {
+    if (quitWalkStarted) return
+    event.preventDefault()
+    dispatchLifecycle({ type: 'quit-requested' })
   })
 }).catch((error) => {
   logger.error(LOG_SCOPE, 'startup failed', { error: String(error) })
@@ -573,9 +725,10 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // The tray owns the app's lifetime (issue #94, ADR-010). With close-to-tray
+  // a user close never reaches here (the window hides instead) — this fires
+  // only during the quit walk and must never quit on its own.
+  logger.info(LOG_SCOPE, 'all windows closed — the app stays in the tray')
 })
 
 // App quit: delete the camera without protocol chatter — the socket may be
