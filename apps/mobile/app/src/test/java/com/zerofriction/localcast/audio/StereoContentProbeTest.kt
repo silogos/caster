@@ -22,7 +22,7 @@ class StereoContentProbeTest {
     fun `identical channels report zero difference`() {
         val probe = StereoContentProbe(framesPerReport = 2)
         assertNull(probe.onSamples(frame(1000, 1000)))
-        val report = probe.onSamples(frame(-2000, -2000))!!
+        val report = probe.onSamples(frame(-2000, -2000))!!.summarize()
         assertTrue(report.endsWith("(0% of amplitude)"))
         assertTrue(report.contains("mean|L-R|=0"))
     }
@@ -31,14 +31,14 @@ class StereoContentProbeTest {
     fun `hard-panned content reports a high difference`() {
         val probe = StereoContentProbe(framesPerReport = 2)
         assertNull(probe.onSamples(frame(3000, 0)))
-        val report = probe.onSamples(frame(-3000, 0))!!
+        val report = probe.onSamples(frame(-3000, 0))!!.summarize()
         assertTrue(report.endsWith("(100% of amplitude)"))
     }
 
     @Test
     fun `silence reports zero without division by zero`() {
         val probe = StereoContentProbe(framesPerReport = 1)
-        val report = probe.onSamples(frame(0, 0))!!
+        val report = probe.onSamples(frame(0, 0))!!.summarize()
         assertTrue(report.endsWith("(0% of amplitude)"))
     }
 
@@ -48,7 +48,7 @@ class StereoContentProbeTest {
         probe.onSamples(frame(1000, 900))
         probe.onSamples(frame(1000, 500))
         probe.onSamples(frame(-1000, -900))
-        val report = probe.onSamples(frame(-1000, -500))!!
+        val report = probe.onSamples(frame(-1000, -500))!!.summarize()
         // mean|L|=1000, mean|R|=700, mean|L-R|=300 → 30%
         assertTrue(report.endsWith("(30% of amplitude)"))
     }
@@ -65,7 +65,7 @@ class StereoContentProbeTest {
     @Test
     fun `odd trailing bytes are ignored`() {
         val probe = StereoContentProbe(framesPerReport = 1)
-        val report = probe.onSamples(frame(1000, 0) + byteArrayOf(7))!!
+        val report = probe.onSamples(frame(1000, 0) + byteArrayOf(7))!!.summarize()
         assertTrue(report.endsWith("(100% of amplitude)"))
     }
 }

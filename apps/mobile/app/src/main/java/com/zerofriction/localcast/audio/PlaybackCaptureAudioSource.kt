@@ -54,6 +54,14 @@ class PlaybackCaptureAudioSource(
     /** Fed on the ADM's recording thread alongside the silence monitor. */
     private val stereoContentProbe = StereoContentProbe()
 
+    /** Self-heal for the mono-born tap (see [MonoTapRecovery]). */
+    private val monoTapRecovery = MonoTapRecovery()
+
+    /** What a mid-cast capture rebuild needs — cached at the initial substitution. */
+    private class SwapContext(val audioInput: Any, val sampleRate: Int, val channelCount: Int, val readBytes: Int)
+
+    private var swapContext: SwapContext? = null
+
     /** Plugged into factory A (`media` pc) — its recorder is substituted at start. */
     val adm: AudioDeviceModule = JavaAudioDeviceModule.builder(context)
         // Captured playback is finished audio; platform mic effects would only distort it.
@@ -68,10 +76,12 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
-            // Stereo-content diagnostic (audio.md): whether the captured mix
-            // actually carries L≠R, ~one report per 5 s.
-            stereoContentProbe.onSamples(samples.data)?.let { detail ->
-                Log.i(TAG, "capture stereo content: $detail")
+            // Stereo diagnostics + tap self-heal (audio.md): whether the mix
+            // carries L≠R, one report per second, and a bounded capture-record
+            // rebuild when the tap is born with a dead channel.
+            stereoContentProbe.onSamples(samples.data)?.let { report ->
+                Log.i(TAG, "capture stereo content: ${report.summarize()}")
+                monoTapRecovery.onReport(report)?.let { reason -> rebuildCaptureRecord(reason) }
             }
         }
         .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
@@ -85,7 +95,8 @@ class PlaybackCaptureAudioSource(
         .createAudioDeviceModule()
 
     /** User mute: the ADM's built-in mute zeroes the frames; Opus keeps flowing (no renegotiation). */
-    fun setMuted(muted: Boolean) {        monitor.setUserMuted(muted)
+    fun setMuted(muted: Boolean) {
+        monitor.setUserMuted(muted)
         adm.setMicrophoneMute(muted)
     }
 
@@ -142,10 +153,13 @@ class PlaybackCaptureAudioSource(
             // The microphone record the platform required to start the ADM is
             // never read and never encoded — release it immediately.
             stopAndRelease(micRecord)
+            val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+            swapContext = SwapContext(audioInput, capture.sampleRate, capture.channelCount, readBytes)
             Log.i(
                 TAG,
                 "playback capture active: ${capture.sampleRate} Hz, ${capture.channelCount} ch, ${capture.audioFormat}",
             )
+            if (capture.channelCount == 2) probePlatformCapture(liveProjection, capture.sampleRate)
         } catch (t: Throwable) {
             captureFailed("substituting playback capture failed: ${t.message}")
         }
@@ -163,14 +177,24 @@ class PlaybackCaptureAudioSource(
         audioInput: Any,
         byteBufferField: java.lang.reflect.Field,
     ): AudioRecord {
-        val channelMask = if (micRecord.channelCount == 2) {
+        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+        return buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes)
+    }
+
+    private fun buildCaptureRecord(
+        projection: MediaProjection,
+        sampleRate: Int,
+        channelCount: Int,
+        readBytes: Int,
+    ): AudioRecord {
+        val channelMask = if (channelCount == 2) {
             AudioFormat.CHANNEL_IN_STEREO
         } else {
             AudioFormat.CHANNEL_IN_MONO
         }
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(micRecord.sampleRate)
+            .setSampleRate(sampleRate)
             .setChannelMask(channelMask)
             .build()
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
@@ -182,13 +206,101 @@ class PlaybackCaptureAudioSource(
             .build()
         // The recording thread reads byteBuffer.capacity() per iteration —
         // the capture record's buffer must hold at least that much.
-        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
-        val minBytes = AudioRecord.getMinBufferSize(micRecord.sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+        val minBytes = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         return AudioRecord.Builder()
             .setAudioFormat(format)
             .setBufferSizeInBytes(maxOf(minBytes, readBytes))
             .setAudioPlaybackCaptureConfig(captureConfig)
             .build()
+    }
+
+    /**
+     * The self-heal ([MonoTapRecovery]): swap in a *fresh* playback-capture
+     * record — the same field write the initial substitution uses, executed
+     * on the recording thread between two reads, so the cast never breaks.
+     * The old record is stopped only after the swap. Best-effort by design:
+     * a failed rebuild keeps the current record streaming and logs.
+     */
+    private fun rebuildCaptureRecord(reason: String) {
+        val context = swapContext ?: return
+        val liveProjection = projection() ?: return
+        val recordField = RECORD_FIELD ?: return
+        try {
+            val fresh = try {
+                buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes)
+            } catch (t: Throwable) {
+                Log.w(TAG, "capture rebuild failed: ${t.message}")
+                return
+            }
+            if (fresh.state != AudioRecord.STATE_INITIALIZED) {
+                fresh.release()
+                Log.w(TAG, "capture rebuild failed: record not initialized")
+                return
+            }
+            fresh.startRecording()
+            if (fresh.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                fresh.release()
+                Log.w(TAG, "capture rebuild failed: record did not start")
+                return
+            }
+            val stale = recordField.get(context.audioInput) as? AudioRecord
+            recordField.set(context.audioInput, fresh)
+            stale?.let { stopAndRelease(it) }
+            Log.i(TAG, "capture record rebuilt — $reason")
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture rebuild failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Reads a second playback-capture record **outside the ADM** for ~3 s at
+     * capture start (concurrent captures of the mix are allowed), reporting
+     * the same stereo-content aggregate. The found-live L-only capture
+     * (stereo tracks in AudioFlinger, `mean|R|=0` in the ADM's PCM) needed a
+     * splitter: if this standalone record is also one-channel-dead, the
+     * platform's tap delivers mono content; if it is stereo, the fold lives
+     * in the ADM/swap path. Diagnostic numbers only.
+     */
+    private fun probePlatformCapture(projection: MediaProjection, sampleRate: Int) {
+        Thread({
+            try {
+                val minBytes = AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_STEREO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                )
+                val format = AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                    .build()
+                val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .build()
+                val record = AudioRecord.Builder()
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(minBytes * 4)
+                    .setAudioPlaybackCaptureConfig(captureConfig)
+                    .build()
+                record.startRecording()
+                val probe = StereoContentProbe(framesPerReport = sampleRate)
+                val buffer = ByteArray(minBytes)
+                var reports = 0
+                while (reports < 3) {
+                    val read = record.read(buffer, 0, buffer.size)
+                    if (read <= 0) break
+                    probe.onSamples(buffer.copyOf(read))?.let { report ->
+                        Log.i(TAG, "platform capture check: ${report.summarize()}")
+                        reports++
+                    }
+                }
+                stopAndRelease(record)
+            } catch (t: Throwable) {
+                Log.w(TAG, "platform capture check failed: ${t.message}")
+            }
+        }, "platform-capture-probe").start()
     }
 
     /** Stop whatever record the ADM still holds (best-effort — the lookup may have failed). */
