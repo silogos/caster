@@ -110,8 +110,12 @@ class PlaybackCaptureAudioSource(
             stereoContentProbe.onSamples(samples.data)?.let { report ->
                 Log.i(TAG, "capture stereo content: ${report.summarize()}")
                 if (!sweepStarted && report.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
+                    // The sweep is RETIRED (found live 2026-11-04): every extra
+                    // client in another format re-configures the shared submix
+                    // input thread and flips it back into the one-channel fold —
+                    // the exact instability this cast must not create itself.
+                    // Its findings live in issue #101 and audio.md.
                     sweepStarted = true
-                    swapContext?.let { sweepCaptureFlavors(it.sampleRate) }
                 }
                 pendingRebuildReason?.let { reason ->
                     pendingRebuildReason = null
@@ -203,7 +207,6 @@ class PlaybackCaptureAudioSource(
                 TAG,
                 "playback capture active: ${capture.sampleRate} Hz, ${capture.channelCount} ch, ${capture.audioFormat}",
             )
-            if (capture.channelCount == 2) AudioPolicySinkProbe.run(appContext)
         } catch (t: Throwable) {
             captureFailed("substituting playback capture failed: ${t.message}")
         }
