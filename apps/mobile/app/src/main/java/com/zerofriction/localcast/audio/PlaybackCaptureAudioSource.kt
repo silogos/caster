@@ -232,9 +232,11 @@ class PlaybackCaptureAudioSource(
         channelCount: Int,
         readBytes: Int,
         mask: MaskKind = MaskKind.IN,
+        encoding: Int = AudioFormat.ENCODING_PCM_16BIT,
+        usages: IntArray? = null,
     ): AudioRecord {
         val formatBuilder = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setEncoding(encoding)
             .setSampleRate(sampleRate)
         val format = when {
             channelCount != 2 -> formatBuilder.setChannelMask(AudioFormat.CHANNEL_IN_MONO).build()
@@ -243,14 +245,16 @@ class PlaybackCaptureAudioSource(
             else -> formatBuilder.setChannelMask(AudioFormat.CHANNEL_IN_STEREO).build()
         }
         // Buffer sizing uses the IN-stereo min regardless of mask flavor —
-        // same channel count and encoding, so the requirement is identical.
-        val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        // same channel count, so the requirement is identical per encoding.
+        val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, encoding)
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
             // audio.md usage filter: media, game, unknown — voice apps are
             // never capturable by platform design (their users' privacy).
-            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-            .addMatchingUsage(AudioAttributes.USAGE_GAME)
-            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            // The sweep also measures alternative sets (TikTok's cast ships
+            // {MEDIA, 13, 14} — decoded from its APK — no GAME/UNKNOWN).
+            .apply {
+                for (usage in usages ?: DEFAULT_CAPTURE_USAGES) addMatchingUsage(usage)
+            }
             .build()
         return AudioRecord.Builder()
             .setAudioFormat(format)
@@ -322,8 +326,20 @@ class PlaybackCaptureAudioSource(
             flavorReport(liveProjection, 44100, MaskKind.IN)?.let {
                 Log.i(TAG, "capture flavor sweep (position-in 44.1k): ${it.summarize()}")
             }
-            flavorReport(liveProjection, sampleRate, MaskKind.INDEX)?.let {
-                Log.i(TAG, "capture flavor sweep (index ${sampleRate / 1000}k): ${it.summarize()}")
+            // Usage-set variants — TikTok's cast APK ships {MEDIA, 13, 14}
+            // (decoded from its dex): the one real config difference left.
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = MEDIA_ONLY_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media-only): ${it.summarize()}")
+            }
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = TIKTOK_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media+13+14): ${it.summarize()}")
+            }
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = MEDIA_GAME_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media+game): ${it.summarize()}")
+            }
+            // The docs' example encoding — the float remix route may differ.
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, encoding = AudioFormat.ENCODING_PCM_FLOAT)?.let {
+                Log.i(TAG, "capture flavor sweep (pcm float): ${it.summarize()}")
             }
             if (inReport === null || outReport === null) return@Thread
             val outHealthy = !outReport.oneChannelDead()
@@ -339,20 +355,38 @@ class PlaybackCaptureAudioSource(
     }
 
     /** One flavor's loud window, or null if it could not be measured (quiet/failed). */
-    private fun flavorReport(projection: MediaProjection, sampleRate: Int, mask: MaskKind): StereoContentProbe.Report? {
+    private fun flavorReport(
+        projection: MediaProjection,
+        sampleRate: Int,
+        mask: MaskKind,
+        encoding: Int = AudioFormat.ENCODING_PCM_16BIT,
+        usages: IntArray? = null,
+    ): StereoContentProbe.Report? {
+        val label = "${mask.label} ${sampleRate / 1000}k" +
+            (if (usages !== null) " usages[${usages.joinToString(",")}]" else "") +
+            (if (encoding != AudioFormat.ENCODING_PCM_16BIT) " float" else "")
         return try {
-            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-            val record = buildCaptureRecord(projection, sampleRate, channelCount = 2, readBytes = minBytes * 4, mask)
+            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, encoding)
+            val record = buildCaptureRecord(projection, sampleRate, channelCount = 2, readBytes = minBytes * 4, mask, encoding, usages)
             record.startRecording()
             val probe = StereoContentProbe(framesPerReport = sampleRate)
-            val buffer = ByteArray(minBytes)
+            val byteBuffer = ByteArray(minBytes)
+            val floatBuffer = FloatArray(minBytes / 4)
             var report: StereoContentProbe.Report? = null
             val deadline = System.currentTimeMillis() + 4_000
             while (System.currentTimeMillis() < deadline) {
-                val read = record.read(buffer, 0, buffer.size)
-                if (read <= 0) break
-                val aggregate = probe.onSamples(buffer.copyOf(read)) ?: continue
-                Log.i(TAG, "capture flavor (${mask.label} ${sampleRate / 1000}k): ${aggregate.summarize()}")
+                val aggregate: StereoContentProbe.Report?
+                if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+                    val read = record.read(floatBuffer, 0, floatBuffer.size, AudioRecord.READ_BLOCKING)
+                    if (read <= 0) break
+                    aggregate = probe.onSamples(floatBuffer.copyOf(read))
+                } else {
+                    val read = record.read(byteBuffer, 0, byteBuffer.size)
+                    if (read <= 0) break
+                    aggregate = probe.onSamples(byteBuffer.copyOf(read))
+                }
+                if (aggregate === null) continue
+                Log.i(TAG, "capture flavor ($label): ${aggregate.summarize()}")
                 if (aggregate.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
                     report = aggregate
                     break
@@ -361,7 +395,7 @@ class PlaybackCaptureAudioSource(
             stopAndRelease(record)
             report
         } catch (t: Throwable) {
-            Log.w(TAG, "capture flavor (${mask.label} ${sampleRate / 1000}k) failed: ${t.message}")
+            Log.w(TAG, "capture flavor ($label) failed: ${t.message}")
             null
         }
     }
@@ -396,6 +430,18 @@ class PlaybackCaptureAudioSource(
 
         /** Channel-index mask bits 0,1 — the first two channels, L and R. */
         private const val STEREO_CHANNEL_INDEX_MASK = 0x3
+
+        /** audio.md usage filter: media, game, unknown. */
+        private val DEFAULT_CAPTURE_USAGES = intArrayOf(
+            AudioAttributes.USAGE_MEDIA,
+            AudioAttributes.USAGE_GAME,
+            AudioAttributes.USAGE_UNKNOWN,
+        )
+        private val MEDIA_ONLY_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA)
+        private val MEDIA_GAME_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_GAME)
+
+        /** TikTok's cast set, decoded from its APK: {MEDIA, 13, 14}. */
+        private val TIKTOK_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, 13, 14)
 
         /**
          * Lazy lookups, never class-init: a library update that renames the

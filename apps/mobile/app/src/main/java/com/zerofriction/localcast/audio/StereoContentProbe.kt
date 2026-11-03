@@ -67,6 +67,32 @@ internal class StereoContentProbe(
             i += 4
         }
         frames += samplePairs
+        return closeIfFull()
+    }
+
+    /**
+     * Feeds one interleaved PCM float stereo frame (±1.0 range, scaled into
+     * the PCM16 domain the thresholds speak). The playback-capture docs'
+     * own example records in float — a flavor the one-channel tap may remix
+     * differently, so the sweep measures it too.
+     */
+    fun onSamples(samples: FloatArray): Report? {
+        val samplePairs = samples.size / 2
+        if (samplePairs == 0) return null
+        var i = 0
+        while (i + 1 < samples.size) {
+            val left = (samples[i] * 32767f).toLong()
+            val right = (samples[i + 1] * 32767f).toLong()
+            sumAbsLeft += abs(left)
+            sumAbsRight += abs(right)
+            sumAbsDiff += abs(left - right)
+            i += 2
+        }
+        frames += samplePairs
+        return closeIfFull()
+    }
+
+    private fun closeIfFull(): Report? {
         if (frames < framesPerReport) return null
         val report = Report(sumAbsLeft / frames, sumAbsRight / frames, sumAbsDiff / frames)
         frames = 0
