@@ -341,6 +341,13 @@ class PlaybackCaptureAudioSource(
             flavorReport(liveProjection, sampleRate, MaskKind.IN, encoding = AudioFormat.ENCODING_PCM_FLOAT)?.let {
                 Log.i(TAG, "capture flavor sweep (pcm float): ${it.summarize()}")
             }
+            // THE lead: TikTok's cast on this ROM runs on AUDIO_SOURCE_REMOTE_SUBMIX
+            // (dumpsys during its stereo cast) — the routed-loopback source,
+            // not playback capture. Normally gated by the signature
+            // CAPTURE_AUDIO_OUTPUT; this ROM may or may not check per app.
+            remoteSubmixReport(sampleRate)?.let {
+                Log.i(TAG, "capture flavor sweep (REMOTE_SUBMIX): ${it.summarize()}")
+            }
             if (inReport === null || outReport === null) return@Thread
             val outHealthy = !outReport.oneChannelDead()
             val inDead = inReport.oneChannelDead()
@@ -352,6 +359,50 @@ class PlaybackCaptureAudioSource(
                 Log.i(TAG, "capture flavor sweep: keeping $preferredMask (IN ${inReport.summarize()} / OUT ${outReport.summarize()})")
             }
         }, "capture-flavor-sweep").start()
+    }
+
+    /**
+     * The TikTok-mechanism probe (dumpsys-proven during its stereo cast): an
+     * [AudioRecord] on `AUDIO_SOURCE_REMOTE_SUBMIX` — the routed-loopback
+     * source that bypasses the broken playback-capture remix entirely.
+     * Normally requires the signature-level CAPTURE_AUDIO_OUTPUT; whether
+     * this ROM enforces that per app is exactly what this probe answers.
+     */
+    private fun remoteSubmixReport(sampleRate: Int): StereoContentProbe.Report? {
+        return try {
+            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+            val record = AudioRecord.Builder()
+                .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                        .build(),
+                )
+                .setBufferSizeInBytes(minBytes * 4)
+                .build()
+            record.startRecording()
+            val probe = StereoContentProbe(framesPerReport = sampleRate)
+            val buffer = ByteArray(minBytes)
+            var report: StereoContentProbe.Report? = null
+            val deadline = System.currentTimeMillis() + 4_000
+            while (System.currentTimeMillis() < deadline) {
+                val read = record.read(buffer, 0, buffer.size)
+                if (read <= 0) break
+                val aggregate = probe.onSamples(buffer.copyOf(read)) ?: continue
+                Log.i(TAG, "capture flavor (REMOTE_SUBMIX): ${aggregate.summarize()}")
+                if (aggregate.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
+                    report = aggregate
+                    break
+                }
+            }
+            stopAndRelease(record)
+            report
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture flavor (REMOTE_SUBMIX) failed: ${t.javaClass.simpleName}: ${t.message}")
+            null
+        }
     }
 
     /** One flavor's loud window, or null if it could not be measured (quiet/failed). */
@@ -442,6 +493,9 @@ class PlaybackCaptureAudioSource(
 
         /** TikTok's cast set, decoded from its APK: {MEDIA, 13, 14}. */
         private val TIKTOK_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, 13, 14)
+
+        /** MediaRecorder.AudioSource.REMOTE_SUBMIX — hidden from the SDK, its value forever 8. */
+        private const val REMOTE_SUBMIX_AUDIO_SOURCE = 8
 
         /**
          * Lazy lookups, never class-init: a library update that renames the
