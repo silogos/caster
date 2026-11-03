@@ -46,6 +46,18 @@ export interface GainNodeLike {
 export interface MediaStreamAudioSourceNodeLike {
   connect(node: unknown): unknown
   disconnect(): void
+  /** Chromium exposes it; undefined on fakes — the probe logs what it has. */
+  readonly channelCount?: number
+}
+
+/** Receiver-side channel diagnostics (issue #101): what actually arrives. */
+export interface AnalyserLike {
+  getFloatTimeDomainData(array: Float32Array): void
+}
+
+export interface ChannelSplitterLike {
+  connect(node: unknown, output?: number, input?: number): unknown
+  disconnect(): void
 }
 
 export interface MediaStreamAudioDestinationNodeLike {
@@ -58,6 +70,9 @@ export interface AudioContextLike {
   createGain(): GainNodeLike
   createMediaStreamSource(stream: unknown): MediaStreamAudioSourceNodeLike
   createMediaStreamDestination(): MediaStreamAudioDestinationNodeLike
+  /** Present on Chromium's context; absent on fakes — the probe is optional. */
+  createChannelSplitter?(numberOfOutputs: number): ChannelSplitterLike
+  createAnalyser?(): AnalyserLike
   resume(): Promise<void>
   setSinkId?(deviceId: string): Promise<void>
   close?(): Promise<void>
@@ -91,6 +106,13 @@ const DEFAULT_LEVEL: MixerLevel = { volume: 1, muted: false }
 const effectiveGain = (level: MixerLevel): number => (level.muted ? 0 : level.volume)
 
 const clampVolume = (volume: number): number => Math.min(1, Math.max(0, volume))
+
+/** Mean absolute sample level of an analyser window (0..1 range diagnostics). */
+const meanAbsLevel = (window: Float32Array): number => {
+  let sum = 0
+  for (const sample of window) sum += Math.abs(sample)
+  return sum / window.length
+}
 
 const isValidLevel = (value: unknown): value is MixerLevel => {
   if (typeof value !== 'object' || value === null) return false
@@ -129,6 +151,9 @@ export class AudioMixer {
   private perTrackCableSources: Partial<Record<MixerChannel, MediaStreamAudioSourceNodeLike>> = {}
   /** The sink each per-track context was built with — a changed device id means rebuild. */
   private perTrackSinkIds: Partial<Record<MixerChannel, string>> = {}
+  /** The receiver-side channel probe (issue #101) — parallel, never audible. */
+  private channelProbe: { splitter: ChannelSplitterLike; left: AnalyserLike; right: AnalyserLike } | null = null
+  private channelProbeTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -221,14 +246,71 @@ export class AudioMixer {
     const source = context.createMediaStreamSource(stream)
     source.connect(gain)
     wiring.source = source
+    this.attachChannelProbe(channel, source)
     this.applyRouting()
   }
 
   /** Stop a channel's stream (mic toggled off, mobile gone). The stored level survives. */
   detachStream(channel: MixerChannel): void {
     const wiring = this.wiring[channel]
+    this.detachChannelProbe()
     wiring.source?.disconnect()
     wiring.source = null
+  }
+
+  /**
+   * Receiver-side channel diagnostics (issue #101): every sender-side probe
+   * ends at the ADM — this one measures what actually ARRIVES at the
+   * receiver, as per-channel levels of the remote stream through a parallel
+   * splitter (never in the audible path), logged every 2 s. Numbers only.
+   */
+  private attachChannelProbe(channel: MixerChannel, source: MediaStreamAudioSourceNodeLike): void {
+    const context = this.context
+    if (context === null || context.createChannelSplitter === undefined || context.createAnalyser === undefined) {
+      return
+    }
+    this.detachChannelProbe()
+    try {
+      const splitter = context.createChannelSplitter(2)
+      const left = context.createAnalyser()
+      const right = context.createAnalyser()
+      source.connect(splitter)
+      splitter.connect(left, 0)
+      splitter.connect(right, 1)
+      this.channelProbe = { splitter, left, right }
+      const window = new Float32Array(2048)
+      this.channelProbeTimer = setInterval(() => {
+        const probe = this.channelProbe
+        if (probe === null) return
+        probe.left.getFloatTimeDomainData(window)
+        const leftLevel = meanAbsLevel(window)
+        probe.right.getFloatTimeDomainData(window)
+        const rightLevel = meanAbsLevel(window)
+        this.options.log('info', 'received stream channels', {
+          channel,
+          channelCount: source.channelCount,
+          left: leftLevel,
+          right: rightLevel
+        })
+      }, 2_000)
+    } catch (error) {
+      this.options.log('warn', 'channel probe unavailable', { error: String(error) })
+    }
+  }
+
+  private detachChannelProbe(): void {
+    if (this.channelProbeTimer !== null) {
+      clearInterval(this.channelProbeTimer)
+      this.channelProbeTimer = null
+    }
+    if (this.channelProbe !== null) {
+      try {
+        this.channelProbe.splitter.disconnect()
+      } catch {
+        // The splitter's source already disconnected — nothing to save.
+      }
+      this.channelProbe = null
+    }
   }
 
   private applyGain(channel: MixerChannel): void {

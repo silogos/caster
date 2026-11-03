@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AudioMixer,
+  type AnalyserLike,
   type AudioContextLike,
+  type ChannelSplitterLike,
   type GainNodeLike,
   type MediaStreamAudioDestinationNodeLike,
   type MediaStreamAudioSourceNodeLike,
@@ -508,5 +510,77 @@ describe('AudioMixer — per-track cable routing (ADR-008 batch A + review fixes
     expect(gameContexts).toHaveLength(2)
     expect(gameContexts[0].closed).toBe(true) // the old sink is gone
     expect(gameContexts[1].sinkId).toBe('zf-game-2')
+  })
+})
+
+describe('receiver-side channel probe (issue #101)', () => {
+  class FakeAnalyser implements AnalyserLike {
+    constructor(readonly level: number) {}
+    getFloatTimeDomainData(array: Float32Array): void {
+      for (let i = 0; i < array.length; i++) array[i] = i % 2 === 0 ? this.level : -this.level
+    }
+  }
+
+  class FakeSplitter implements ChannelSplitterLike {
+    connected: Array<[unknown, number | undefined]> = []
+    disconnectCount = 0
+    connect(node: unknown, output?: number): unknown {
+      this.connected.push([node, output])
+      return node
+    }
+    disconnect(): void {
+      this.disconnectCount += 1
+    }
+  }
+
+  class ProbingContext extends FakeContext {
+    readonly splitter = new FakeSplitter()
+    createChannelSplitter(): ChannelSplitterLike {
+      return this.splitter
+    }
+
+    createAnalyser(): AnalyserLike {
+      // Left channel loud, right channel quiet — the shape the probe must report.
+      this.analysers.push(new FakeAnalyser(this.analysers.length === 0 ? 0.5 : 0.01))
+      return this.analysers[this.analysers.length - 1]
+    }
+
+    analysers: FakeAnalyser[] = []
+  }
+
+  it('logs per-channel levels of the attached stream every 2 s', () => {
+    vi.useFakeTimers()
+    const context = new ProbingContext()
+    const logs: Array<{ level: string; message: string; details?: Record<string, unknown> }> = []
+    const mixer = new AudioMixer({
+      createAudioContext: () => context,
+      log: (level, message, details) => logs.push({ level, message, details })
+    })
+    mixer.attachStream('game', { id: 'stream' })
+    expect(context.splitter.connected).toHaveLength(2) // splitter taps both channels
+
+    vi.advanceTimersByTime(2_000)
+    const report = logs.filter((entry) => entry.message === 'received stream channels')
+    expect(report).toHaveLength(1)
+    expect(report[0].details?.left).toBeGreaterThan(0.4)
+    expect(report[0].details?.right).toBeLessThan(0.05)
+
+    vi.advanceTimersByTime(2_000)
+    expect(logs.filter((entry) => entry.message === 'received stream channels')).toHaveLength(2)
+
+    mixer.detachStream('game')
+    vi.advanceTimersByTime(6_000)
+    expect(logs.filter((entry) => entry.message === 'received stream channels')).toHaveLength(2) // stopped
+    vi.useRealTimers()
+  })
+
+  it('skips the probe silently on a context without analysers', () => {
+    const logs: Array<{ level: string; message: string }> = []
+    const mixer = new AudioMixer({
+      createAudioContext: () => new FakeContext(),
+      log: (level, message) => logs.push({ level, message })
+    })
+    mixer.attachStream('game', { id: 'stream' })
+    expect(logs.some((entry) => entry.message === 'channel probe unavailable')).toBe(false)
   })
 })
