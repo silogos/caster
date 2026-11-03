@@ -159,7 +159,7 @@ class PlaybackCaptureAudioSource(
                 return
             }
             val capture = try {
-                buildCaptureRecord(liveProjection, micRecord, audioInput, byteBufferField)
+                buildBestCaptureRecord(liveProjection, micRecord, audioInput, byteBufferField)
             } catch (t: Throwable) {
                 Log.w(TAG, "building the playback-capture record failed: ${t.message}")
                 null
@@ -191,6 +191,57 @@ class PlaybackCaptureAudioSource(
         } catch (t: Throwable) {
             captureFailed("substituting playback capture failed: ${t.message}")
         }
+    }
+
+    /**
+     * TikTok's adapter pattern (decoded from its cast APK, dumpsys-confirmed
+     * on this ROM): try `AUDIO_SOURCE_REMOTE_SUBMIX` FIRST — the routed
+     * loopback that stays true stereo on the Lenovo ROM whose playback-capture
+     * remix folds to one channel. It must be attempted before any
+     * playback-capture record exists (the submix input is single-client on
+     * this ROM — "Cannot create AudioRecord" while our capture holds it), and
+     * anywhere it is refused (other ROMs enforce CAPTURE_AUDIO_OUTPUT), the
+     * public playback-capture path remains the fallback. The record mirrors
+     * the ADM-negotiated format either way, so the swap-in is identical.
+     */
+    private fun buildBestCaptureRecord(
+        projection: MediaProjection,
+        micRecord: AudioRecord,
+        audioInput: Any,
+        byteBufferField: java.lang.reflect.Field,
+    ): AudioRecord {
+        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+        val submix = try {
+            val record = AudioRecord.Builder()
+                .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(micRecord.sampleRate)
+                        .setChannelMask(
+                            if (micRecord.channelCount == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO,
+                        )
+                        .build(),
+                )
+                .setBufferSizeInBytes(
+                    maxOf(
+                        AudioRecord.getMinBufferSize(micRecord.sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT),
+                        readBytes,
+                    ),
+                )
+                .build()
+            if (record.state == AudioRecord.STATE_INITIALIZED) {
+                Log.i(TAG, "capture via REMOTE_SUBMIX (stereo loopback) — playback capture stays the fallback")
+                record
+            } else {
+                record.release()
+                null
+            }
+        } catch (t: Throwable) {
+            Log.i(TAG, "REMOTE_SUBMIX unavailable (${t.javaClass.simpleName}) — falling back to playback capture")
+            null
+        }
+        return submix ?: buildCaptureRecord(projection, micRecord, audioInput, byteBufferField)
     }
 
     /**
@@ -278,7 +329,28 @@ class PlaybackCaptureAudioSource(
         val recordField = RECORD_FIELD ?: return
         try {
             val fresh = try {
-                buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, preferredMask)
+                // Submix first (the adapter pattern), playback capture as fallback.
+                try {
+                    val submix = AudioRecord.Builder()
+                        .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(context.sampleRate)
+                                .setChannelMask(
+                                    if (context.channelCount == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO,
+                                )
+                                .build(),
+                        )
+                        .setBufferSizeInBytes(context.readBytes * 2)
+                        .build()
+                    if (submix.state == AudioRecord.STATE_INITIALIZED) submix else {
+                        submix.release()
+                        buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, preferredMask)
+                    }
+                } catch (t: Throwable) {
+                    buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, preferredMask)
+                }
             } catch (t: Throwable) {
                 try {
                     Log.w(TAG, "capture rebuild with $preferredMask failed (${t.message}) — retrying with ${MaskKind.IN}")
