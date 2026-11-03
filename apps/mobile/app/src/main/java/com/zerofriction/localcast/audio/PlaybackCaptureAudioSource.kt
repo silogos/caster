@@ -595,7 +595,12 @@ class PlaybackCaptureAudioSource(
         /** Channel-index mask bits 0,1 — the first two channels, L and R. */
         private const val STEREO_CHANNEL_INDEX_MASK = 0x3
 
-        /** audio.md usage filter: media, game, unknown. */
+        /**
+         * audio.md usage filter: media, game, unknown. (TikTok's exact set
+         * {MEDIA, 13, 14} was tried live 2026-11-04 with the request proven
+         * byte-identical in the APM log — the fold persisted, so the usage
+         * set is NOT the differentiator and GAME must stay for PUBG.)
+         */
         private val DEFAULT_CAPTURE_USAGES = intArrayOf(
             AudioAttributes.USAGE_MEDIA,
             AudioAttributes.USAGE_GAME,
@@ -606,6 +611,10 @@ class PlaybackCaptureAudioSource(
 
         /** TikTok's cast set, decoded from its APK: {MEDIA, 13, 14}. */
         private val TIKTOK_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, 13, 14)
+
+        /** AudioAttributes usage constants 13/14 — plain names for readability. */
+        private const val ASSISTANCE_SONIFICATION_USAGE = 13
+        private const val ASSISTANCE_ACCESSIBILITY_USAGE = 14
 
         /** MediaRecorder.AudioSource.REMOTE_SUBMIX — hidden from the SDK, its value forever 8. */
         private const val REMOTE_SUBMIX_AUDIO_SOURCE = 8
