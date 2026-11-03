@@ -51,6 +51,9 @@ class PlaybackCaptureAudioSource(
 ) {
     val state: GameAudioState get() = monitor.state.value
 
+    /** Fed on the ADM's recording thread alongside the silence monitor. */
+    private val stereoContentProbe = StereoContentProbe()
+
     /** Plugged into factory A (`media` pc) — its recorder is substituted at start. */
     val adm: AudioDeviceModule = JavaAudioDeviceModule.builder(context)
         // Captured playback is finished audio; platform mic effects would only distort it.
@@ -65,6 +68,11 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            // Stereo-content diagnostic (audio.md): whether the captured mix
+            // actually carries L≠R, ~one report per 5 s.
+            stereoContentProbe.onSamples(samples.data)?.let { detail ->
+                Log.i(TAG, "capture stereo content: $detail")
+            }
         }
         .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
             override fun onWebRtcAudioRecordInitError(errorMessage: String) = captureFailed("record init: $errorMessage")
@@ -77,8 +85,7 @@ class PlaybackCaptureAudioSource(
         .createAudioDeviceModule()
 
     /** User mute: the ADM's built-in mute zeroes the frames; Opus keeps flowing (no renegotiation). */
-    fun setMuted(muted: Boolean) {
-        monitor.setUserMuted(muted)
+    fun setMuted(muted: Boolean) {        monitor.setUserMuted(muted)
         adm.setMicrophoneMute(muted)
     }
 
