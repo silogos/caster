@@ -106,6 +106,13 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Feature 2026-11b — Desktop tray lifecycle (close-to-tray) ✅ implemented — awaiting manual matrix
+*(Not a numbered phase: user-requested via issue #94, shipped off-phase like its siblings; decides [ADR-010](../decisions/ADR-010-desktop-tray-lifecycle.md). Also corrects the ADR-007 addendum that still claimed the reverted 2026-10-31 tray attempt had shipped.)*
+**Scope:** the tray, not the window, owns the desktop app's lifetime — closing the receiver **hides** it (signaling server + trust store alive, so the saved phone's one-tap Connect always lands — ADR-006's promise finished); a cast starting against a tray-only desktop **auto-opens** the window; **close-mid-cast keeps the cast** (decode, mixer, vcam — the vcam workflow made explicit); tray menu = status line (session-info vocabulary) + Open window + Forget phone (`bye forget`, one path with the no-input Disconnect) + Virtual camera checkbox + Launch at login (off by default, macOS/Windows) + Quit; **every quit path walks the clean `bye desktop-quit`** (trust survives plain quits, ADR-006) then the normal teardown. The lifecycle rules live in one pure, unit-tested state machine (`tray/trayLifecycle.ts`, the `heroView` precedent) — visibility is an explicit intent, never inferred from `isVisible()` (the bug that killed the first attempt). macOS hides the Dock icon while windowless; relaunch attempt/Dock/cast-start are the ways back.
+**Accept:** desktop vitest green (21 new tray tests, 279/279) + typecheck + build + smoke run; manual matrix (close-mid-cast aliveness, one-tap Connect against tray-only desktop, every quit path's bye, App Nap on macOS, frameless-toggle-while-hidden regression) — [features/tray.md](../features/tray.md), pending the phone in hand. *(Implemented 2026-11-03.)*
+
+---
+
 ## Definition of Done (every phase)
 
 ```text
