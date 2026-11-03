@@ -334,6 +334,11 @@ class MediaCastSession(
             capturer = newCapturer
             newCapturer.initialize(helper, context, source.capturerObserver)
             newCapturer.startCapture(width, height, config.fps)
+            // The projection is live the moment the capturer starts — open the
+            // capture record NOW, before WebRTC creates its microphone record
+            // at transport start (session-ordering fix for the one-channel
+            // fold, issue #101; see PlaybackCaptureAudioSource.preOpenCapture).
+            newAudio?.preOpenCapture()
             captureWidth = width
             captureHeight = height
             // The cast starts at the user's own rung (= the ceiling) — the
@@ -880,6 +885,9 @@ class MediaCastSession(
         audioTrack = null
         audioSource?.dispose()
         audioSource = null
+        // Release a pre-opened capture record the substitution never consumed
+        // (the consumed one is released by the ADM's own stop path).
+        audio?.release()
         // The audio ADM is owned (and released) by the factory below —
         // JavaAudioDeviceModule.release() must not be called from app code.
         audio = null
