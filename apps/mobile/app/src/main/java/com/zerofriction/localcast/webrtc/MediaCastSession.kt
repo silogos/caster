@@ -458,18 +458,22 @@ class MediaCastSession(
         createAndSendOffer(currentPc)
     }
 
-    /** createOffer → codec order → setLocalDescription → offer over signaling. */
+    /** createOffer → codec order + Opus stereo fmtp → setLocalDescription → offer over signaling. */
     private fun createAndSendOffer(target: PeerConnection) {
         target.createOffer(
             object : SdpObserver {
                 override fun onCreateSuccess(original: SessionDescription) {
                     // Codec policy lives in the offer (webrtc.md): the
-                    // config's preferred codec first (H.264 by default).
+                    // config's preferred codec first (H.264 by default), and
+                    // game audio as Opus stereo — the negotiated default is
+                    // mono 32 kbps (SdpOpusFmtp).
                     val munged = SessionDescription(
                         original.type,
-                        SdpCodecOrderer.preferVideoCodecs(
-                            original.description,
-                            SdpCodecOrderer.preferenceFor(config.preferredCodec),
+                        SdpOpusFmtp.preferStereo(
+                            SdpCodecOrderer.preferVideoCodecs(
+                                original.description,
+                                SdpCodecOrderer.preferenceFor(config.preferredCodec),
+                            ),
                         ),
                     )
                     target.setLocalDescription(
@@ -503,6 +507,9 @@ class MediaCastSession(
             object : SdpObserver {
                 override fun onSetSuccess() {
                     remoteDescriptionSet = true
+                    // Stereo-path diagnostic: whether the desktop's answer
+                    // carried the offer's Opus fmtp back (Chromium mirrors it).
+                    Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
                     applySenderParameters(currentPc)
                     val queued = pendingCandidates.toList()
                     pendingCandidates.clear()

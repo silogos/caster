@@ -56,7 +56,9 @@ class PlaybackCaptureAudioSource(
         // Captured playback is finished audio; platform mic effects would only distort it.
         .setUseHardwareAcousticEchoCanceler(false)
         .setUseHardwareNoiseSuppressor(false)
-        .setUseStereoInput(true) // audio.md:48 kHz stereo PCM16 → Opus stereo
+        // Shapes the record only — the *transport* is stereo only because the
+        // offer's fmtp asks for it (SdpOpusFmtp in MediaCastSession).
+        .setUseStereoInput(true)
         .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
             override fun onWebRtcAudioRecordStart() = substitutePlaybackCaptureRecord()
             override fun onWebRtcAudioRecordStop() = Unit
