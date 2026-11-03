@@ -35,8 +35,12 @@ internal class MonoTapRecovery(
         if (deadStreak < consecutiveWindows || rebuilds >= maxRebuilds) return null
         rebuilds++
         deadStreak = 0
+        // Rebuilds past the first go nuclear ([HARD_RESET_MARKER]): the tap's
+        // HAL thread may be stuck in a broken config only a full teardown
+        // recreates (issue #101) — see PlaybackCaptureAudioSource.
+        val hard = if (rebuilds > 1) " $HARD_RESET_MARKER" else ""
         return "one channel dead for $consecutiveWindows s " +
-            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild ${rebuildsOf(maxRebuilds)}"
+            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild ${rebuildsOf(maxRebuilds)}$hard"
     }
 
     private fun rebuildsOf(max: Int): String = "$rebuilds/$max"
@@ -50,5 +54,8 @@ internal class MonoTapRecovery(
 
         const val CONSECUTIVE_WINDOWS = 5
         const val MAX_REBUILDS = 3
+
+        /** Marks a rebuild that must idle out the input thread (full teardown). */
+        const val HARD_RESET_MARKER = "[hard-reset]"
     }
 }
