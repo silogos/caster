@@ -10,10 +10,15 @@ package com.zerofriction.localcast.webrtc
  * output doesn't have (user report 2026-11-03).
  *
  * Same portability stance as [SdpCodecOrderer]: fmtp munging is the only lever
- * the pinned prebuilt exposes (no channelCount on `RtpParameters`), and
- * Chromium's answerer mirrors the offer's fmtp parameters into its answer —
- * the negotiated send format then carries stereo to the encoder. The mic PC
- * is untouched: its mono stream is by design (webrtc.md codec policy). Pure
+ * the pinned prebuilt exposes (no channelCount on `RtpParameters`). Found live
+ * (2026-11-03): Chromium's answerer writes its **own** default Opus fmtp
+ * (`minptime=10;useinbandfec=1`) instead of mirroring the offer's, so the
+ * sender applies [preferStereo] to the **answer** too, before
+ * `setRemoteDescription` — the negotiated send format then carries stereo to
+ * the encoder. Safe with the pinned receiver: Opus signals channels in-band
+ * (RFC 6716) and Chromium's decoder handles stereo (it sends stereo itself in
+ * getDisplayMedia); the fmtp constrains the *sender*, not the decoder. The mic
+ * PC is untouched: its mono stream is by design (webrtc.md codec policy). Pure
  * string work → plain-Kotlin unit-testable.
  */
 object SdpOpusFmtp {

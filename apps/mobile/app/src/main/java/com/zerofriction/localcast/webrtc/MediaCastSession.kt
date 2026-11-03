@@ -466,7 +466,8 @@ class MediaCastSession(
                     // Codec policy lives in the offer (webrtc.md): the
                     // config's preferred codec first (H.264 by default), and
                     // game audio as Opus stereo — the negotiated default is
-                    // mono 32 kbps (SdpOpusFmtp).
+                    // mono 32 kbps, so the offer asks and the answer is
+                    // relaxed to the same request (SdpOpusFmtp).
                     val munged = SessionDescription(
                         original.type,
                         SdpOpusFmtp.preferStereo(
@@ -503,13 +504,17 @@ class MediaCastSession(
 
     private fun applyAnswer(sdp: String) {
         val currentPc = pc ?: return
+        // Stereo-path diagnostics: Chromium generates its own default Opus
+        // fmtp instead of mirroring the offer's (found live 2026-11-03 — the
+        // answer carried only minptime/useinbandfec), so the answer is
+        // relaxed to what the offer asked for before it is applied.
+        Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
+        val negotiated = SessionDescription(SessionDescription.Type.ANSWER, SdpOpusFmtp.preferStereo(sdp))
+        Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(negotiated.description) ?: "none"}")
         currentPc.setRemoteDescription(
             object : SdpObserver {
                 override fun onSetSuccess() {
                     remoteDescriptionSet = true
-                    // Stereo-path diagnostic: whether the desktop's answer
-                    // carried the offer's Opus fmtp back (Chromium mirrors it).
-                    Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
                     applySenderParameters(currentPc)
                     val queued = pendingCandidates.toList()
                     pendingCandidates.clear()
@@ -523,7 +528,7 @@ class MediaCastSession(
                 override fun onCreateSuccess(description: SessionDescription) = Unit
                 override fun onCreateFailure(error: String?) = Unit
             },
-            SessionDescription(SessionDescription.Type.ANSWER, sdp),
+            negotiated,
         )
     }
 
