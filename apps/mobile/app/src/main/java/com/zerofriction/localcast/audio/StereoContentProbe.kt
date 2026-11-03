@@ -31,6 +31,17 @@ internal class StereoContentProbe(
     data class Report(val meanAbsLeft: Long, val meanAbsRight: Long, val meanAbsDiff: Long) {
         val amplitude: Long get() = maxOf(meanAbsLeft, meanAbsRight)
 
+        /**
+         * Loud, yet one channel under [MonoTapRecovery.DEAD_CHANNEL_RATIO] of
+         * the other — a dead tap channel (hard-panned content leaks; a dead
+         * channel is exactly zero). The shared predicate of the self-heal and
+         * the flavor sweep.
+         */
+        fun oneChannelDead(
+            minAmplitude: Long = MonoTapRecovery.MIN_AMPLITUDE,
+            deadRatio: Long = MonoTapRecovery.DEAD_CHANNEL_RATIO,
+        ): Boolean = amplitude >= minAmplitude && minOf(meanAbsLeft, meanAbsRight) * deadRatio < amplitude
+
         /** Human-readable line for the logs. */
         fun summarize(): String {
             val diffPct = if (amplitude == 0L) 0L else meanAbsDiff * 100 / amplitude

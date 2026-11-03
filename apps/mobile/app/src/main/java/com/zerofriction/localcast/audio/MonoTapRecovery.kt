@@ -27,8 +27,7 @@ internal class MonoTapRecovery(
     /** A rebuild reason when the capture record should be swapped, else null. */
     fun onReport(report: StereoContentProbe.Report): String? {
         if (report.amplitude < MIN_AMPLITUDE) return null
-        val oneChannelDead = minOf(report.meanAbsLeft, report.meanAbsRight) * DEAD_CHANNEL_RATIO < report.amplitude
-        if (!oneChannelDead) {
+        if (!report.oneChannelDead()) {
             deadStreak = 0
             return null
         }
