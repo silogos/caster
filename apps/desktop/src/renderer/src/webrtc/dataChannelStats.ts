@@ -17,6 +17,12 @@ export interface GameChannelSample {
   decodeErrors: number
   /** Cumulative rendered frames — the liveness signal (null = never decoded). */
   framesRendered: number
+  /**
+   * The worklet ring's depth in ms — the playout-tuning telemetry. The
+   * sampler doesn't know the mixer; it emits null and the wiring (main.ts)
+   * overrides with the mixer's live value.
+   */
+  ringDepthMs: number | null
 }
 
 interface CountersState {
@@ -55,7 +61,8 @@ export function createGameChannelSampler(read: () => GameChannelCounters): {
         framesIn: counters.framesIn,
         invalidFrames: counters.invalidFrames,
         decodeErrors: counters.decodeErrors,
-        framesRendered: counters.framesRendered
+        framesRendered: counters.framesRendered,
+        ringDepthMs: null
       }
       state = { lastBytesIn: counters.bytesIn }
       return sample
