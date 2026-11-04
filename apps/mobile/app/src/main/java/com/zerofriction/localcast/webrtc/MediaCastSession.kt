@@ -130,6 +130,13 @@ class MediaCastSession(
     /** ADR-012: stereo game audio rides this bypass (encoder is mono-hard). */
     private var gameAudioChannel: GameAudioDataChannel? = null
 
+    /**
+     * ADR-013: the channel payload encoder (platform Opus). Null when the
+     * device has no platform Opus encoder — the channel then carries raw PCM
+     * (the ADR-012 payload, the desktop's legacy classification).
+     */
+    private var gameAudioOpusEncoder: GameAudioOpusEncoder? = null
+
     /** Game audio (Phase7) — null means game audio is off for this cast. */
     private var audio: PlaybackCaptureAudioSource? = null
     private var audioSource: AudioSource? = null
@@ -426,6 +433,13 @@ class MediaCastSession(
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
     private fun negotiate() {
         closePc()
+        // The payload chain (ADR-012/013) belongs to the closed pc — stop it
+        // before rebuilding, so re-auths never leave sender/encoder threads
+        // behind (the old build leaked the sender thread on every re-auth).
+        gameAudioOpusEncoder?.stop()
+        gameAudioOpusEncoder = null
+        gameAudioChannel?.close()
+        gameAudioChannel = null
         pendingCandidates.clear()
         val newFactory = factory ?: return
         val newTrack = videoTrack ?: return
@@ -453,18 +467,54 @@ class MediaCastSession(
         val currentAudioTrack = audioTrack
         if (currentAudioTrack !== null) {
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
-            // ADR-012: the track's encoder is mono-hard in the pinned prebuilt
-            // (audio.md) — true stereo rides the DataChannel instead; the
-            // track stays as the desktop's fallback when the channel is quiet.
+            // ADR-012/ADR-013: the track's encoder is mono-hard in the pinned
+            // prebuilt (audio.md) — true stereo rides the DataChannel instead;
+            // the track stays as the desktop's fallback when the channel is
+            // quiet. Payload per ADR-013: platform-encoded Opus when the
+            // device has it, raw PCM otherwise (the desktop classifies by
+            // message type — webrtc.md channel payload v1).
             val channel = GameAudioDataChannel()
             if (channel.attach(newPc)) {
                 gameAudioChannel = channel
-                audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+                wireGameAudioPayload(channel)
             }
         }
         onState(State.NEGOTIATING)
         restarts.onNegotiating(System.currentTimeMillis())
         createAndSendOffer(newPc)
+    }
+
+    /**
+     * ADR-013: pick the channel payload — platform Opus when the device has
+     * an encoder, raw PCM (the ADR-012 payload) otherwise. An encoder that
+     * fails before its first output packet has not announced a format, so the
+     * rewire back to PCM is invisible to the desktop; a later failure
+     * degrades through the desktop's quiet timer to the audio track.
+     */
+    private fun wireGameAudioPayload(channel: GameAudioDataChannel) {
+        val encoderName = GameAudioOpusEncoder.selectEncoder()
+        if (encoderName === null) {
+            Log.i(TAG, "game audio: no platform opus encoder — raw PCM payload (ADR-012)")
+            audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+            return
+        }
+        val encoder = GameAudioOpusEncoder(channel) { dead, reason -> onOpusEncoderDead(channel, dead, reason) }
+        gameAudioOpusEncoder = encoder
+        encoder.start(encoderName)
+        audio?.onEncoderInputSamples = encoder::feed
+        Log.i(TAG, "game audio: opus payload ($encoderName, ${GameAudioOpusEncoder.BITRATE_BPS} bps)")
+    }
+
+    /** The encoder thread's failure path — the session thread decides the rewire. */
+    private fun onOpusEncoderDead(channel: GameAudioDataChannel, dead: GameAudioOpusEncoder, reason: String) {
+        post {
+            // Stale-encoder guard: a re-auth may already have wired a fresh one.
+            if (!active || gameAudioOpusEncoder !== dead) return@post
+            Log.w(TAG, "game audio opus encoder dead ($reason) — the tap returns to raw PCM")
+            dead.stop()
+            gameAudioOpusEncoder = null
+            audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+        }
     }
 
     /**
@@ -898,6 +948,8 @@ class MediaCastSession(
         // Release a pre-opened capture record the substitution never consumed
         // (the consumed one is released by the ADM's own stop path).
         audio?.onEncoderInputSamples = null
+        gameAudioOpusEncoder?.stop()
+        gameAudioOpusEncoder = null
         gameAudioChannel?.close()
         gameAudioChannel = null
         audio?.release()

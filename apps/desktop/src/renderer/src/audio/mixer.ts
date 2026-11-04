@@ -110,6 +110,17 @@ export type MixerLogger = (
   details?: Record<string, unknown>
 ) => void
 
+/**
+ * The game-audio DataChannel's mixer surface (ADR-012/ADR-013): `push` takes
+ * legacy raw PCM (Int16LE interleave), `pushFrames` takes already-float
+ * stereo planes (the Opus decoder's output). Both feed the same worklet ring.
+ */
+export interface GamePcmFeed {
+  push(chunk: ArrayBuffer): void
+  pushFrames(left: Float32Array, right: Float32Array): void
+  detach(): void
+}
+
 export interface AudioMixerOptions {
   /** Production passes `AudioContext`; the cable context is built with a sinkId. */
   createAudioContext: (options?: { sinkId?: string }) => AudioContextLike
@@ -306,17 +317,19 @@ export class AudioMixer {
   }
 
   /**
-   * ADR-012: game audio as raw stereo PCM pushed from the mobile's
-   * `"game-audio"` DataChannel. The pinned libwebrtc build folds the ADM's
-   * stereo input to mono before its encoder (audio.md) — the received track
-   * is dual-mono — so the true stereo rides this path and this mixer renders
-   * it: Int16LE frames → Float32 → an AudioWorklet ring → the existing game
-   * gain node (volume/mute/routing unchanged). While PCM flows, the track
-   * source is stashed (it plays dual-mono — an echo under the stereo); if
-   * the channel goes quiet for [GAME_PCM_FALLBACK_MS] (older mobile build),
-   * the track returns automatically, and PCM re-claims the path on arrival.
+   * ADR-012/ADR-013: game audio pushed from the mobile's `"game-audio"`
+   * DataChannel. The pinned libwebrtc build folds the ADM's stereo input to
+   * mono before its encoder (audio.md) — the received track is dual-mono —
+   * so the true stereo rides this path and this mixer renders it: either
+   * Int16LE PCM frames → Float32, or (channel payload v1, ADR-013) WebCodecs
+   * Opus decode output — both into the same AudioWorklet ring → the existing
+   * game gain node (volume/mute/routing unchanged). While the channel flows,
+   * the track source is stashed (it plays dual-mono — an echo under the
+   * stereo); if the channel goes quiet for [GAME_PCM_FALLBACK_MS] (older
+   * mobile build, or a dead Opus decoder), the track returns automatically,
+   * and channel audio re-claims the path on arrival.
    */
-  async attachGamePcmSource(): Promise<{ push(chunk: ArrayBuffer): void; detach(): void } | null> {
+  async attachGamePcmSource(): Promise<GamePcmFeed | null> {
     const worklet = await this.ensureGamePcmWorklet()
     if (worklet === null) return null
     this.stashGameTrack()
@@ -329,6 +342,7 @@ export class AudioMixer {
     this.options.log('info', 'game audio switched to the stereo PCM path')
     return {
       push: (chunk) => this.pushGamePcm(chunk),
+      pushFrames: (left, right) => this.pushGameFrames(left, right),
       detach: () => this.detachGamePcmSource()
     }
   }
@@ -381,10 +395,6 @@ export class AudioMixer {
 
   /** One DataChannel message: Int16LE interleaved stereo PCM16 frames. */
   private pushGamePcm(chunk: ArrayBuffer): void {
-    this.gamePcmLastAt = Date.now()
-    const worklet = this.gamePcm
-    if (worklet === null) return
-    if (!this.gamePcmActive) this.activateGamePcm()
     const frames = new DataView(chunk)
     const sampleFrames = Math.floor(chunk.byteLength / 4)
     const left = new Float32Array(sampleFrames)
@@ -393,6 +403,18 @@ export class AudioMixer {
       left[i] = frames.getInt16(i * 4, true) / 32768
       right[i] = frames.getInt16(i * 4 + 2, true) / 32768
     }
+    this.pushGameFrames(left, right)
+  }
+
+  /**
+   * The ring's feeder, payload-agnostic (ADR-013: both the converted PCM and
+   * the Opus decode planes land here — one refresh of the fallback clock).
+   */
+  private pushGameFrames(left: Float32Array, right: Float32Array): void {
+    this.gamePcmLastAt = Date.now()
+    const worklet = this.gamePcm
+    if (worklet === null) return
+    if (!this.gamePcmActive) this.activateGamePcm()
     worklet.port.postMessage({ left, right })
   }
 

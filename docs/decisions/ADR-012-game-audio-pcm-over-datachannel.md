@@ -1,6 +1,6 @@
 # ADR-012: Game audio over a DataChannel (stereo PCM bypass of libwebrtc's audio encoder)
 
-- **Status:** accepted (2026-11-04) — amends the transport of factory A's game audio from [ADR-003](ADR-003-two-audio-track-architecture.md); the two-PC architecture and the mic's transport are unchanged
+- **Status:** accepted (2026-11-04) — amends the transport of factory A's game audio from [ADR-003](ADR-003-two-audio-track-architecture.md); the two-PC architecture and the mic's transport are unchanged. **Payload amendment (2026-11-04):** the raw-PCM payload below is superseded by [ADR-013](ADR-013-game-audio-opus-over-datachannel.md) (platform-encoded Opus on the same channel); the DataChannel decision, its reliability semantics, and the fallback design stand — this document's mobile "raw PCM" and desktop "Int16LE" wording describes the pre-ADR-013 payload, now the legacy fallback for older peers.
 
 ## Context
 

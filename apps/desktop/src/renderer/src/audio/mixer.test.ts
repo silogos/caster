@@ -41,12 +41,14 @@ class FakeGain implements GainNodeLike {
 
 class FakeSource implements MediaStreamAudioSourceNodeLike {
   connectedTo: unknown[] = []
+  connectCount = 0
   disconnectCount = 0
 
   constructor(readonly stream: unknown) {}
 
   connect(node: unknown): unknown {
     this.connectedTo.push(node)
+    this.connectCount += 1
     return node
   }
 
@@ -713,6 +715,46 @@ describe('game audio PCM path (ADR-012)', () => {
 
       feed.push(chunk) // PCM resumes — re-claims the path
       expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pushFrames feeds already-float planes (the ADR-013 Opus decode output) to the same ring', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = (await mixer.attachGamePcmSource())!
+
+    feed.pushFrames(Float32Array.from([0.25, -0.5]), Float32Array.from([0.75, -0.25]))
+    expect(host.node.port.postMessage).toHaveBeenCalledTimes(1)
+    const message = host.node.port.postMessage.mock.calls[0][0] as { left: Float32Array; right: Float32Array }
+    expect(Array.from(message.left)).toEqual([0.25, -0.5])
+    expect(Array.from(message.right)).toEqual([0.75, -0.25])
+  })
+
+  it('pushFrames keeps the fallback clock fresh — no track return while opus flows', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      mixer.attachStream('game', { id: 'stream' })
+      const trackSource = context.sources[0]
+      const feed = (await mixer.attachGamePcmSource())!
+
+      // Opus decode output arrives steadily, just under the grace window.
+      feed.pushFrames(Float32Array.from([1]), Float32Array.from([-1]))
+      vi.advanceTimersByTime(2_500)
+      feed.pushFrames(Float32Array.from([1]), Float32Array.from([-1]))
+      vi.advanceTimersByTime(2_500)
+      // The stash was connected once (initial attachStream); the fallback
+      // would reconnect it — the count staying at one proves it didn't.
+      expect(trackSource.connectCount).toBe(1)
+
+      // Silence past the window — the track takes over as always.
+      vi.advanceTimersByTime(2_000)
+      expect(trackSource.connectCount).toBe(2)
     } finally {
       vi.useRealTimers()
     }
