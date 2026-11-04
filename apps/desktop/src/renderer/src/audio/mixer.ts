@@ -315,8 +315,16 @@ export class AudioMixer {
    * source is stashed (it plays dual-mono — an echo under the stereo); if
    * the channel goes quiet for [GAME_PCM_FALLBACK_MS] (older mobile build),
    * the track returns automatically, and PCM re-claims the path on arrival.
+   *
+   * ADR-013: the channel's default payload is now ADTS-AAC — the caller
+   * (main.ts's handshake) decodes it and delivers the same `{left, right}`
+   * Float32 pairs through [pushFrames]; `push` stays the raw-PCM entry.
    */
-  async attachGamePcmSource(): Promise<{ push(chunk: ArrayBuffer): void; detach(): void } | null> {
+  async attachGamePcmSource(): Promise<{
+    push(chunk: ArrayBuffer): void
+    pushFrames(left: Float32Array, right: Float32Array): void
+    detach(): void
+  } | null> {
     const worklet = await this.ensureGamePcmWorklet()
     if (worklet === null) return null
     this.stashGameTrack()
@@ -329,6 +337,7 @@ export class AudioMixer {
     this.options.log('info', 'game audio switched to the stereo PCM path')
     return {
       push: (chunk) => this.pushGamePcm(chunk),
+      pushFrames: (left, right) => this.pushGameFrames(left, right),
       detach: () => this.detachGamePcmSource()
     }
   }
@@ -381,10 +390,6 @@ export class AudioMixer {
 
   /** One DataChannel message: Int16LE interleaved stereo PCM16 frames. */
   private pushGamePcm(chunk: ArrayBuffer): void {
-    this.gamePcmLastAt = Date.now()
-    const worklet = this.gamePcm
-    if (worklet === null) return
-    if (!this.gamePcmActive) this.activateGamePcm()
     const frames = new DataView(chunk)
     const sampleFrames = Math.floor(chunk.byteLength / 4)
     const left = new Float32Array(sampleFrames)
@@ -393,6 +398,19 @@ export class AudioMixer {
       left[i] = frames.getInt16(i * 4, true) / 32768
       right[i] = frames.getInt16(i * 4 + 2, true) / 32768
     }
+    this.pushGameFrames(left, right)
+  }
+
+  /**
+   * One decoded (ADR-013 AAC) or converted (ADR-012 PCM) stereo frame pair
+   * into the worklet ring — the fallback timer's liveness stamp sits here so
+   * both formats keep the channel "alive" the same way.
+   */
+  private pushGameFrames(left: Float32Array, right: Float32Array): void {
+    this.gamePcmLastAt = Date.now()
+    const worklet = this.gamePcm
+    if (worklet === null) return
+    if (!this.gamePcmActive) this.activateGamePcm()
     worklet.port.postMessage({ left, right })
   }
 

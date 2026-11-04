@@ -89,7 +89,7 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 | Game audio | Opus, 48 kHz, **stereo** | Music/game soundstage. The track is always part of the cast when RECORD_AUDIO allows; "game audio off" mutes it, never removes it (designs/mobile-app.html). Stereo is a *negotiated* property: libwebrtc's default is mono ~32 kbps, so the offer munges the Opus fmtp (`stereo=1; sprop-stereo=1; maxaveragebitrate=192000`, `SdpOpusFmtp`); Chromium's answer does **not** mirror the offer's fmtp (found live — it writes its own default), so the sender relaxes the answer to the same request before applying it, and the encoder goes stereo ([audio.md](audio.md) — found live: the mono downmix + low bitrate was heard as an echoey tint on the desktop). **Superseded for the payload by the DataChannel bypass below** — the track stays negotiated as the desktop's fallback, but its encoder is mono-hard in the pinned prebuilt (the SDP negotiation only shapes the decoder). |
 | Microphone | Opus, 48 kHz, **mono** | Voice. The only stream ever fully removed from a cast (its own PC, built/torn down on demand). |
 
-### DataChannel: `game-audio` (ADR-012, 2026-11-04)
+### DataChannel: `game-audio` (ADR-012, ADR-013; 2026-11-04)
 
 The pinned libwebrtc build downmixes the ADM's stereo input to mono **before** its Opus encoder — unconditionally: its only gate (`WebRTC-Audio-MultiChannelSend`) does not exist in any obtainable native lib (1.3.8/1.3.9/1.3.10 grep'd). True stereo therefore rides a **DataChannel** alongside the tracks on the `media` PC:
 
@@ -98,11 +98,12 @@ The pinned libwebrtc build downmixes the ADM's stereo input to mono **before** i
 | Label | `game-audio` |
 | Negotiation | in-band — the mobile creates it **before `createOffer`**; the desktop learns it via `ondatachannel` |
 | Reliability | `ordered=false`, `maxRetransmits=0` — a lost sliver is inaudible, a stalled stream is not |
-| Payload | raw PCM16 LE, interleaved stereo, 48 kHz — chunks at the ADM's read granularity (~10 ms, 3840 B) |
-| Sender policy | bounded drop-oldest queue (50 chunks ≈ 0.5 s) + `bufferedAmount` ceiling (100 kB); muted casts keep sending silence |
-| Desktop render | `Int16LE → Float32 → AudioWorklet` ring (16 384 frames) → the mixer's existing game gain node (volume/mute/cable routing unchanged); underrun = silence; **quiet > 3 s → automatic fallback to the dual-mono track** (older mobile builds degrade, not silence) |
+| Payload | **ADTS-framed AAC-LC by default** (ADR-013: 192 kbps CBR, 48 kHz stereo, one frame — 7-byte ADTS header + AAC access unit — per message, no out-of-band csd; the desktop synthesizes the ASC from the announced format); **raw PCM16 LE** as the fallback format (ADR-012's original payload, byte-identical) |
+| Format handshake | in-band text on the same channel (sub-protocol `v:1`): mobile sends periodic `{"v":1,"type":"announce","format":"adts-aac-192"\|"pcm16"}` while open; a capable desktop acks `{"v":1,"type":"ack","format":"adts-aac-192"}` and switches its inbound mode; mobile opens in PCM and switches to AAC **only on ack** — no ack within the window (old desktop) means PCM forever; a mid-cast encoder failure announces `pcm16` and reverts |
+| Sender policy | bounded drop-oldest queue (~0.5 s) + `bufferedAmount` ceiling; muted casts keep sending silence (AAC silence is a valid stream, PCM silence is zero frames) |
+| Desktop render | AAC: `AudioDecoder` (`mp4a.40.2`, ASC `[0x11,0x90]`) → `AudioData` → `{left,right}` Float32; PCM: `Int16LE → Float32` — both feed the **unchanged** `AudioWorklet` ring (16 384 frames) → the mixer's game gain node (volume/mute/cable routing unchanged); underrun = silence; **quiet > 3 s → automatic fallback to the dual-mono track** (older mobile builds degrade, not silence) |
 
-Bandwidth cost: ~1.5 Mbps steady on the LAN. The channel is additive — no signaling message changes, no envelope version bump; peers without it simply never open one, and the receiver falls back. Full decision: [ADR-012](../decisions/ADR-012-game-audio-pcm-over-datachannel.md).
+Bandwidth cost: ~0.21 Mbps with AAC (from ADR-012's ~1.5 Mbps PCM). The channel is additive — no signaling message changes, no envelope version bump; peers without it simply never open one, and the receiver falls back. Full decisions: [ADR-012](../decisions/ADR-012-game-audio-pcm-over-datachannel.md) (the channel), [ADR-013](../decisions/ADR-013-game-audio-aac-over-datachannel.md) (the AAC payload — codec+framing imported from TikTok's cast; the transport stays WebRTC).
 
 Initial sender targets (Phase 5, conservative, adjusted in Phases 10–12): 720p, 30 fps, 4–6 Mbps, `degradationPreference: BALANCED`. Sender-side parameters are set via `RTCRtpSender` parameters from the mobile `config` module only. Since the Advanced settings, the degradation preference (Balanced / Maintain framerate / Maintain resolution — per-preset defaults from the QualityProfile table) and an optional encoder-side fps cap (`maxFramerate`, none by default) are also config-driven.
 

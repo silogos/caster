@@ -1,6 +1,6 @@
 # ADR-012: Game audio over a DataChannel (stereo PCM bypass of libwebrtc's audio encoder)
 
-- **Status:** accepted (2026-11-04) — amends the transport of factory A's game audio from [ADR-003](ADR-003-two-audio-track-architecture.md); the two-PC architecture and the mic's transport are unchanged
+- **Status:** accepted (2026-11-04) — amends the transport of factory A's game audio from [ADR-003](ADR-003-two-audio-track-architecture.md); the two-PC architecture and the mic's transport are unchanged. **Payload superseded by [ADR-013](ADR-013-game-audio-aac-over-datachannel.md) (2026-11-04): the channel now carries ADTS-framed AAC-LC by default; this ADR's raw PCM remains the negotiated fallback format (no-ack/old-desktop/encoder-failure) and the fallback track is untouched. The 20 ms/3840 B chunk wording below was written against the design, not the code — the ADM feeds ~10 ms chunks (1920 B), as `GameAudioDataChannel` documents.**
 
 ## Context
 

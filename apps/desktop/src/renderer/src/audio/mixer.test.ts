@@ -735,3 +735,47 @@ describe('game audio PCM path (ADR-012)', () => {
     }
   })
 })
+
+/**
+ * ADR-013: the AAC path's decoded frames enter the same worklet through
+ * pushFrames — the identical message shape, and the same liveness stamp the
+ * quiet-fallback timer reads (a decoded stereo stream keeps the track
+ * stashed exactly like PCM does).
+ */
+describe('game audio decoded frames (ADR-013 pushFrames)', () => {
+  it('posts the decoded pair to the worklet port unchanged', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = (await mixer.attachGamePcmSource())!
+
+    feed.pushFrames(new Float32Array([0.5, 0.25]), new Float32Array([-0.5, -0.25]))
+
+    expect(host.node.port.postMessage).toHaveBeenCalledTimes(1)
+    const message = host.node.port.postMessage.mock.calls[0][0] as { left: Float32Array; right: Float32Array }
+    expect(Array.from(message.left)).toEqual([0.5, 0.25])
+    expect(Array.from(message.right)).toEqual([-0.5, -0.25])
+  })
+
+  it('decoded frames keep the path alive and re-claim it after a fallback', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      mixer.attachStream('game', { id: 'stream' })
+      const trackSource = context.sources[0]
+      const gain = context.gains[0]
+      const feed = (await mixer.attachGamePcmSource())!
+      feed.pushFrames(new Float32Array([0]), new Float32Array([0]))
+
+      vi.advanceTimersByTime(4_000) // quiet past the 3 s grace window
+      expect(trackSource.connectedTo).toContainEqual(gain)
+
+      feed.pushFrames(new Float32Array([0]), new Float32Array([0])) // AAC resumes
+      expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
