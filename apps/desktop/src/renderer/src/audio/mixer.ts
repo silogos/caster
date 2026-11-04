@@ -46,10 +46,34 @@ export interface GainNodeLike {
 export interface MediaStreamAudioSourceNodeLike {
   connect(node: unknown): unknown
   disconnect(): void
+  /** Chromium exposes it; undefined on fakes — the probe logs what it has. */
+  readonly channelCount?: number
+}
+
+/** Receiver-side channel diagnostics (issue #101): what actually arrives. */
+export interface AnalyserLike {
+  getFloatTimeDomainData(array: Float32Array): void
+}
+
+export interface ChannelSplitterLike {
+  connect(node: unknown, output?: number, input?: number): unknown
+  disconnect(): void
 }
 
 export interface MediaStreamAudioDestinationNodeLike {
   readonly stream: unknown
+}
+
+export interface AudioWorkletNodeLike {
+  port: { postMessage(message: unknown): void }
+  connect(node: unknown): unknown
+  disconnect(): void
+  /** Chromium exposes it; undefined on fakes — the probe logs what it has. */
+  readonly channelCount?: number
+}
+
+export interface AudioWorkletLike {
+  addModule(url: string): Promise<void>
 }
 
 export interface AudioContextLike {
@@ -58,9 +82,20 @@ export interface AudioContextLike {
   createGain(): GainNodeLike
   createMediaStreamSource(stream: unknown): MediaStreamAudioSourceNodeLike
   createMediaStreamDestination(): MediaStreamAudioDestinationNodeLike
+  /** Present on Chromium's context; absent on fakes — the probe is optional. */
+  createChannelSplitter?(numberOfOutputs: number): ChannelSplitterLike
+  createAnalyser?(): AnalyserLike
+  /** ADR-012: present on Chromium; the PCM game-audio path is optional like the probe. */
+  audioWorklet?: AudioWorkletLike
   resume(): Promise<void>
   setSinkId?(deviceId: string): Promise<void>
   close?(): Promise<void>
+}
+
+export interface WorkletNodeOptions {
+  numberOfInputs?: number
+  numberOfOutputs?: number
+  outputChannelCount?: number[]
 }
 
 /** localStorage satisfies this; injected so tests run in plain Node. */
@@ -78,6 +113,12 @@ export type MixerLogger = (
 export interface AudioMixerOptions {
   /** Production passes `AudioContext`; the cable context is built with a sinkId. */
   createAudioContext: (options?: { sinkId?: string }) => AudioContextLike
+  /** ADR-012: production passes `new AudioWorkletNode` — no method exists on the context. */
+  createWorkletNode: (
+    context: AudioContextLike,
+    name: string,
+    options?: WorkletNodeOptions
+  ) => AudioWorkletNodeLike
   /** Persisted levels and routing mode, restored on launch; omit for an in-memory mixer. */
   storage?: MixerStorage
   log: MixerLogger
@@ -87,10 +128,23 @@ const STORAGE_KEY = 'zfc.audio-mixer.v1'
 const CHANNELS: readonly MixerChannel[] = ['game', 'mic']
 const DEFAULT_LEVEL: MixerLevel = { volume: 1, muted: false }
 
+/** Silence the PCM fallback waits before handing the path back to the track. */
+const GAME_PCM_FALLBACK_MS = 3_000
+
+/** The worklet as a real asset — Blob URLs fail in file:// renderers (found live). */
+const GAME_PCM_WORKLET_URL = new URL('./game-pcm-worklet.js', import.meta.url)
+
 /** Muting silences the channel without losing the stored volume. */
 const effectiveGain = (level: MixerLevel): number => (level.muted ? 0 : level.volume)
 
 const clampVolume = (volume: number): number => Math.min(1, Math.max(0, volume))
+
+/** Mean absolute sample level of an analyser window (0..1 range diagnostics). */
+const meanAbsLevel = (window: Float32Array): number => {
+  let sum = 0
+  for (const sample of window) sum += Math.abs(sample)
+  return sum / window.length
+}
 
 const isValidLevel = (value: unknown): value is MixerLevel => {
   if (typeof value !== 'object' || value === null) return false
@@ -129,6 +183,16 @@ export class AudioMixer {
   private perTrackCableSources: Partial<Record<MixerChannel, MediaStreamAudioSourceNodeLike>> = {}
   /** The sink each per-track context was built with — a changed device id means rebuild. */
   private perTrackSinkIds: Partial<Record<MixerChannel, string>> = {}
+  /** The receiver-side channel probe (issue #101) — parallel, never audible. */
+  private channelProbe: { splitter: ChannelSplitterLike; left: AnalyserLike; right: AnalyserLike } | null = null
+  private channelProbeTimer: ReturnType<typeof setInterval> | null = null
+  /** ADR-012: the PCM game-audio path — the worklet feeding the game gain. */
+  private gamePcm: AudioWorkletNodeLike | null = null
+  private gamePcmModuleLoading: Promise<void> | null = null
+  private gamePcmActive = false
+  private gamePcmLastAt = 0
+  private gamePcmFallbackTimer: ReturnType<typeof setInterval> | null = null
+  private gamePcmTrackStash: MediaStreamAudioSourceNodeLike | null = null
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -219,16 +283,209 @@ export class AudioMixer {
     gain.gain.value = effectiveGain(this.levels[channel])
     wiring.source?.disconnect()
     const source = context.createMediaStreamSource(stream)
+    if (channel === 'game' && this.gamePcmActive) {
+      // ADR-012: the stereo PCM owns the audible path — hold the arriving
+      // dual-mono track for the fallback instead of wiring it in.
+      source.disconnect()
+      this.gamePcmTrackStash = source
+      return
+    }
     source.connect(gain)
     wiring.source = source
+    this.attachChannelProbe(channel, source)
     this.applyRouting()
   }
 
   /** Stop a channel's stream (mic toggled off, mobile gone). The stored level survives. */
   detachStream(channel: MixerChannel): void {
     const wiring = this.wiring[channel]
+    this.detachChannelProbe()
     wiring.source?.disconnect()
     wiring.source = null
+    if (channel === 'game') this.detachGamePcmSource()
+  }
+
+  /**
+   * ADR-012: game audio as raw stereo PCM pushed from the mobile's
+   * `"game-audio"` DataChannel. The pinned libwebrtc build folds the ADM's
+   * stereo input to mono before its encoder (audio.md) — the received track
+   * is dual-mono — so the true stereo rides this path and this mixer renders
+   * it: Int16LE frames → Float32 → an AudioWorklet ring → the existing game
+   * gain node (volume/mute/routing unchanged). While PCM flows, the track
+   * source is stashed (it plays dual-mono — an echo under the stereo); if
+   * the channel goes quiet for [GAME_PCM_FALLBACK_MS] (older mobile build),
+   * the track returns automatically, and PCM re-claims the path on arrival.
+   */
+  async attachGamePcmSource(): Promise<{ push(chunk: ArrayBuffer): void; detach(): void } | null> {
+    const worklet = await this.ensureGamePcmWorklet()
+    if (worklet === null) return null
+    this.stashGameTrack()
+    this.gamePcmActive = true
+    this.gamePcmLastAt = Date.now()
+    this.attachChannelProbe('game', worklet)
+    if (this.gamePcmFallbackTimer === null) {
+      this.gamePcmFallbackTimer = setInterval(() => this.reconcileGamePcmFallback(), 1_000)
+    }
+    this.options.log('info', 'game audio switched to the stereo PCM path')
+    return {
+      push: (chunk) => this.pushGamePcm(chunk),
+      detach: () => this.detachGamePcmSource()
+    }
+  }
+
+  /**
+   * Builds the worklet once. `audioWorklet.addModule` is asynchronous — the
+   * node may only be constructed after the module's promise resolves (found
+   * live: a sync build threw `InvalidStateError`, no valid global scope).
+   */
+  private async ensureGamePcmWorklet(): Promise<AudioWorkletNodeLike | null> {
+    if (this.gamePcm !== null) return this.gamePcm
+    const context = this.ensureContext()
+    if (context === null) return null
+    if (context.audioWorklet === undefined) {
+      this.options.log('warn', 'game pcm unavailable: AudioWorklet missing in this context')
+      return null
+    }
+    try {
+      if (this.gamePcmModuleLoading === null) {
+        this.gamePcmModuleLoading = context.audioWorklet.addModule(GAME_PCM_WORKLET_URL.href)
+      }
+      await this.gamePcmModuleLoading
+      const node = this.options.createWorkletNode(context, 'game-pcm', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2]
+      })
+      const gain = this.ensureGain('game', context)
+      gain.gain.value = effectiveGain(this.levels.game)
+      node.connect(gain)
+      this.applyRouting()
+      this.gamePcm = node
+      return node
+    } catch (error) {
+      this.gamePcmModuleLoading = null // a failed load must be retryable
+      this.options.log('warn', 'game pcm worklet build failed', { error: String(error) })
+      return null
+    }
+  }
+
+  /** Takes the dual-mono track out of the audible path but keeps it for the fallback. */
+  private stashGameTrack(): void {
+    const source = this.wiring.game.source
+    if (source !== null) {
+      source.disconnect()
+      this.wiring.game.source = null
+      this.gamePcmTrackStash = source
+    }
+  }
+
+  /** One DataChannel message: Int16LE interleaved stereo PCM16 frames. */
+  private pushGamePcm(chunk: ArrayBuffer): void {
+    this.gamePcmLastAt = Date.now()
+    const worklet = this.gamePcm
+    if (worklet === null) return
+    if (!this.gamePcmActive) this.activateGamePcm()
+    const frames = new DataView(chunk)
+    const sampleFrames = Math.floor(chunk.byteLength / 4)
+    const left = new Float32Array(sampleFrames)
+    const right = new Float32Array(sampleFrames)
+    for (let i = 0; i < sampleFrames; i++) {
+      left[i] = frames.getInt16(i * 4, true) / 32768
+      right[i] = frames.getInt16(i * 4 + 2, true) / 32768
+    }
+    worklet.port.postMessage({ left, right })
+  }
+
+  private activateGamePcm(): void {
+    const gain = this.wiring.game.gain
+    const worklet = this.gamePcm
+    if (gain === null || worklet === null) return
+    this.stashGameTrack()
+    worklet.connect(gain)
+    this.gamePcmActive = true
+    this.attachChannelProbe('game', worklet)
+  }
+
+  /** The 1 s tick: a quiet channel hands the audible path back to the track. */
+  private reconcileGamePcmFallback(): void {
+    if (!this.gamePcmActive) return
+    if (Date.now() - this.gamePcmLastAt <= GAME_PCM_FALLBACK_MS) return
+    const gain = this.wiring.game.gain
+    if (gain !== null) this.gamePcm?.disconnect()
+    this.gamePcmActive = false
+    const stash = this.gamePcmTrackStash
+    this.gamePcmTrackStash = null
+    if (stash !== null && gain !== null) {
+      stash.connect(gain)
+      this.wiring.game.source = stash
+      this.attachChannelProbe('game', stash)
+    }
+    this.options.log('warn', 'game pcm quiet — fell back to the audio track (dual-mono)')
+  }
+
+  detachGamePcmSource(): void {
+    if (this.gamePcmFallbackTimer !== null) {
+      clearInterval(this.gamePcmFallbackTimer)
+      this.gamePcmFallbackTimer = null
+    }
+    const gain = this.wiring.game.gain
+    if (gain !== null) this.gamePcm?.disconnect()
+    this.gamePcmActive = false
+  }
+
+  /**
+   * Receiver-side channel diagnostics (issue #101): every sender-side probe
+   * ends at the ADM — this one measures what actually ARRIVES at the
+   * receiver, as per-channel levels of the remote stream through a parallel
+   * splitter (never in the audible path), logged every 2 s. Numbers only.
+   */
+  private attachChannelProbe(channel: MixerChannel, source: MediaStreamAudioSourceNodeLike): void {
+    const context = this.context
+    if (context === null || context.createChannelSplitter === undefined || context.createAnalyser === undefined) {
+      return
+    }
+    this.detachChannelProbe()
+    try {
+      const splitter = context.createChannelSplitter(2)
+      const left = context.createAnalyser()
+      const right = context.createAnalyser()
+      source.connect(splitter)
+      splitter.connect(left, 0)
+      splitter.connect(right, 1)
+      this.channelProbe = { splitter, left, right }
+      const window = new Float32Array(2048)
+      this.channelProbeTimer = setInterval(() => {
+        const probe = this.channelProbe
+        if (probe === null) return
+        probe.left.getFloatTimeDomainData(window)
+        const leftLevel = meanAbsLevel(window)
+        probe.right.getFloatTimeDomainData(window)
+        const rightLevel = meanAbsLevel(window)
+        this.options.log('info', 'received stream channels', {
+          channel,
+          channelCount: source.channelCount,
+          left: leftLevel,
+          right: rightLevel
+        })
+      }, 2_000)
+    } catch (error) {
+      this.options.log('warn', 'channel probe unavailable', { error: String(error) })
+    }
+  }
+
+  private detachChannelProbe(): void {
+    if (this.channelProbeTimer !== null) {
+      clearInterval(this.channelProbeTimer)
+      this.channelProbeTimer = null
+    }
+    if (this.channelProbe !== null) {
+      try {
+        this.channelProbe.splitter.disconnect()
+      } catch {
+        // The splitter's source already disconnected — nothing to save.
+      }
+      this.channelProbe = null
+    }
   }
 
   private applyGain(channel: MixerChannel): void {

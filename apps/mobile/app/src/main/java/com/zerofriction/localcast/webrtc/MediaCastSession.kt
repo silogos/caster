@@ -127,6 +127,8 @@ class MediaCastSession(
     private var capturer: ScreenCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
+    /** ADR-012: stereo game audio rides this bypass (encoder is mono-hard). */
+    private var gameAudioChannel: GameAudioDataChannel? = null
 
     /** Game audio (Phase7) — null means game audio is off for this cast. */
     private var audio: PlaybackCaptureAudioSource? = null
@@ -284,7 +286,15 @@ class MediaCastSession(
     private fun buildOnThread() {
         try {
             PeerConnectionFactory.initialize(
-                PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions(),
+                PeerConnectionFactory.InitializationOptions.builder(context)
+                    // Multichannel (stereo) send is gated behind this trial in
+                    // libwebrtc's audio send path — without it the capture is
+                    // downmixed to mono through the audio processing module
+                    // even with stereo negotiated (found live 2026-11-04;
+                    // see webrtc issue 41481053). The mic pc stays trial-free:
+                    // mono voice is by design.
+                    .setFieldTrials(MULTICHANNEL_SEND_FIELD_TRIAL)
+                    .createInitializationOptions(),
             )
             val egl = EglBase.create()
             eglBase = egl
@@ -326,6 +336,11 @@ class MediaCastSession(
             capturer = newCapturer
             newCapturer.initialize(helper, context, source.capturerObserver)
             newCapturer.startCapture(width, height, config.fps)
+            // The projection is live the moment the capturer starts — open the
+            // capture record NOW, before WebRTC creates its microphone record
+            // at transport start (session-ordering fix for the one-channel
+            // fold, issue #101; see PlaybackCaptureAudioSource.preOpenCapture).
+            newAudio?.preOpenCapture()
             captureWidth = width
             captureHeight = height
             // The cast starts at the user's own rung (= the ceiling) — the
@@ -358,10 +373,14 @@ class MediaCastSession(
             if (newAudio !== null) {
                 val constraints = MediaConstraints().apply {
                     // Captured playback is finished audio (audio.md): refuse
-                    // the APM's mic-shaped processing on it.
-                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "false"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
-                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                    // the APM's mic-shaped processing on it — every stage of
+                    // it, not just the three big ones.
+                    listOf(
+                        "googEchoCancellation", "googEchoCancellation2", "googDAEchoCancellation",
+                        "googAutoGainControl", "googAutoGainControl2",
+                        "googNoiseSuppression", "googNoiseSuppression2",
+                        "googHighpassFilter", "googTypingNoiseDetection",
+                    ).forEach { mandatory.add(MediaConstraints.KeyValuePair(it, "false")) }
                 }
                 val newAudioSource = newFactory.createAudioSource(constraints)
                 audioSource = newAudioSource
@@ -434,6 +453,14 @@ class MediaCastSession(
         val currentAudioTrack = audioTrack
         if (currentAudioTrack !== null) {
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
+            // ADR-012: the track's encoder is mono-hard in the pinned prebuilt
+            // (audio.md) — true stereo rides the DataChannel instead; the
+            // track stays as the desktop's fallback when the channel is quiet.
+            val channel = GameAudioDataChannel()
+            if (channel.attach(newPc)) {
+                gameAudioChannel = channel
+                audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+            }
         }
         onState(State.NEGOTIATING)
         restarts.onNegotiating(System.currentTimeMillis())
@@ -458,18 +485,23 @@ class MediaCastSession(
         createAndSendOffer(currentPc)
     }
 
-    /** createOffer → codec order → setLocalDescription → offer over signaling. */
+    /** createOffer → codec order + Opus stereo fmtp → setLocalDescription → offer over signaling. */
     private fun createAndSendOffer(target: PeerConnection) {
         target.createOffer(
             object : SdpObserver {
                 override fun onCreateSuccess(original: SessionDescription) {
                     // Codec policy lives in the offer (webrtc.md): the
-                    // config's preferred codec first (H.264 by default).
+                    // config's preferred codec first (H.264 by default), and
+                    // game audio as Opus stereo — the negotiated default is
+                    // mono 32 kbps, so the offer asks and the answer is
+                    // relaxed to the same request (SdpOpusFmtp).
                     val munged = SessionDescription(
                         original.type,
-                        SdpCodecOrderer.preferVideoCodecs(
-                            original.description,
-                            SdpCodecOrderer.preferenceFor(config.preferredCodec),
+                        SdpOpusFmtp.preferStereo(
+                            SdpCodecOrderer.preferVideoCodecs(
+                                original.description,
+                                SdpCodecOrderer.preferenceFor(config.preferredCodec),
+                            ),
                         ),
                     )
                     target.setLocalDescription(
@@ -499,6 +531,13 @@ class MediaCastSession(
 
     private fun applyAnswer(sdp: String) {
         val currentPc = pc ?: return
+        // Stereo-path diagnostics: Chromium generates its own default Opus
+        // fmtp instead of mirroring the offer's (found live 2026-11-03 — the
+        // answer carried only minptime/useinbandfec), so the answer is
+        // relaxed to what the offer asked for before it is applied.
+        Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
+        val negotiated = SessionDescription(SessionDescription.Type.ANSWER, SdpOpusFmtp.preferStereo(sdp))
+        Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(negotiated.description) ?: "none"}")
         currentPc.setRemoteDescription(
             object : SdpObserver {
                 override fun onSetSuccess() {
@@ -516,7 +555,7 @@ class MediaCastSession(
                 override fun onCreateSuccess(description: SessionDescription) = Unit
                 override fun onCreateFailure(error: String?) = Unit
             },
-            SessionDescription(SessionDescription.Type.ANSWER, sdp),
+            negotiated,
         )
     }
 
@@ -856,6 +895,12 @@ class MediaCastSession(
         audioTrack = null
         audioSource?.dispose()
         audioSource = null
+        // Release a pre-opened capture record the substitution never consumed
+        // (the consumed one is released by the ADM's own stop path).
+        audio?.onEncoderInputSamples = null
+        gameAudioChannel?.close()
+        gameAudioChannel = null
+        audio?.release()
         // The audio ADM is owned (and released) by the factory below —
         // JavaAudioDeviceModule.release() must not be called from app code.
         audio = null
@@ -885,6 +930,9 @@ class MediaCastSession(
 
     companion object {
         private const val TAG = "MediaCastSession"
+
+        /** Un-gates libwebrtc's stereo/multichannel send path (see initialize). */
+        private const val MULTICHANNEL_SEND_FIELD_TRIAL = "WebRTC-Audio-MultiChannelSend/Enabled/"
 
         /** webrtc.md: each side polls getStats ~1 Hz. */
         const val STATS_INTERVAL_MS = 1_000L

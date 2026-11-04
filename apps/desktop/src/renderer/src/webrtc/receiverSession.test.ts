@@ -45,6 +45,7 @@ class FakePc implements PeerConnectionLike {
   onicecandidate: ((event: { candidate: unknown }) => void) | null = null
   onconnectionstatechange: (() => void) | null = null
   ontrack: ((event: { track: unknown; streams: unknown[] }) => void) | null = null
+  ondatachannel: ((event: { channel: { label: string } & Record<string, unknown> }) => void) | null = null
 
   constructor(private readonly remoteGate: Gate | null = null) {}
 

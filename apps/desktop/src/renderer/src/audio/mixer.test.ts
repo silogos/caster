@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AudioMixer,
+  type AnalyserLike,
   type AudioContextLike,
+  type AudioWorkletLike,
+  type AudioWorkletNodeLike,
+  type ChannelSplitterLike,
   type GainNodeLike,
   type MediaStreamAudioDestinationNodeLike,
   type MediaStreamAudioSourceNodeLike,
@@ -90,6 +94,41 @@ class FakeContext implements AudioContextLike {
     this.destinations.push(destination)
     return destination
   }
+
+  /** Opt-in per test: the PCM game-audio path (ADR-012) needs both surfaces. */
+  audioWorklet: AudioWorkletLike | undefined = undefined
+
+  enableWorkletHost(): FakeWorkletHost {
+    const host = new FakeWorkletHost()
+    this.audioWorklet = host
+    return host
+  }
+}
+
+class FakeWorkletNode implements AudioWorkletNodeLike {
+  port = { postMessage: vi.fn() }
+  connectedTo: unknown[] = []
+  disconnectCount = 0
+  channelCount = 2
+
+  connect(node: unknown): unknown {
+    this.connectedTo.push(node)
+    return node
+  }
+
+  disconnect(): void {
+    this.disconnectCount += 1
+  }
+}
+
+class FakeWorkletHost implements AudioWorkletLike {
+  readonly node = new FakeWorkletNode()
+  addedModules: string[] = []
+
+  addModule(url: string): Promise<void> {
+    this.addedModules.push(url)
+    return Promise.resolve()
+  }
 }
 
 /** In-memory localStorage stand-in with the same stringly surface. */
@@ -114,8 +153,14 @@ const makeMixer = (
   options: Partial<ConstructorParameters<typeof AudioMixer>[0]> & { storage?: MixerStorage } = {}
 ) => {
   const createAudioContext = options.createAudioContext ?? (() => new FakeContext())
+  const createWorkletNode =
+    options.createWorkletNode ??
+    ((context: AudioContextLike) => {
+      const host = (context as FakeContext).audioWorklet as FakeWorkletHost
+      return host.node
+    })
   const log = options.log ?? (vi.fn() as unknown as MixerLogger)
-  const mixer = new AudioMixer({ createAudioContext, storage: options.storage, log })
+  const mixer = new AudioMixer({ createAudioContext, createWorkletNode, storage: options.storage, log })
   return { mixer, createAudioContext, log: log as unknown as ReturnType<typeof vi.fn> }
 }
 
@@ -508,5 +553,185 @@ describe('AudioMixer — per-track cable routing (ADR-008 batch A + review fixes
     expect(gameContexts).toHaveLength(2)
     expect(gameContexts[0].closed).toBe(true) // the old sink is gone
     expect(gameContexts[1].sinkId).toBe('zf-game-2')
+  })
+})
+
+describe('receiver-side channel probe (issue #101)', () => {
+  class FakeAnalyser implements AnalyserLike {
+    constructor(readonly level: number) {}
+    getFloatTimeDomainData(array: Float32Array): void {
+      for (let i = 0; i < array.length; i++) array[i] = i % 2 === 0 ? this.level : -this.level
+    }
+  }
+
+  class FakeSplitter implements ChannelSplitterLike {
+    connected: Array<[unknown, number | undefined]> = []
+    disconnectCount = 0
+    connect(node: unknown, output?: number): unknown {
+      this.connected.push([node, output])
+      return node
+    }
+    disconnect(): void {
+      this.disconnectCount += 1
+    }
+  }
+
+  class ProbingContext extends FakeContext {
+    readonly splitter = new FakeSplitter()
+    createChannelSplitter(): ChannelSplitterLike {
+      return this.splitter
+    }
+
+    createAnalyser(): AnalyserLike {
+      // Left channel loud, right channel quiet — the shape the probe must report.
+      this.analysers.push(new FakeAnalyser(this.analysers.length === 0 ? 0.5 : 0.01))
+      return this.analysers[this.analysers.length - 1]
+    }
+
+    analysers: FakeAnalyser[] = []
+  }
+
+  it('logs per-channel levels of the attached stream every 2 s', () => {
+    vi.useFakeTimers()
+    const context = new ProbingContext()
+    const logs: Array<{ level: string; message: string; details?: Record<string, unknown> }> = []
+    const mixer = new AudioMixer({
+      createAudioContext: () => context,
+      createWorkletNode: () => new FakeWorkletNode(),
+      log: (level, message, details) => logs.push({ level, message, details })
+    })
+    mixer.attachStream('game', { id: 'stream' })
+    expect(context.splitter.connected).toHaveLength(2) // splitter taps both channels
+
+    vi.advanceTimersByTime(2_000)
+    const report = logs.filter((entry) => entry.message === 'received stream channels')
+    expect(report).toHaveLength(1)
+    expect(report[0].details?.left).toBeGreaterThan(0.4)
+    expect(report[0].details?.right).toBeLessThan(0.05)
+
+    vi.advanceTimersByTime(2_000)
+    expect(logs.filter((entry) => entry.message === 'received stream channels')).toHaveLength(2)
+
+    mixer.detachStream('game')
+    vi.advanceTimersByTime(6_000)
+    expect(logs.filter((entry) => entry.message === 'received stream channels')).toHaveLength(2) // stopped
+    vi.useRealTimers()
+  })
+
+  it('skips the probe silently on a context without analysers', () => {
+    const logs: Array<{ level: string; message: string }> = []
+    const mixer = new AudioMixer({
+      createAudioContext: () => new FakeContext(),
+      createWorkletNode: () => new FakeWorkletNode(),
+      log: (level, message) => logs.push({ level, message })
+    })
+    mixer.attachStream('game', { id: 'stream' })
+    expect(logs.some((entry) => entry.message === 'channel probe unavailable')).toBe(false)
+  })
+})
+
+/**
+ * ADR-012's PCM game-audio path: the DataChannel chunks arrive as Int16LE
+ * stereo frames; the mixer converts them to Float32, feeds the worklet ring
+ * behind the game gain, keeps the dual-mono track stashed (echo guard), and
+ * hands the path back to the track when the channel goes quiet.
+ */
+describe('game audio PCM path (ADR-012)', () => {
+  /** Two stereo Int16LE frames: L=16384/8192, R=-16384/-8192 (convert to 0.5/0.25 and −0.5/−0.25). */
+  const chunk = (() => {
+    const view = new DataView(new ArrayBuffer(8))
+    view.setInt16(0, 16384, true)
+    view.setInt16(2, -16384, true)
+    view.setInt16(4, 8192, true)
+    view.setInt16(6, -8192, true)
+    return view.buffer
+  })()
+
+  it('returns null with a log line when the context has no AudioWorklet', async () => {
+    const context = new FakeContext()
+    const { mixer, log } = makeMixer({ createAudioContext: () => context })
+    expect(await mixer.attachGamePcmSource()).toBeNull()
+    expect(log).toHaveBeenCalledWith('warn', 'game pcm unavailable: AudioWorklet missing in this context')
+  })
+
+  it('attaches the worklet to the game gain and stashes an attached track source', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    mixer.attachStream('game', { id: 'stream' })
+    const trackSource = context.sources[0]
+
+    const feed = await mixer.attachGamePcmSource()
+    expect(feed).not.toBeNull()
+    expect(host.addedModules).toHaveLength(1)
+    expect(host.node.connectedTo).toContainEqual(context.gains[0])
+    // Echo guard: the dual-mono track leaves the audible path.
+    expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(1)
+  })
+
+  it('push converts Int16LE stereo frames to Float32 and feeds the worklet port', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = (await mixer.attachGamePcmSource())!
+    feed.push(chunk)
+
+    expect(host.node.port.postMessage).toHaveBeenCalledTimes(1)
+    const message = host.node.port.postMessage.mock.calls[0][0] as { left: Float32Array; right: Float32Array }
+    expect(Array.from(message.left)).toEqual([0.5, 0.25])
+    expect(Array.from(message.right)).toEqual([-0.5, -0.25])
+  })
+
+  it('a stream arriving while PCM is active is stashed, not wired to the gain', async () => {
+    const context = new FakeContext()
+    context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    await mixer.attachGamePcmSource()
+    const gain = context.gains[0]
+    const connectedBefore = gain.connectedTo.length
+
+    mixer.attachStream('game', { id: 'late-stream' })
+    expect(context.sources[0].connectedTo).toHaveLength(0) // stashed, silent
+    expect(gain.connectedTo.slice(connectedBefore)).not.toContainEqual(context.sources[0])
+  })
+
+  it('a quiet channel falls back to the stashed track, and PCM re-claims on arrival', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      mixer.attachStream('game', { id: 'stream' })
+      const trackSource = context.sources[0]
+      const gain = context.gains[0]
+      const feed = (await mixer.attachGamePcmSource())!
+      feed.push(chunk)
+
+      vi.advanceTimersByTime(4_000) // quiet past the 3 s grace window (1 s ticks)
+      expect(trackSource.connectedTo).toContainEqual(gain) // track back on the path
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+
+      feed.push(chunk) // PCM resumes — re-claims the path
+      expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('detach stops the fallback timer and disconnects the worklet', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      const feed = (await mixer.attachGamePcmSource())!
+      feed.detach()
+
+      vi.advanceTimersByTime(10_000)
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+      // No fallback ticks fired after detach — the log stays silent.
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -51,18 +51,116 @@ class PlaybackCaptureAudioSource(
 ) {
     val state: GameAudioState get() = monitor.state.value
 
+    /** For the start-of-capture diagnostics ([AudioPolicySinkProbe]). */
+    private val appContext: Context = context
+
+    /** Fed on the ADM's recording thread alongside the silence monitor. */
+    private val stereoContentProbe = StereoContentProbe()
+
+    /** Self-heal for the mono-born tap (see [MonoTapRecovery]). */
+    private val monoTapRecovery = MonoTapRecovery()
+
+    /** What a mid-cast capture rebuild needs — cached at the initial substitution. */
+    private class SwapContext(val audioInput: Any, val sampleRate: Int, val channelCount: Int, val readBytes: Int)
+
+    private var swapContext: SwapContext? = null
+
+    /**
+     * The channel-mask flavor the main record builds with. The sweep adopts
+     * a healthier flavor when it finds one (found live: the test ROM's tap
+     * delivers one channel for [MaskKind.IN] records — see [sweepCaptureFlavors]).
+     */
+    @Volatile
+    private var preferredMask: MaskKind = MaskKind.IN
+
+    /** A rebuild requested off the recording thread (sweep adoption) — consumed per frame. */
+    @Volatile
+    private var pendingRebuildReason: String? = null
+
+    /**
+     * True while a hard reset idles with no record — the ADM's read loop then
+     * fails benignly on the released record; those errors must not surface as
+     * a capture failure ([GameAudioState.Failed]) because the cast continues.
+     */
+    @Volatile
+    private var hardResetInProgress = false
+
+    /**
+     * The capture record opened by [preOpenCapture] — BEFORE the ADM's
+     * microphone record exists — consumed by the initial substitution and
+     * released there or by [release] if the cast never reaches record start.
+     * Volatile: written on the session thread, consumed on the ADM's
+     * recording thread.
+     */
+    @Volatile
+    private var preOpenedRecord: AudioRecord? = null
+
+    /**
+     * Opt-in per-cast WAV dump of the encoder-consumed bytes (issue #101
+     * diagnostics) — enabled by the `localcast_capture_dump` global setting
+     * via adb, bounded by the recorder, closed at teardown.
+     */
+    @Volatile
+    private var captureDump: AudioCaptureFileRecorder? = null
+
+    /**
+     * ADR-012: the encoder-input bytes offered to the session's DataChannel
+     * sender (the bytes the prebuilt encoder folds to mono). Set by the
+     * session when the game-audio channel is attached; invoked on the ADM's
+     * recording thread — implementations must not block.
+     */
+    @Volatile
+    var onEncoderInputSamples: ((ByteArray) -> Unit)? = null
+
+    /** The flavor sweep runs once, at the first loud window (a silent sweep measures nothing). */
+    @Volatile
+    private var sweepStarted = false
+
+
     /** Plugged into factory A (`media` pc) — its recorder is substituted at start. */
     val adm: AudioDeviceModule = JavaAudioDeviceModule.builder(context)
         // Captured playback is finished audio; platform mic effects would only distort it.
         .setUseHardwareAcousticEchoCanceler(false)
         .setUseHardwareNoiseSuppressor(false)
-        .setUseStereoInput(true) // audio.md:48 kHz stereo PCM16 → Opus stereo
+        // Shapes the record only — the *transport* is stereo only because the
+        // offer's fmtp asks for it (SdpOpusFmtp in MediaCastSession).
+        .setUseStereoInput(true)
+        // Pinned so the pre-opened capture record ([preOpenCapture]) mirrors
+        // the ADM record byte-for-byte; WebRTC's default may drift (16 kHz
+        // builds existed) and a mismatched pre-open would be thrown away.
+        .setInputSampleRate(PINNED_INPUT_SAMPLE_RATE)
         .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
             override fun onWebRtcAudioRecordStart() = substitutePlaybackCaptureRecord()
             override fun onWebRtcAudioRecordStop() = Unit
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            onEncoderInputSamples?.invoke(samples.data)
+            // A capped dump steps aside so the next dump starts — a long
+            // session gets successive bounded files instead of just the first.
+            captureDump?.let { dump -> if (dump.isClosed) captureDump = null }
+            if (captureDump === null) maybeStartCaptureDump()
+            captureDump?.onSamples(samples.data)
+            // Stereo diagnostics + tap self-heal (audio.md): whether the mix
+            // carries L≠R, one report per second, a bounded capture-record
+            // rebuild when the tap is born with a dead channel, and a
+            // mask-flavor sweep at the first loud window.
+            stereoContentProbe.onSamples(samples.data)?.let { report ->
+                Log.i(TAG, "capture stereo content: ${report.summarize()}")
+                if (!sweepStarted && report.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
+                    // The sweep is RETIRED (found live 2026-11-04): every extra
+                    // client in another format re-configures the shared submix
+                    // input thread and flips it back into the one-channel fold —
+                    // the exact instability this cast must not create itself.
+                    // Its findings live in issue #101 and audio.md.
+                    sweepStarted = true
+                }
+                pendingRebuildReason?.let { reason ->
+                    pendingRebuildReason = null
+                    rebuildCaptureRecord(reason)
+                }
+                monoTapRecovery.onReport(report)?.let { reason -> rebuildCaptureRecord(reason) }
+            }
         }
         .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
             override fun onWebRtcAudioRecordInitError(errorMessage: String) = captureFailed("record init: $errorMessage")
@@ -70,7 +168,15 @@ class PlaybackCaptureAudioSource(
                 errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
                 errorMessage: String,
             ) = captureFailed("record start ($errorCode): $errorMessage")
-            override fun onWebRtcAudioRecordError(errorMessage: String) = captureFailed("record error: $errorMessage")
+            override fun onWebRtcAudioRecordError(errorMessage: String) {
+                // During a hard reset the read loop hits a released record by
+                // design — not a capture failure, the cast continues.
+                if (hardResetInProgress) {
+                    Log.i(TAG, "record error during hard reset (expected): $errorMessage")
+                    return
+                }
+                captureFailed("record error: $errorMessage")
+            }
         })
         .createAudioDeviceModule()
 
@@ -82,7 +188,98 @@ class PlaybackCaptureAudioSource(
 
     fun setStreaming(streaming: Boolean) = monitor.setStreaming(streaming)
 
-    // ---- everything below runs on the ADM's recording thread ----
+    /**
+     * Opens the capture record as the FIRST audio session of the cast, before
+     * WebRTC ever creates its microphone record — the session-ordering fix
+     * for the one-channel fold (issue #101, live evidence 2026-11-04).
+     *
+     * The mechanism: this ROM's vendor input stack allocates a voice-shaped
+     * DSP session (16 kHz, mono, channel mask 0x10 — the exact signature of a
+     * leaked VOICE_COMMUNICATION input found idling in audioserver) for the
+     * ADM's microphone record, and a playback-capture request arriving while
+     * that session exists gets remapped onto it — a 48 kHz stereo client fed
+     * from a mono/0x10 stream reads one dead channel. Every observation fits:
+     * fold flavors (L-only/R-only/L=R), the "perfect 48 kHz thread with folded
+     * data", the hard reset never curing (each rebuild re-opens the mic record
+     * first, re-applying the poison), and TikTok/scrcpy capturing stereo —
+     * neither ever opens a microphone record. TikTok's app side was verified
+     * exhaustively first (permissions, privileges, whitelists, dex of its
+     * cast AudioThread, registered AudioPolicyConfig): its capture record is
+     * API-identical to ours, so the differentiator is not identity but ORDER.
+     *
+     * Called after the projection is live (capturer started) and well before
+     * the ADM record starts at transport time. Best-effort: any failure here
+     * just falls back to the old build-at-start path.
+     */
+    fun preOpenCapture() {
+        synchronized(this) {
+            if (preOpenedRecord !== null) return
+            val liveProjection = projection() ?: return
+            val sampleRate = PINNED_INPUT_SAMPLE_RATE
+            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBytes <= 0) return
+            val record = try {
+                buildBestCaptureRecord(liveProjection, sampleRate, channelCount = 2, readBytes = minBytes * 2)
+            } catch (t: Throwable) {
+                Log.w(TAG, "pre-opening the capture record failed: ${t.message}")
+                null
+            } ?: return
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                record.release()
+                Log.w(TAG, "pre-opened capture record not initialized — will build at start instead")
+                return
+            }
+            record.startRecording()
+            if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                record.release()
+                Log.w(TAG, "pre-opened capture record did not start — will build at start instead")
+                return
+            }
+            preOpenedRecord = record
+            Log.i(TAG, "capture record pre-opened: $sampleRate Hz, 2 ch — first audio session of the cast")
+        }
+    }
+
+    /** Cast teardown: release a pre-opened record the substitution never consumed. */
+    fun release() {
+        synchronized(this) {
+            preOpenedRecord?.let {
+                stopAndRelease(it)
+                preOpenedRecord = null
+            }
+        }
+        captureDump?.close()
+        captureDump = null
+    }
+
+    /**
+     * Starts the bounded WAV dump of the encoder-consumed bytes when the
+     * `localcast_capture_dump` global setting is 1 (a development toggle set
+     * via adb — never on in normal use, issue #101 diagnostics). Once per
+     * cast, at the swap where the encoder's stream begins.
+     */
+    private fun maybeStartCaptureDump() {
+        if (captureDump !== null) return
+        val enabled = try {
+            android.provider.Settings.Global.getInt(
+                appContext.contentResolver,
+                CAPTURE_DUMP_SETTING,
+                0,
+            ) == 1
+        } catch (t: Throwable) {
+            false
+        }
+        if (!enabled) return
+        val dir = appContext.getExternalFilesDir(null) ?: return
+        val context = swapContext ?: return
+        captureDump = AudioCaptureFileRecorder.start(
+            dir,
+            context.sampleRate,
+            context.channelCount,
+        )
+    }
+
+    // ---- everything below runs on the ADM's recording thread unless noted ----
 
     private fun substitutePlaybackCaptureRecord() {
         val liveProjection = projection()
@@ -110,8 +307,13 @@ class PlaybackCaptureAudioSource(
                 captureFailed("ADM recorder has no AudioRecord to substitute")
                 return
             }
-            val capture = try {
-                buildCaptureRecord(liveProjection, micRecord, audioInput, byteBufferField)
+            // The pre-opened record first (session-ordering fix, issue #101):
+            // it was opened before this mic record existed, so the vendor
+            // input stack could not remap it onto the mic's voice session.
+            // A format mismatch means the ADM negotiated differently than the
+            // pinned 48 kHz stereo — discard the pre-open and fall back.
+            val capture = consumePreOpenedIfCompatible(micRecord) ?: try {
+                buildBestCaptureRecord(liveProjection, micRecord, audioInput, byteBufferField)
             } catch (t: Throwable) {
                 Log.w(TAG, "building the playback-capture record failed: ${t.message}")
                 null
@@ -133,6 +335,9 @@ class PlaybackCaptureAudioSource(
             // The microphone record the platform required to start the ADM is
             // never read and never encoded — release it immediately.
             stopAndRelease(micRecord)
+            val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+            swapContext = SwapContext(audioInput, capture.sampleRate, capture.channelCount, readBytes)
+            maybeStartCaptureDump()
             Log.i(
                 TAG,
                 "playback capture active: ${capture.sampleRate} Hz, ${capture.channelCount} ch, ${capture.audioFormat}",
@@ -140,6 +345,101 @@ class PlaybackCaptureAudioSource(
         } catch (t: Throwable) {
             captureFailed("substituting playback capture failed: ${t.message}")
         }
+    }
+
+    /**
+     * Takes the record [preOpenCapture] left, if it mirrors the ADM record's
+     * negotiated format byte-for-byte (the recorder thread's reads and the
+     * encoder's frame clock assume it). Returns null — releasing the pre-open
+     * — when absent, unconsumable, or mismatched, so the caller falls back to
+     * building a fresh record the old way. Runs on the ADM's recording thread.
+     */
+    private fun consumePreOpenedIfCompatible(micRecord: AudioRecord): AudioRecord? {
+        synchronized(this) {
+            val preOpened = preOpenedRecord ?: return null
+            preOpenedRecord = null
+            val compatible = isCompatibleSwapFormat(
+                preOpened.sampleRate,
+                preOpened.channelCount,
+                preOpened.state,
+                preOpened.recordingState,
+                micRecord.sampleRate,
+                micRecord.channelCount,
+            )
+            if (!compatible) {
+                Log.w(
+                    TAG,
+                    "discarding pre-opened capture record " +
+                        "(${preOpened.sampleRate} Hz, ${preOpened.channelCount} ch, state ${preOpened.state}) — " +
+                        "ADM record is (${micRecord.sampleRate} Hz, ${micRecord.channelCount} ch)",
+                )
+                stopAndRelease(preOpened)
+                return null
+            }
+            Log.i(TAG, "swapping in the pre-opened capture record — the mic record opened second")
+            return preOpened
+        }
+    }
+
+    /**
+     * TikTok's adapter pattern (decoded from its cast APK, dumpsys-confirmed
+     * on this ROM): try `AUDIO_SOURCE_REMOTE_SUBMIX` FIRST — the routed
+     * loopback that stays true stereo on the Lenovo ROM whose playback-capture
+     * remix folds to one channel. It must be attempted before any
+     * playback-capture record exists (the submix input is single-client on
+     * this ROM — "Cannot create AudioRecord" while our capture holds it), and
+     * anywhere it is refused (other ROMs enforce CAPTURE_AUDIO_OUTPUT), the
+     * public playback-capture path remains the fallback. The record mirrors
+     * the given format either way, so the swap-in is identical.
+     */
+    private fun buildBestCaptureRecord(
+        projection: MediaProjection,
+        micRecord: AudioRecord,
+        audioInput: Any,
+        byteBufferField: java.lang.reflect.Field,
+    ): AudioRecord {
+        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+        return buildBestCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes)
+    }
+
+    /** Same, when the ADM-negotiated format is already known explicitly. */
+    private fun buildBestCaptureRecord(
+        projection: MediaProjection,
+        sampleRate: Int,
+        channelCount: Int,
+        readBytes: Int,
+    ): AudioRecord {
+        val submix = try {
+            val record = AudioRecord.Builder()
+                .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(
+                            if (channelCount == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO,
+                        )
+                        .build(),
+                )
+                .setBufferSizeInBytes(
+                    maxOf(
+                        AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT),
+                        readBytes,
+                    ),
+                )
+                .build()
+            if (record.state == AudioRecord.STATE_INITIALIZED) {
+                Log.i(TAG, "capture via REMOTE_SUBMIX (stereo loopback) — playback capture stays the fallback")
+                record
+            } else {
+                record.release()
+                null
+            }
+        } catch (t: Throwable) {
+            Log.i(TAG, "REMOTE_SUBMIX unavailable (${t.javaClass.simpleName}) — falling back to playback capture")
+            null
+        }
+        return submix ?: buildCaptureRecord(projection, sampleRate, channelCount, readBytes, preferredMask)
     }
 
     /**
@@ -154,32 +454,293 @@ class PlaybackCaptureAudioSource(
         audioInput: Any,
         byteBufferField: java.lang.reflect.Field,
     ): AudioRecord {
-        val channelMask = if (micRecord.channelCount == 2) {
-            AudioFormat.CHANNEL_IN_STEREO
-        } else {
-            AudioFormat.CHANNEL_IN_MONO
+        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
+        return try {
+            buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes, preferredMask)
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture build with $preferredMask failed (${t.message}) — falling back to ${MaskKind.IN}")
+            buildCaptureRecord(projection, micRecord.sampleRate, micRecord.channelCount, readBytes, MaskKind.IN)
         }
-        val format = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(micRecord.sampleRate)
-            .setChannelMask(channelMask)
-            .build()
+    }
+
+    /**
+     * The mask flavor is the one variable the tap's remix can differ on
+     * (found live 2026-11-03/04: [MaskKind.IN] records got one channel; the
+     * tapped mix is an *output* mix, so [MaskKind.OUT] addresses its channels
+     * by their own positions; [MaskKind.INDEX] addresses them by index).
+     */
+    internal enum class MaskKind(val label: String) {
+        IN("position-in"),
+        OUT("position-out"),
+        INDEX("index"),
+    }
+
+    private fun buildCaptureRecord(
+        projection: MediaProjection,
+        sampleRate: Int,
+        channelCount: Int,
+        readBytes: Int,
+        mask: MaskKind = MaskKind.IN,
+        encoding: Int = AudioFormat.ENCODING_PCM_16BIT,
+        usages: IntArray? = null,
+    ): AudioRecord {
+        val formatBuilder = AudioFormat.Builder()
+            .setEncoding(encoding)
+            .setSampleRate(sampleRate)
+        val format = when {
+            channelCount != 2 -> formatBuilder.setChannelMask(AudioFormat.CHANNEL_IN_MONO).build()
+            mask == MaskKind.INDEX -> formatBuilder.setChannelIndexMask(STEREO_CHANNEL_INDEX_MASK).build()
+            mask == MaskKind.OUT -> formatBuilder.setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build()
+            else -> formatBuilder.setChannelMask(AudioFormat.CHANNEL_IN_STEREO).build()
+        }
+        // Buffer sizing uses the IN-stereo min regardless of mask flavor —
+        // same channel count, so the requirement is identical per encoding.
+        val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, encoding)
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
             // audio.md usage filter: media, game, unknown — voice apps are
             // never capturable by platform design (their users' privacy).
-            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-            .addMatchingUsage(AudioAttributes.USAGE_GAME)
-            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            // The sweep also measures alternative sets (TikTok's cast ships
+            // {MEDIA, 13, 14} — decoded from its APK — no GAME/UNKNOWN).
+            .apply {
+                for (usage in usages ?: DEFAULT_CAPTURE_USAGES) addMatchingUsage(usage)
+            }
             .build()
-        // The recording thread reads byteBuffer.capacity() per iteration —
-        // the capture record's buffer must hold at least that much.
-        val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
-        val minBytes = AudioRecord.getMinBufferSize(micRecord.sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         return AudioRecord.Builder()
             .setAudioFormat(format)
+            // The recording thread reads byteBuffer.capacity() per iteration —
+            // the capture record's buffer must hold at least that much.
             .setBufferSizeInBytes(maxOf(minBytes, readBytes))
             .setAudioPlaybackCaptureConfig(captureConfig)
             .build()
+    }
+
+    /**
+     * The self-heal ([MonoTapRecovery] + sweep adoption): swap in a *fresh*
+     * playback-capture record — the same field write the initial substitution
+     * uses, executed on the recording thread between two reads, so the cast
+     * never breaks. The old record is stopped only after the swap. Best-effort
+     * by design: a failed rebuild keeps the current record streaming and logs.
+     *
+     * A **hard** rebuild (reason carrying the marker) first releases every
+     * record and idles [HARD_RESET_IDLE_MS]: the ROM's submix input thread
+     * keeps the HAL config of whichever client created it (found live: ours
+     * ran through a 16 kHz HAL while TikTok's cast ran 48 kHz — the fold's
+     * mechanism, issue #101); letting the thread die so our 48 kHz stereo
+     * record becomes its first client is the only way to re-create it clean.
+     * The idle gap reaches the encoder as ~1.5 s of silence — the same frame
+     * clock as a user mute.
+     */
+    private fun rebuildCaptureRecord(reason: String) {
+        val hard = reason.contains(HARD_RESET_MARKER)
+        val context = swapContext ?: return
+        val liveProjection = projection() ?: return
+        val recordField = RECORD_FIELD ?: return
+        if (hard) {
+            try {
+                hardResetInProgress = true
+                (recordField.get(context.audioInput) as? AudioRecord)?.let { stopAndRelease(it) }
+                Log.i(TAG, "capture hard reset: records released, idling for input-thread teardown")
+                Thread.sleep(HARD_RESET_IDLE_MS)
+            } catch (t: Throwable) {
+                Log.w(TAG, "capture hard reset idle failed: ${t.message}")
+            } finally {
+                hardResetInProgress = false
+            }
+        }
+        try {
+            val fresh = try {
+                // Submix first (the adapter pattern), playback capture as fallback.
+                try {
+                    val submix = AudioRecord.Builder()
+                        .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(context.sampleRate)
+                                .setChannelMask(
+                                    if (context.channelCount == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO,
+                                )
+                                .build(),
+                        )
+                        .setBufferSizeInBytes(context.readBytes * 2)
+                        .build()
+                    if (submix.state == AudioRecord.STATE_INITIALIZED) submix else {
+                        submix.release()
+                        buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, preferredMask)
+                    }
+                } catch (t: Throwable) {
+                    buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, preferredMask)
+                }
+            } catch (t: Throwable) {
+                try {
+                    Log.w(TAG, "capture rebuild with $preferredMask failed (${t.message}) — retrying with ${MaskKind.IN}")
+                    buildCaptureRecord(liveProjection, context.sampleRate, context.channelCount, context.readBytes, MaskKind.IN)
+                } catch (t2: Throwable) {
+                    Log.w(TAG, "capture rebuild failed: ${t2.message}")
+                    return
+                }
+            }
+            if (fresh.state != AudioRecord.STATE_INITIALIZED) {
+                fresh.release()
+                Log.w(TAG, "capture rebuild failed: record not initialized")
+                return
+            }
+            fresh.startRecording()
+            if (fresh.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                fresh.release()
+                Log.w(TAG, "capture rebuild failed: record did not start")
+                return
+            }
+            val stale = recordField.get(context.audioInput) as? AudioRecord
+            recordField.set(context.audioInput, fresh)
+            stale?.let { stopAndRelease(it) }
+            Log.i(TAG, "capture record rebuilt — $reason")
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture rebuild failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Reads standalone playback-capture records **outside the ADM**, one per
+     * mask/rate flavor, **while the main path reports loud audio** (the first
+     * attempts ran before any audio played and measured silence — useless).
+     * Each flavor reads until it has two loud one-second aggregates or times
+     * out (4 s). If the OUT mask delivers both channels where IN does not,
+     * the main record is rebuilt with it — the tapped mix is an output mix,
+     * and a remix that mishandles input-position masks can still map output
+     * positions correctly. Runs on its own thread; numbers only, never PCM.
+     */
+    private fun sweepCaptureFlavors(sampleRate: Int) {
+        Thread({
+            val liveProjection = projection() ?: return@Thread
+            val inReport = flavorReport(liveProjection, sampleRate, MaskKind.IN)
+            val outReport = flavorReport(liveProjection, sampleRate, MaskKind.OUT)
+            flavorReport(liveProjection, 44100, MaskKind.IN)?.let {
+                Log.i(TAG, "capture flavor sweep (position-in 44.1k): ${it.summarize()}")
+            }
+            // Usage-set variants — TikTok's cast APK ships {MEDIA, 13, 14}
+            // (decoded from its dex): the one real config difference left.
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = MEDIA_ONLY_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media-only): ${it.summarize()}")
+            }
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = TIKTOK_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media+13+14): ${it.summarize()}")
+            }
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, usages = MEDIA_GAME_USAGES)?.let {
+                Log.i(TAG, "capture flavor sweep (usages media+game): ${it.summarize()}")
+            }
+            // The docs' example encoding — the float remix route may differ.
+            flavorReport(liveProjection, sampleRate, MaskKind.IN, encoding = AudioFormat.ENCODING_PCM_FLOAT)?.let {
+                Log.i(TAG, "capture flavor sweep (pcm float): ${it.summarize()}")
+            }
+            // THE lead: TikTok's cast on this ROM runs on AUDIO_SOURCE_REMOTE_SUBMIX
+            // (dumpsys during its stereo cast) — the routed-loopback source,
+            // not playback capture. Normally gated by the signature
+            // CAPTURE_AUDIO_OUTPUT; this ROM may or may not check per app.
+            remoteSubmixReport(sampleRate)?.let {
+                Log.i(TAG, "capture flavor sweep (REMOTE_SUBMIX): ${it.summarize()}")
+            }
+            if (inReport === null || outReport === null) return@Thread
+            val outHealthy = !outReport.oneChannelDead()
+            val inDead = inReport.oneChannelDead()
+            if (outHealthy && inDead && preferredMask != MaskKind.OUT) {
+                preferredMask = MaskKind.OUT
+                pendingRebuildReason = "sweep adopted the OUT mask (IN: ${inReport.summarize()} / OUT: ${outReport.summarize()})"
+                Log.i(TAG, "capture flavor sweep: adopting the OUT mask — rebuild queued")
+            } else {
+                Log.i(TAG, "capture flavor sweep: keeping $preferredMask (IN ${inReport.summarize()} / OUT ${outReport.summarize()})")
+            }
+        }, "capture-flavor-sweep").start()
+    }
+
+    /**
+     * The TikTok-mechanism probe (dumpsys-proven during its stereo cast): an
+     * [AudioRecord] on `AUDIO_SOURCE_REMOTE_SUBMIX` — the routed-loopback
+     * source that bypasses the broken playback-capture remix entirely.
+     * Normally requires the signature-level CAPTURE_AUDIO_OUTPUT; whether
+     * this ROM enforces that per app is exactly what this probe answers.
+     */
+    private fun remoteSubmixReport(sampleRate: Int): StereoContentProbe.Report? {
+        return try {
+            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+            val record = AudioRecord.Builder()
+                .setAudioSource(REMOTE_SUBMIX_AUDIO_SOURCE)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                        .build(),
+                )
+                .setBufferSizeInBytes(minBytes * 4)
+                .build()
+            record.startRecording()
+            val probe = StereoContentProbe(framesPerReport = sampleRate)
+            val buffer = ByteArray(minBytes)
+            var report: StereoContentProbe.Report? = null
+            val deadline = System.currentTimeMillis() + 4_000
+            while (System.currentTimeMillis() < deadline) {
+                val read = record.read(buffer, 0, buffer.size)
+                if (read <= 0) break
+                val aggregate = probe.onSamples(buffer.copyOf(read)) ?: continue
+                Log.i(TAG, "capture flavor (REMOTE_SUBMIX): ${aggregate.summarize()}")
+                if (aggregate.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
+                    report = aggregate
+                    break
+                }
+            }
+            stopAndRelease(record)
+            report
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture flavor (REMOTE_SUBMIX) failed: ${t.javaClass.simpleName}: ${t.message}")
+            null
+        }
+    }
+
+    /** One flavor's loud window, or null if it could not be measured (quiet/failed). */
+    private fun flavorReport(
+        projection: MediaProjection,
+        sampleRate: Int,
+        mask: MaskKind,
+        encoding: Int = AudioFormat.ENCODING_PCM_16BIT,
+        usages: IntArray? = null,
+    ): StereoContentProbe.Report? {
+        val label = "${mask.label} ${sampleRate / 1000}k" +
+            (if (usages !== null) " usages[${usages.joinToString(",")}]" else "") +
+            (if (encoding != AudioFormat.ENCODING_PCM_16BIT) " float" else "")
+        return try {
+            val minBytes = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_STEREO, encoding)
+            val record = buildCaptureRecord(projection, sampleRate, channelCount = 2, readBytes = minBytes * 4, mask, encoding, usages)
+            record.startRecording()
+            val probe = StereoContentProbe(framesPerReport = sampleRate)
+            val byteBuffer = ByteArray(minBytes)
+            val floatBuffer = FloatArray(minBytes / 4)
+            var report: StereoContentProbe.Report? = null
+            val deadline = System.currentTimeMillis() + 4_000
+            while (System.currentTimeMillis() < deadline) {
+                val aggregate: StereoContentProbe.Report?
+                if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+                    val read = record.read(floatBuffer, 0, floatBuffer.size, AudioRecord.READ_BLOCKING)
+                    if (read <= 0) break
+                    aggregate = probe.onSamples(floatBuffer.copyOf(read))
+                } else {
+                    val read = record.read(byteBuffer, 0, byteBuffer.size)
+                    if (read <= 0) break
+                    aggregate = probe.onSamples(byteBuffer.copyOf(read))
+                }
+                if (aggregate === null) continue
+                Log.i(TAG, "capture flavor ($label): ${aggregate.summarize()}")
+                if (aggregate.amplitude >= MonoTapRecovery.MIN_AMPLITUDE) {
+                    report = aggregate
+                    break
+                }
+            }
+            stopAndRelease(record)
+            report
+        } catch (t: Throwable) {
+            Log.w(TAG, "capture flavor ($label) failed: ${t.message}")
+            null
+        }
     }
 
     /** Stop whatever record the ADM still holds (best-effort — the lookup may have failed). */
@@ -210,9 +771,50 @@ class PlaybackCaptureAudioSource(
     companion object {
         private const val TAG = "PlaybackCaptureAudio"
 
+        /** Channel-index mask bits 0,1 — the first two channels, L and R. */
+        private const val STEREO_CHANNEL_INDEX_MASK = 0x3
+
+        /**
+         * The capture format both the ADM record and the pre-opened record are
+         * pinned to (audio.md's negotiated format) — see [preOpenCapture] and
+         * the builder's [setInputSampleRate] call.
+         */
+        private const val PINNED_INPUT_SAMPLE_RATE = 48_000
+
+        /** Settings.Global key arming the bounded encoder-input WAV dump. */
+        private const val CAPTURE_DUMP_SETTING = "localcast_capture_dump"
+
+        /**
+         * audio.md usage filter: media, game, unknown. (TikTok's exact set
+         * {MEDIA, 13, 14} was tried live 2026-11-04 with the request proven
+         * byte-identical in the APM log — the fold persisted, so the usage
+         * set is NOT the differentiator and GAME must stay for PUBG.)
+         */
+        private val DEFAULT_CAPTURE_USAGES = intArrayOf(
+            AudioAttributes.USAGE_MEDIA,
+            AudioAttributes.USAGE_GAME,
+            AudioAttributes.USAGE_UNKNOWN,
+        )
+        private val MEDIA_ONLY_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA)
+        private val MEDIA_GAME_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_GAME)
+
+        /** TikTok's cast set, decoded from its APK: {MEDIA, 13, 14}. */
+        private val TIKTOK_USAGES = intArrayOf(AudioAttributes.USAGE_MEDIA, 13, 14)
+
+        /** AudioAttributes usage constants 13/14 — plain names for readability. */
+        private const val ASSISTANCE_SONIFICATION_USAGE = 13
+        private const val ASSISTANCE_ACCESSIBILITY_USAGE = 14
+
+        /** MediaRecorder.AudioSource.REMOTE_SUBMIX — hidden from the SDK, its value forever 8. */
+        private const val REMOTE_SUBMIX_AUDIO_SOURCE = 8
+
+        /** See [rebuildCaptureRecord] — how long all records stay released so the input thread dies. */
+        private const val HARD_RESET_MARKER = MonoTapRecovery.HARD_RESET_MARKER
+        private const val HARD_RESET_IDLE_MS = 3_000L
+
         /**
          * Lazy lookups, never class-init: a library update that renames the
-         * internals degrades this cast to video-only ([GameAudioState.Failed])
+         * internals degrades the cast to video-only ([GameAudioState.Failed])
          * instead of crashing the session. Visibility differs between pinned
          * artifact versions (1.3.8: private, 1.3.10: public for `audioInput`)
          * — `getDeclaredField` covers both.
@@ -234,3 +836,21 @@ class PlaybackCaptureAudioSource(
         }
     }
 }
+
+/**
+ * Whether the pre-opened capture record may swap in for the ADM record: the
+ * recorder thread's reads and the encoder's frame clock assume one format —
+ * rate and channels must match exactly, and the record must be initialized
+ * AND actively recording (a pre-open that failed to start is worthless).
+ */
+internal fun isCompatibleSwapFormat(
+    preOpenedRate: Int,
+    preOpenedChannels: Int,
+    preOpenedState: Int,
+    preOpenedRecordingState: Int,
+    micRate: Int,
+    micChannels: Int,
+): Boolean = preOpenedRate == micRate &&
+    preOpenedChannels == micChannels &&
+    preOpenedState == AudioRecord.STATE_INITIALIZED &&
+    preOpenedRecordingState == AudioRecord.RECORDSTATE_RECORDING
