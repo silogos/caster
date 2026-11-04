@@ -15,7 +15,8 @@ describe('game channel sampler (ADR-013)', () => {
   it('the first sample reports a zero bitrate and establishes the baseline', () => {
     const c = counters()
     const sampler = createGameChannelSampler(() => c)
-    expect(sampler.sample(1000)).toMatchObject({ bitrateBps: 0, mode: 'pcm' })
+    // ringDepthMs is the mixer's value — the sampler always emits null.
+    expect(sampler.sample(1000)).toMatchObject({ bitrateBps: 0, mode: 'pcm', ringDepthMs: null })
   })
 
   it('bitrate reflects the byte delta over the interval', () => {

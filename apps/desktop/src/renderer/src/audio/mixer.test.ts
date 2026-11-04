@@ -106,7 +106,7 @@ class FakeContext implements AudioContextLike {
 }
 
 class FakeWorkletNode implements AudioWorkletNodeLike {
-  port = { postMessage: vi.fn() }
+  port = { postMessage: vi.fn(), onmessage: null as ((event: { data: unknown }) => void) | null }
   connectedTo: unknown[] = []
   disconnectCount = 0
   channelCount = 2
@@ -777,5 +777,39 @@ describe('game audio decoded frames (ADR-013 pushFrames)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/**
+ * ADR-013 follow-up: the worklet's ring-depth telemetry (~1 Hz) lands on the
+ * mixer — the playout-tuning input. Depth is null until the first report and
+ * resets on detach, so a dead path never reports a stale value.
+ */
+describe('game ring depth telemetry', () => {
+  it('is null before the first worklet report', async () => {
+    const context = new FakeContext()
+    context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    await mixer.attachGamePcmSource()
+    expect(mixer.gameRingDepthMs()).toBeNull()
+  })
+
+  it('follows the worklet report and resets on detach', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = (await mixer.attachGamePcmSource())!
+
+    host.node.port.onmessage?.({ data: { depthMs: 42 } })
+    expect(mixer.gameRingDepthMs()).toBe(42)
+
+    host.node.port.onmessage?.({ data: { depthMs: 7 } })
+    expect(mixer.gameRingDepthMs()).toBe(7)
+
+    host.node.port.onmessage?.({ data: { notDepth: true } }) // malformed — ignored
+    expect(mixer.gameRingDepthMs()).toBe(7)
+
+    feed.detach()
+    expect(mixer.gameRingDepthMs()).toBeNull()
   })
 })

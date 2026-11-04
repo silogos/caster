@@ -13,6 +13,10 @@ class GamePcmWorklet extends AudioWorkletProcessor {
     this.right = new Float32Array(this.capacity)
     this.read = 0
     this.filled = 0
+    // Ring-depth telemetry (ADR-013 follow-up): one report per ~1 s, the raw
+    // material for tuning a bounded playout target. Numbers only — no samples.
+    this.quantaPerSecond = Math.round(sampleRate / 128)
+    this.quanta = 0
     this.port.onmessage = (event) => {
       const { left, right } = event.data
       const n = Math.min(left.length, this.capacity - this.filled)
@@ -39,6 +43,10 @@ class GamePcmWorklet extends AudioWorkletProcessor {
         outL[i] = 0
         outR[i] = 0
       }
+    }
+    if (++this.quanta >= this.quantaPerSecond) {
+      this.quanta = 0
+      this.port.postMessage({ depthMs: Math.round((this.filled * 1000) / sampleRate) })
     }
     return true
   }
