@@ -1,6 +1,6 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
-import { attachGameAudioChannel, type GameAudioFeed } from './audio/game-audio-channel'
+import { attachGameAudioChannel, createMessageBuffer, type GameAudioFeed } from './audio/game-audio-channel'
 import { wireRoutingPanel } from './audio/routingPanel'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
@@ -173,6 +173,15 @@ const receiver = new ReceiverSession({
   // quiet.
   onDataChannel: async (pc, channel) => {
     if (pc !== 'media' || channel.label !== 'game-audio') return
+    // Buffer from the channel's very first message: the worklet module load
+    // below is asynchronous, and the mobile's format announce must not be
+    // swallowed by that window (found live in #104 — a lost announce made
+    // the stream classify as PCM: opus bytes as Int16 = electrical buzz).
+    const messages = createMessageBuffer()
+    const dataChannel = channel as { label: string; binaryType: string; onmessage: ((event: { data: unknown }) => void) | null }
+    dataChannel.binaryType = 'arraybuffer'
+    dataChannel.onmessage = (event) => messages.push(event.data)
+
     const feed = await attachGameAudioChannel({ mixer, log })
     if (feed === null) {
       log('warn', 'game-audio channel arrived but the audio path is unavailable — track fallback stands')
@@ -182,9 +191,7 @@ const receiver = new ReceiverSession({
     // the previous feeder (its decoder closes; the worklet is reused).
     activeGameAudioFeed?.detach()
     activeGameAudioFeed = feed
-    const dataChannel = channel as { label: string; binaryType: string; onmessage: ((event: { data: unknown }) => void) | null }
-    dataChannel.binaryType = 'arraybuffer'
-    dataChannel.onmessage = (event) => feed.onMessage(event.data)
+    messages.drainInto(feed)
   },
   log
 })

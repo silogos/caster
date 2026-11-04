@@ -45,14 +45,14 @@ class GameAudioOpusFormatTest {
         assertNull(GameAudioOpusFormat.parseAnnounce("not json at all"))
     }
 
-    /** A real OpusHead: preskip 312, 48 kHz, stereo, gain 0, mapping family 0. */
+    /** A real OpusHead: preskip 312 (little-endian — RFC 7845 §3.1), 48 kHz, stereo, gain 0, mapping family 0. */
     private fun opusHead(preskip: Int, channels: Int = 2, rate: Int = 48_000): ByteArray {
         val head = ByteArray(GameAudioOpusFormat.OPUS_HEAD_SIZE)
         "OpusHead".toByteArray(Charsets.US_ASCII).copyInto(head)
         head[8] = 1 // version
         head[9] = channels.toByte()
-        head[10] = ((preskip shr 8) and 0xFF).toByte() // preskip, big-endian
-        head[11] = (preskip and 0xFF).toByte()
+        head[10] = (preskip and 0xFF).toByte() // preskip, little-endian
+        head[11] = ((preskip shr 8) and 0xFF).toByte()
         head[12] = (rate and 0xFF).toByte() // sample rate, little-endian
         head[13] = ((rate shr 8) and 0xFF).toByte()
         head[14] = ((rate shr 16) and 0xFF).toByte()
@@ -64,9 +64,13 @@ class GameAudioOpusFormatTest {
     }
 
     @Test
-    fun `preskip reads the big-endian field from a well-formed OpusHead`() {
+    fun `preskip reads the little-endian field from a well-formed OpusHead`() {
         assertEquals(312, GameAudioOpusFormat.preskipFromOpusHead(opusHead(312)))
         assertEquals(648, GameAudioOpusFormat.preskipFromOpusHead(opusHead(648)))
+        // ffmpeg's own head for a 312-preskip stream carries `38 01` at [10..11].
+        assertEquals(312, GameAudioOpusFormat.preskipFromOpusHead(
+            byteArrayOf(*"OpusHead".toByteArray(Charsets.US_ASCII), 1, 2, 0x38, 0x01, 0x80.toByte(), 0xBB.toByte(), 0, 0, 0, 0, 0),
+        ))
     }
 
     @Test

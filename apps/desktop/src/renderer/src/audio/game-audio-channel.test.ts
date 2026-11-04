@@ -3,6 +3,7 @@ import {
   ANNOUNCE_SAMPLE_RATE,
   OPUS_HEAD_SIZE,
   attachGameAudioChannel,
+  createMessageBuffer,
   opusHead,
   parseAnnounce,
   type AudioDataLike,
@@ -119,6 +120,7 @@ class FakeWebCodecs implements WebCodecsSurface {
   configSupported = true
   supportCheckThrows = false
   decodeThrows = false
+  constructThrows: Error | null = null
   lastConfig: AudioDecoderConfigLike | null = null
   decodeCalls: Array<{ type: 'key'; timestamp: number; data: Uint8Array }> = []
   decoderClosed = false
@@ -140,6 +142,7 @@ class FakeWebCodecs implements WebCodecsSurface {
     config: AudioDecoderConfigLike,
     hooks: { output: (data: AudioDataLike) => void; error: (error: Error) => void }
   ): AudioDecoderLike {
+    if (this.constructThrows !== null) throw this.constructThrows
     this.lastConfig = config
     this.outputHook = hooks.output
     this.errorHook = hooks.error
@@ -209,14 +212,16 @@ const posted = (rig: ReturnType<typeof makeRig>): Array<{ left: number[]; right:
   ).map((message) => ({ left: Array.from(message.left), right: Array.from(message.right) }))
 
 describe('channel payload v1 pieces (ADR-013)', () => {
-  it('opusHead is the exact 19-byte RFC 7845 header (preskip BE, rate LE, gain 0, mapping 0)', () => {
+  it('opusHead is the exact 19-byte RFC 7845 header (preskip LE — as ffmpeg writes it — rate LE, gain 0, mapping 0)', () => {
     const head = opusHead(312)
     expect(head.byteLength).toBe(OPUS_HEAD_SIZE)
     expect(Array.from(head.subarray(0, 8))).toEqual(Array.from('OpusHead').map((c) => c.charCodeAt(0)))
     expect(head[8]).toBe(1) // version
     expect(head[9]).toBe(2) // channels
-    expect(head[10]).toBe(312 >>> 8) // preskip big-endian
-    expect(head[11]).toBe(312 & 0xff)
+    // Preskip is 16-bit LITTLE-endian (RFC 7845 §3.1; ffmpeg's head carries
+    // `38 01` for 312 — found in the #104 live debug, BE was a misread).
+    expect(head[10]).toBe(312 & 0xff)
+    expect(head[11]).toBe(312 >>> 8)
     const rate = head[12] | (head[13] << 8) | (head[14] << 16) | (head[15] << 24)
     expect(rate).toBe(ANNOUNCE_SAMPLE_RATE)
     expect(head[16]).toBe(0) // output gain
@@ -355,6 +360,36 @@ describe('game-audio channel classification (ADR-013)', () => {
     expect(rig.log).toHaveBeenCalledWith('warn', 'game audio decode submission failed', expect.anything())
   })
 
+  it('a decoder construction throw refuses the channel instead of hanging unclassified (the #104 buzz)', async () => {
+    const rig = makeRig()
+    // Chromium throws when AudioDecoder is constructed without its init
+    // object — the old code's exact failure: the escape left the stream in
+    // 'unclassified' limbo, later misclassified as PCM (electrical buzz).
+    rig.webCodecs.constructThrows = new Error("Failed to construct 'AudioDecoder': 1 argument required")
+    const feed = await attach(rig)
+    feed.onMessage('{"v":1,"codec":"opus","sampleRate":48000,"channels":2,"preskip":312}')
+    await flushDecoderStart()
+
+    expect(rig.log).toHaveBeenCalledWith('warn', 'game-audio channel refused (decoder construction failed: Error: Failed to construct \'AudioDecoder\': 1 argument required) — track fallback stands')
+    feed.onMessage(new ArrayBuffer(4).slice(0))
+    expect(posted(rig)).toHaveLength(0)
+  })
+
+  it('an announce trailing the burst reclassifies pcm to opus instead of staying legacy', async () => {
+    const rig = makeRig()
+    const feed = await attach(rig)
+
+    // 8 binaries classify as legacy PCM; the (unordered) announce lands after.
+    for (let i = 0; i < 8; i++) feed.onMessage(pcmChunk())
+    feed.onMessage('{"v":1,"codec":"opus","sampleRate":48000,"channels":2,"preskip":312}')
+    await flushDecoderStart()
+
+    expect(rig.webCodecs.lastConfig).not.toBeNull()
+    feed.onMessage(new ArrayBuffer(5).slice(0))
+    feed.onMessage(new ArrayBuffer(9).slice(0))
+    expect(rig.webCodecs.decodeCalls).toHaveLength(2) // opus mode, not more PCM
+  })
+
   it('detach closes the decoder and the fallback timer', async () => {
     vi.useFakeTimers()
     try {
@@ -401,5 +436,30 @@ describe('game-audio channel classification (ADR-013)', () => {
     // here the mixer survives: the worklet is reused, not rebuilt.
     expect(rig.host.addedModules).toHaveLength(1)
     expect(rig.webCodecs.decoderClosed).toBe(false) // only detach() closes
+  })
+})
+
+describe('createMessageBuffer (the attach-window guard, #104 found live)', () => {
+  it('messages pushed before the feed exists drain in arrival order', () => {
+    const buffer = createMessageBuffer()
+    const seen: unknown[] = []
+    buffer.push('a')
+    buffer.push(new ArrayBuffer(4))
+    buffer.push('c')
+    buffer.drainInto({ onMessage: (data) => seen.push(data), detach: () => undefined })
+    expect(seen).toHaveLength(3)
+    expect(seen[0]).toBe('a')
+    expect(seen[1]).toBeInstanceOf(ArrayBuffer)
+    expect(seen[2]).toBe('c')
+  })
+
+  it('drain is one-shot and the buffer bounds itself', () => {
+    const buffer = createMessageBuffer()
+    let drained = 0
+    for (let i = 0; i < 100; i++) buffer.push(i) // capacity 64
+    buffer.drainInto({ onMessage: () => { drained += 1 }, detach: () => undefined })
+    expect(drained).toBe(64)
+    buffer.drainInto({ onMessage: () => { drained += 1 }, detach: () => undefined })
+    expect(drained).toBe(64) // splice emptied it — nothing twice
   })
 })

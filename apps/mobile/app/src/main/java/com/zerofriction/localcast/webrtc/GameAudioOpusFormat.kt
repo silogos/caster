@@ -40,10 +40,11 @@ object GameAudioOpusFormat {
     }.toString()
 
     /**
-     * Pre-skip from a csd-0 OpusHead (preskip is 16-bit **big**-endian at
-     * offset 10, sample rate 32-bit little-endian at 12). Null when the bytes
-     * are not a well-formed stereo 48 kHz OpusHead — the caller falls back to
-     * [DEFAULT_PRESKIP_SAMPLES].
+     * Pre-skip from a csd-0 OpusHead (RFC 7845 §3.1: preskip is 16-bit
+     * **little**-endian at offset 10 — verified against an ffmpeg-produced
+     * file during the #104 live debug; sample rate 32-bit little-endian at
+     * 12). Null when the bytes are not a well-formed stereo 48 kHz OpusHead —
+     * the caller falls back to [DEFAULT_PRESKIP_SAMPLES].
      */
     fun preskipFromOpusHead(csd: ByteArray): Int? {
         if (csd.size < OPUS_HEAD_SIZE) return null
@@ -52,7 +53,7 @@ object GameAudioOpusFormat {
         }
         if (csd[8].toInt() != 1) return null // version
         if (csd[9].toInt() != CHANNELS) return null
-        val preskip = ((csd[10].toInt() and 0xFF) shl 8) or (csd[11].toInt() and 0xFF)
+        val preskip = (csd[10].toInt() and 0xFF) or ((csd[11].toInt() and 0xFF) shl 8)
         val rate = (csd[12].toInt() and 0xFF) or
             ((csd[13].toInt() and 0xFF) shl 8) or
             ((csd[14].toInt() and 0xFF) shl 16) or

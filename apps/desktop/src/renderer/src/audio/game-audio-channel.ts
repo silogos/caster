@@ -62,8 +62,10 @@ export function parseAnnounce(json: string): GameAudioAnnounce | null {
 }
 
 /**
- * The OpusHead the WebCodecs config needs (RFC 7845 §5.1): pre-skip is
- * big-endian, the sample rate little-endian, output gain 0, mapping family 0.
+ * The OpusHead the WebCodecs config needs (RFC 7845 §3.1): pre-skip is
+ * 16-bit **little-endian** (verified against an ffmpeg-produced file during
+ * the #104 live debug — an ffmpeg head carries `38 01` for 312), the sample
+ * rate 32-bit little-endian, output gain 0, mapping family 0.
  */
 export function opusHead(preskip: number): Uint8Array {
   const head = new Uint8Array(OPUS_HEAD_SIZE)
@@ -71,8 +73,8 @@ export function opusHead(preskip: number): Uint8Array {
   for (let i = 0; i < magic.length; i++) head[i] = magic.charCodeAt(i)
   head[8] = 1 // version
   head[9] = ANNOUNCE_CHANNELS
-  head[10] = (preskip >>> 8) & 0xff
-  head[11] = preskip & 0xff
+  head[10] = preskip & 0xff
+  head[11] = (preskip >>> 8) & 0xff
   head[12] = ANNOUNCE_SAMPLE_RATE & 0xff
   head[13] = (ANNOUNCE_SAMPLE_RATE >>> 8) & 0xff
   head[14] = (ANNOUNCE_SAMPLE_RATE >>> 16) & 0xff
@@ -116,9 +118,10 @@ export interface WebCodecsSurface {
 /** Production surface: Chromium's globals, null-shaped when they are absent. */
 export function chromiumWebCodecs(): WebCodecsSurface | null {
   const decoderCtor = (globalThis as Record<string, unknown>).AudioDecoder as
-    | (new () => AudioDecoderLike & {
-        onerror: ((event: { message: string }) => void) | null
-        output: ((data: AudioDataLike) => void) | null
+    | (new (init: {
+        output: (data: AudioDataLike) => void
+        error: (error: { message?: string }) => void
+      }) => {
         configure(config: AudioDecoderConfigLike): void
         decode(chunk: { type: 'key'; timestamp: number; data: Uint8Array }): void
         close(): void
@@ -133,9 +136,14 @@ export function chromiumWebCodecs(): WebCodecsSurface | null {
     isConfigSupported: (config) =>
       decoderCtor.isConfigSupported(config).then((result) => result.supported === true),
     createDecoder: (config, hooks) => {
-      const decoder = new decoderCtor()
-      decoder.output = hooks.output
-      decoder.onerror = (event) => hooks.error(new Error(event?.message ?? 'AudioDecoder error'))
+      // The WebCodecs constructor carries the callbacks — `new AudioDecoder()`
+      // without the init object throws (found live in the #104 debug: the
+      // throw escaped startOpus, the mode hung in unclassified, and the
+      // stream misclassified as PCM — the "electrical buzz").
+      const decoder = new decoderCtor({
+        output: hooks.output,
+        error: (error) => hooks.error(new Error(error?.message ?? 'AudioDecoder error'))
+      })
       decoder.configure(config)
       return {
         decode: (chunk) => decoder.decode(new chunkCtor(chunk)),
@@ -211,7 +219,8 @@ export async function attachGameAudioChannel(options: GameAudioChannelOptions): 
       refuse('opus decoder config unsupported')
       return
     }
-    decoder = webCodecs.createDecoder(config, {
+    try {
+      decoder = webCodecs.createDecoder(config, {
       output: (data) => {
         try {
           if (data.numberOfFrames === 0) return
@@ -236,7 +245,11 @@ export async function attachGameAudioChannel(options: GameAudioChannelOptions): 
         }
         decoder = null
       }
-    })
+      })
+    } catch (error) {
+      refuse('decoder construction failed: ' + String(error))
+      return
+    }
     mode = 'opus'
     log('info', 'game audio switched to the opus DataChannel payload', {
       preskip: announce.preskip,
@@ -266,13 +279,25 @@ export async function attachGameAudioChannel(options: GameAudioChannelOptions): 
     onMessage: (data) => {
       if (mode === 'refused') return
       if (typeof data === 'string') {
-        if (mode === 'opus' || mode === 'pcm') return // one announce per channel; a second is noise
         const announce = parseAnnounce(data)
         if (announce === null) {
-          refuse('malformed announce')
+          // Garbage text on a classified stream is noise — only an
+          // unclassified stream refuses on it.
+          if (mode === 'unclassified') refuse('malformed announce')
           return
         }
-        void startOpus(announce)
+        if (mode === 'opus') return // one announce per channel; a second is noise
+        if (mode === 'pcm') {
+          // ordered=false let the announce trail the burst: the early
+          // packets flushed as PCM (a brief buzz) — reclassify; from here
+          // on packets decode as Opus.
+          log('warn', 'game audio announce trailed the pcm classification — reclassifying to opus')
+        }
+        void startOpus(announce).catch((error) => {
+          // Fail closed — never leave the stream in limbo (the #104 buzz
+          // was exactly an escaped setup exception).
+          refuse('decoder setup failed: ' + String(error))
+        })
         return
       }
       if (!(data instanceof ArrayBuffer)) return
@@ -299,6 +324,33 @@ export async function attachGameAudioChannel(options: GameAudioChannelOptions): 
         decoder = null
       }
       pcmFeed.detach()
+    }
+  }
+}
+
+/**
+ * The DataChannel fires messages the moment it opens; the mixer's worklet
+ * module load (attach) is asynchronous. The announce MUST NOT be swallowed
+ * by that window — a lost announce makes the stream classify as legacy PCM
+ * (opus bytes decoded as Int16 = the #104 "electrical buzz", found live).
+ * The page wires `onmessage` synchronously into this buffer, then drains
+ * once the feed exists.
+ */
+export interface MessageBuffer {
+  push(data: unknown): void
+  drainInto(feed: GameAudioFeed): void
+}
+
+const MESSAGE_BUFFER_CAPACITY = 64
+
+export function createMessageBuffer(): MessageBuffer {
+  const pending: unknown[] = []
+  return {
+    push(data: unknown): void {
+      if (pending.length < MESSAGE_BUFFER_CAPACITY) pending.push(data)
+    },
+    drainInto(feed: GameAudioFeed): void {
+      for (const data of pending.splice(0)) feed.onMessage(data)
     }
   }
 }
