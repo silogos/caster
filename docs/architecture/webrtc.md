@@ -86,8 +86,23 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 | Track | Preference | Notes |
 |---|---|---|
 | Video | H.264 (hardware) → VP8 fallback | Mobile's offer lists both (the **preferred codec** is user-configurable in the Advanced settings, H.264 first by default); desktop picks the first it supports (Chromium/Electron ships proprietary codecs). If the device's HW encoder proves unreliable for a codec, mobile drops it from the offer — and since the Advanced settings, the user can also drop to **Software** encoders entirely (`c2.android`/`OMX.google`, via the factory's MediaCodecInfo predicate — risk-register R5's per-device escape hatch), or restrict H.264 to (Constrained) Baseline with the profile toggle (High is the default). |
-| Game audio | Opus, 48 kHz, **stereo** | Music/game soundstage. The track is always part of the cast when RECORD_AUDIO allows; "game audio off" mutes it, never removes it (designs/mobile-app.html). Stereo is a *negotiated* property: libwebrtc's default is mono ~32 kbps, so the offer munges the Opus fmtp (`stereo=1; sprop-stereo=1; maxaveragebitrate=192000`, `SdpOpusFmtp`); Chromium's answer does **not** mirror the offer's fmtp (found live — it writes its own default), so the sender relaxes the answer to the same request before applying it, and the encoder goes stereo ([audio.md](audio.md) — found live: the mono downmix + low bitrate was heard as an echoey tint on the desktop). |
+| Game audio | Opus, 48 kHz, **stereo** | Music/game soundstage. The track is always part of the cast when RECORD_AUDIO allows; "game audio off" mutes it, never removes it (designs/mobile-app.html). Stereo is a *negotiated* property: libwebrtc's default is mono ~32 kbps, so the offer munges the Opus fmtp (`stereo=1; sprop-stereo=1; maxaveragebitrate=192000`, `SdpOpusFmtp`); Chromium's answer does **not** mirror the offer's fmtp (found live — it writes its own default), so the sender relaxes the answer to the same request before applying it, and the encoder goes stereo ([audio.md](audio.md) — found live: the mono downmix + low bitrate was heard as an echoey tint on the desktop). **Superseded for the payload by the DataChannel bypass below** — the track stays negotiated as the desktop's fallback, but its encoder is mono-hard in the pinned prebuilt (the SDP negotiation only shapes the decoder). |
 | Microphone | Opus, 48 kHz, **mono** | Voice. The only stream ever fully removed from a cast (its own PC, built/torn down on demand). |
+
+### DataChannel: `game-audio` (ADR-012, 2026-11-04)
+
+The pinned libwebrtc build downmixes the ADM's stereo input to mono **before** its Opus encoder — unconditionally: its only gate (`WebRTC-Audio-MultiChannelSend`) does not exist in any obtainable native lib (1.3.8/1.3.9/1.3.10 grep'd). True stereo therefore rides a **DataChannel** alongside the tracks on the `media` PC:
+
+| Property | Value |
+|---|---|
+| Label | `game-audio` |
+| Negotiation | in-band — the mobile creates it **before `createOffer`**; the desktop learns it via `ondatachannel` |
+| Reliability | `ordered=false`, `maxRetransmits=0` — a lost sliver is inaudible, a stalled stream is not |
+| Payload | raw PCM16 LE, interleaved stereo, 48 kHz — chunks at the ADM's read granularity (~10 ms, 3840 B) |
+| Sender policy | bounded drop-oldest queue (50 chunks ≈ 0.5 s) + `bufferedAmount` ceiling (100 kB); muted casts keep sending silence |
+| Desktop render | `Int16LE → Float32 → AudioWorklet` ring (16 384 frames) → the mixer's existing game gain node (volume/mute/cable routing unchanged); underrun = silence; **quiet > 3 s → automatic fallback to the dual-mono track** (older mobile builds degrade, not silence) |
+
+Bandwidth cost: ~1.5 Mbps steady on the LAN. The channel is additive — no signaling message changes, no envelope version bump; peers without it simply never open one, and the receiver falls back. Full decision: [ADR-012](../decisions/ADR-012-game-audio-pcm-over-datachannel.md).
 
 Initial sender targets (Phase 5, conservative, adjusted in Phases 10–12): 720p, 30 fps, 4–6 Mbps, `degradationPreference: BALANCED`. Sender-side parameters are set via `RTCRtpSender` parameters from the mobile `config` module only. Since the Advanced settings, the degradation preference (Balanced / Maintain framerate / Maintain resolution — per-preset defaults from the QualityProfile table) and an optional encoder-side fps cap (`maxFramerate`, none by default) are also config-driven.
 
