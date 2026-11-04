@@ -15,7 +15,11 @@ package com.zerofriction.localcast.audio
  * and exhausting the budget mid-cast left a fold unrecovered. The budget is
  * now [MAX_REBUILDS] rebuilds with a [REBUILD_INTERVAL_MS] cooldown between
  * them — enough to outlast a long session, still bounded so genuinely
- * hard-panned content cannot churn the app through rebuilds forever.
+ * hard-panned content cannot churn the app through rebuilds forever. The
+ * bound keys on the dead side: hard-panned content keeps the SAME side dead
+ * no matter how often the record is rebuilt, while the vendor re-fold
+ * SHUFFLES the dead side across rebuilds (its live signature) — shuffles
+ * heal uncounted, so track-heavy content recovers for a whole session.
  *
  * Window semantics:
  * - **loud + one channel dead** — counts toward the rebuild;
@@ -35,9 +39,16 @@ internal class MonoTapRecovery(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private var deadStreak = 0
-    private var rebuilds = 0
+    private var totalRebuilds = 0
+
+    /** Rebuilds where the dead side stayed the same — the content-panning budget. */
+    private var sameSideRebuilds = 0
+    private var lastRebuildSide: DeadSide? = null
     private var lastRebuildAt = 0L
     private var hasRebuilt = false
+
+    /** Which tap channel the dead window found. */
+    private enum class DeadSide { LEFT, RIGHT }
 
     /** A rebuild reason when the capture record should be swapped, else null. */
     fun onReport(report: StereoContentProbe.Report): String? {
@@ -47,22 +58,30 @@ internal class MonoTapRecovery(
             return null
         }
         deadStreak++
-        if (deadStreak < consecutiveWindows || rebuilds >= maxRebuilds) return null
+        val side = if (report.meanAbsLeft < report.meanAbsRight) DeadSide.LEFT else DeadSide.RIGHT
+        // The dead side SHUFFLING across rebuilds is the vendor re-fold's
+        // signature (the tap's channel state flips, live: L-dead → R-dead →
+        // L-dead) — it heals with a rebuild and must not consume the budget.
+        // The same side staying dead no matter how often the record is
+        // rebuilt is hard-panned CONTENT — that is what the budget bounds.
+        val shuffled = lastRebuildSide !== null && side != lastRebuildSide
+        if (deadStreak < consecutiveWindows || (!shuffled && sameSideRebuilds >= maxRebuilds)) return null
         val now = clock()
         if (hasRebuilt && now - lastRebuildAt < rebuildIntervalMs) return null
-        rebuilds++
+        totalRebuilds++
+        if (!shuffled) sameSideRebuilds++
+        lastRebuildSide = side
         hasRebuilt = true
         lastRebuildAt = now
         deadStreak = 0
         // Every [HARD_RESET_EVERY]th rebuild goes nuclear ([HARD_RESET_MARKER]):
         // the tap's HAL thread may be stuck in a broken config only a full
         // teardown recreates (issue #101) — see PlaybackCaptureAudioSource.
-        val hard = if (rebuilds % HARD_RESET_EVERY == 0) " $HARD_RESET_MARKER" else ""
+        val hard = if (totalRebuilds % HARD_RESET_EVERY == 0) " $HARD_RESET_MARKER" else ""
+        val counted = if (shuffled) " (side shuffled — uncounted)" else "/$maxRebuilds"
         return "one channel dead for $consecutiveWindows s " +
-            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild ${rebuildsOf(maxRebuilds)}$hard"
+            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild $totalRebuilds$counted$hard"
     }
-
-    private fun rebuildsOf(max: Int): String = "$rebuilds/$max"
 
     companion object {
         /** Below this mean amplitude a window says nothing about channels. */

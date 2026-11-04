@@ -74,6 +74,27 @@ class MonoTapRecoveryTest {
     }
 
     @Test
+    fun `shuffling dead sides never exhaust the budget`() {
+        // The vendor re-fold flips the dead side across rebuilds — L-dead and
+        // R-dead alternating must keep healing far past the content budget.
+        val recovery = recovery(consecutiveWindows = 1, maxRebuilds = 2, rebuildIntervalMs = 0)
+        repeat(6) { flip ->
+            val dead = if (flip % 2 == 0) report(5000, 0) else report(0, 5000)
+            assertNotNull("shuffle rebuild $flip must fire", recovery.onReport(dead))
+        }
+    }
+
+    @Test
+    fun `content panning keeps the same side dead and burns the budget`() {
+        val recovery = recovery(consecutiveWindows = 1, maxRebuilds = 2, rebuildIntervalMs = 0)
+        assertNotNull(recovery.onReport(report(5000, 0)))
+        assertNotNull(recovery.onReport(report(5000, 0)))
+        // Still left-dead after two rebuilds = content, not the vendor — stop.
+        assertNull(recovery.onReport(report(5000, 0)))
+        assertNull(recovery.onReport(report(5000, 0)))
+    }
+
+    @Test
     fun `a quiet cast never triggers`() {
         val recovery = recovery(consecutiveWindows = 1)
         repeat(10) { assertNull(recovery.onReport(report(100, 0))) }
