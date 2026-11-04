@@ -3,6 +3,11 @@
 
     <!-- WebSocket signaling to the desktop (Phase 3). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Normal permission (granted at install). TikTok's cast holds it and
+         this ROM appears to gate the REMOTE_SUBMIX loopback route on it —
+         the stereo capture path on ROMs whose playback-capture remix is
+         broken (found live 2026-11-04, issue #101). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- QR code scanning only (Phase 3); requested at runtime on the scan screen. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Screen cast foreground service (Phase 5) — Android14+ requires the
