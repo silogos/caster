@@ -1,10 +1,12 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { createGameAacChannel, type GameAacChannel } from './audio/gameAdtsAac'
 import { wireRoutingPanel } from './audio/routingPanel'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
+import { createGameChannelSampler } from './webrtc/dataChannelStats'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
 import { FramePump, type PumpFrame, type PumpFrameSource } from './vc/framePump'
 import { createBgrCanvas } from './vc/webglBgrCanvas'
@@ -94,6 +96,26 @@ const mixer = new AudioMixer({
 // track, not the rendered <video>.
 let currentMediaStream: MediaStream | null = null
 
+// ADR-013: the `game-audio` channel's receiver state machine (format
+// handshake + ADTS-AAC decode), created when the channel arrives and
+// detached with the cast. The stats sampler reads its counters — the
+// channel is SCTP, invisible to getStats.
+let gameChannelAac: GameAacChannel | null = null
+const ZERO_GAME_CHANNEL_COUNTERS = {
+  bytesIn: 0,
+  framesIn: 0,
+  invalidFrames: 0,
+  framesRendered: 0,
+  decodeErrors: 0,
+  mode: 'pcm' as const
+}
+const gameChannelSampler = createGameChannelSampler(() => gameChannelAac?.counters ?? ZERO_GAME_CHANNEL_COUNTERS)
+
+function detachGameAacChannel(): void {
+  gameChannelAac?.detach()
+  gameChannelAac = null
+}
+
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
   createPeerConnection,
@@ -128,6 +150,7 @@ const receiver = new ReceiverSession({
       currentMediaStream = null
       videoEl.hidden = true
       releaseVideoWindow()
+      detachGameAacChannel()
       mixer.detachStream('game')
       document.body.classList.remove('receiving')
       castOverlayEl.hidden = true
@@ -155,10 +178,14 @@ const receiver = new ReceiverSession({
       mixer.detachStream('mic')
     }
   },
-  // ADR-012: the mobile's stereo game-audio PCM rides the in-band
+  // ADR-012/013: the mobile's stereo game audio rides the in-band
   // `"game-audio"` DataChannel — the pinned libwebrtc encoder is mono-hard,
-  // so the received track is dual-mono. The mixer owns the path switch and
-  // its fallback back to the track when the channel goes quiet.
+  // so the received track is dual-mono. The payload is ADTS-AAC by default
+  // (ADR-013), negotiated in-band: this side acks the mobile's announce and
+  // decodes into the same Float32 pairs the PCM path feeds the worklet
+  // with; an old mobile (PCM only) or a missing WebCodecs AudioDecoder
+  // degrades to raw PCM, and the mixer owns the fallback to the track when
+  // the channel goes quiet.
   onDataChannel: async (pc, channel) => {
     if (pc !== 'media' || channel.label !== 'game-audio') return
     const feed = await mixer.attachGamePcmSource()
@@ -166,13 +193,37 @@ const receiver = new ReceiverSession({
       log('warn', 'game-audio channel arrived but the PCM path is unavailable — track fallback stands')
       return
     }
-    const dataChannel = channel as { label: string; binaryType: string; onmessage: ((event: { data: unknown }) => void) | null }
+    const aac = createGameAacChannel({
+      pushPcm: (chunk) => feed.push(chunk),
+      pushFrames: (left, right) => feed.pushFrames(left, right),
+      log
+    })
+    gameChannelAac = aac
+    const dataChannel = channel as {
+      label: string
+      binaryType: string
+      send: (data: string | ArrayBuffer) => void
+      onmessage: ((event: { data: unknown }) => void) | null
+    }
     dataChannel.binaryType = 'arraybuffer'
     dataChannel.onmessage = (event) => {
       const data = event.data
-      if (data instanceof ArrayBuffer) feed.push(data)
+      if (typeof data === 'string') {
+        const ack = aac.onAnnounce(data)
+        if (ack !== null) {
+          try {
+            dataChannel.send(ack)
+          } catch (error) {
+            log('warn', 'game audio ack send failed — the mobile stays on PCM', { error: String(error) })
+          }
+        }
+        return
+      }
+      if (data instanceof ArrayBuffer) aac.onBinary(data)
     }
   },
+  // ADR-013's stats visibility: the SCTP channel's own counters per tick.
+  onGameChannelSample: (intervalMs) => gameChannelSampler.sample(intervalMs),
   log
 })
 

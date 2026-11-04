@@ -11,6 +11,7 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
+import com.zerofriction.localcast.audio.GameAacEncoder
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 import com.zerofriction.localcast.config.CastConfig
@@ -127,8 +128,13 @@ class MediaCastSession(
     private var capturer: ScreenCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
-    /** ADR-012: stereo game audio rides this bypass (encoder is mono-hard). */
+    /**
+     * ADR-012: stereo game audio rides this bypass (the track's encoder is
+     * mono-hard). ADR-013: its default payload is AAC — the sender pipeline
+     * ([gameAacSender]) encodes while the channel negotiates the format.
+     */
     private var gameAudioChannel: GameAudioDataChannel? = null
+    private var gameAacSender: GameAudioSender? = null
 
     /** Game audio (Phase7) — null means game audio is off for this cast. */
     private var audio: PlaybackCaptureAudioSource? = null
@@ -453,13 +459,30 @@ class MediaCastSession(
         val currentAudioTrack = audioTrack
         if (currentAudioTrack !== null) {
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
-            // ADR-012: the track's encoder is mono-hard in the pinned prebuilt
-            // (audio.md) — true stereo rides the DataChannel instead; the
-            // track stays as the desktop's fallback when the channel is quiet.
-            val channel = GameAudioDataChannel()
+            // ADR-012/013: the track's encoder is mono-hard in the pinned
+            // prebuilt (audio.md) — true stereo rides the DataChannel instead,
+            // AAC by default; the track stays as the desktop's fallback when
+            // the channel is quiet. Release the previous pipeline first: a
+            // re-auth's negotiate() used to overwrite the fields and leak the
+            // old sender + encoder threads spinning on the dead pc.
+            audio?.onEncoderInputSamples = null
+            gameAudioChannel?.close()
+            gameAudioChannel = null
+            gameAacSender?.release()
+            gameAacSender = null
+            val negotiator = GameAudioFormatNegotiator(nowMs = System::currentTimeMillis)
+            val channel = GameAudioDataChannel(negotiator)
             if (channel.attach(newPc)) {
+                val sender = GameAudioSender(
+                    negotiator = negotiator,
+                    channel = channel,
+                    sampleRateHz = GameAacEncoder.CAPTURE_SAMPLE_RATE_HZ,
+                    channels = GameAacEncoder.CAPTURE_CHANNELS,
+                )
                 gameAudioChannel = channel
-                audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+                gameAacSender = sender
+                sender.start()
+                audio?.onEncoderInputSamples = sender::onSamples
             }
         }
         onState(State.NEGOTIATING)
@@ -898,6 +921,8 @@ class MediaCastSession(
         // Release a pre-opened capture record the substitution never consumed
         // (the consumed one is released by the ADM's own stop path).
         audio?.onEncoderInputSamples = null
+        gameAacSender?.release()
+        gameAacSender = null
         gameAudioChannel?.close()
         gameAudioChannel = null
         audio?.release()

@@ -8,6 +8,7 @@ import {
   type AudioReceiveSample,
   type VideoReceiveSample
 } from './stats'
+import type { GameChannelSample } from './dataChannelStats'
 
 /**
  * The renderer's media half of the desktop (docs/architecture/desktop.md):
@@ -85,6 +86,13 @@ export interface ReceiverSessionOptions {
    * the receiver switches `binaryType` and consumes its own way.
    */
   onDataChannel?: (pc: PcId, channel: { label: string } & Record<string, unknown>) => void
+  /**
+   * ADR-013: the `game-audio` DataChannel is invisible to getStats (SCTP,
+   * not RTP) — the stats poll reads the channel's own counters through this
+   * and logs them as the `gameChannel` field of the media pc's stats line.
+   * Receives the tick's measured interval for the bitrate window.
+   */
+  onGameChannelSample?: (intervalMs: number) => GameChannelSample | null
 }
 
 const DEFAULT_STATS_INTERVAL_MS = 1_000
@@ -356,7 +364,10 @@ export class ReceiverSession {
                       jitterMs: Number(audio.jitterMs.toFixed(1)),
                       concealmentPct: audioConcealmentPct(audio, state)
                     }
-                  : null
+                  : null,
+              // ADR-013: the channel the stereo actually rides (SCTP is
+              // getStats-invisible) — wire bitrate, format, and decode health.
+              gameChannel: this.options.onGameChannelSample?.(intervalMs) ?? null
             })
             state.lastSample = sample
           } else if (audio !== null) {
