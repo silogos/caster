@@ -6,6 +6,7 @@ import {
   type AudioDataLike,
   type AudioDecoderFactory,
   type AudioDecoderLike,
+  type EncodedAudioChunkLike,
   type GameAacChannelOptions
 } from './gameAdtsAac'
 
@@ -43,7 +44,7 @@ class FakeAudioData implements AudioDataLike {
 class FakeAudioDecoder implements AudioDecoderLike {
   static instances: FakeAudioDecoder[] = []
   readonly configured: Array<Record<string, unknown>> = []
-  readonly decoded: Array<{ timestamp: number; data: Uint8Array }> = []
+  readonly decoded: Array<{ timestamp: number; byteLength: number }> = []
   decodeQueueSize = 0
   private onOutput?: (audioData: AudioDataLike) => void
 
@@ -56,9 +57,14 @@ class FakeAudioDecoder implements AudioDecoderLike {
     this.configured.push(config)
   }
 
-  /** Synchronously "decodes": two frames whose planar values mark the planes. */
-  decode(chunk: { type: 'key'; timestamp: number; data: Uint8Array }): void {
-    this.decoded.push({ timestamp: chunk.timestamp, data: chunk.data })
+  /**
+   * Synchronously "decodes": two frames whose planar values mark the planes.
+   * In Node there is no `EncodedAudioChunk` global — the channel's fallback
+   * passes the init object itself, so byteLength rides through (the REAL
+   * Chromium path is harness-verified against actual EncodedAudioChunk).
+   */
+  decode(chunk: EncodedAudioChunkLike): void {
+    this.decoded.push({ timestamp: chunk.timestamp, byteLength: chunk.byteLength })
     this.onOutput?.(new FakeAudioData(2))
   }
 
@@ -177,7 +183,8 @@ describe('game audio AAC decode path (ADR-013)', () => {
 
     // The receiver-side sample clock: frame n × 1024 × 1e6 / 48000.
     expect(decoder.decoded.map((entry) => entry.timestamp)).toEqual([0, 21333])
-    expect(decoder.decoded[0].data).toEqual(new Uint8Array([9, 9, 9]))
+    // The chunk carries exactly the raw AAC payload (after the 7-byte ADTS header).
+    expect(decoder.decoded[0].byteLength).toBe(3)
     // The decoded AudioData (plane i → value i at frame 0) reaches the worklet shape.
     expect(feed.frames).toHaveLength(2)
     expect(Array.from(feed.frames[0].left)).toEqual([0, 1])

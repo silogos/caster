@@ -40,7 +40,7 @@ export interface AudioDecoderLike {
     numberOfChannels: number
     description?: Uint8Array
   }): void
-  decode(chunk: { type: 'key'; timestamp: number; data: Uint8Array }): void
+  decode(chunk: EncodedAudioChunkLike): void
   flush(): Promise<void>
   close(): void
   readonly decodeQueueSize: number
@@ -56,6 +56,34 @@ export interface AudioDataLike {
   readonly numberOfFrames: number
   copyTo(destination: Float32Array, options: { planeIndex: number; format: 'f32-planar' }): void
   close(): void
+}
+
+/** Minimal `EncodedAudioChunk` surface (what `decode()` actually consumes). */
+export interface EncodedAudioChunkLike {
+  readonly type: 'key'
+  readonly timestamp: number
+  readonly byteLength: number
+}
+
+export interface EncodedAudioChunkInit {
+  type: 'key'
+  timestamp: number
+  data: Uint8Array
+}
+
+/**
+ * `AudioDecoder.decode()` takes a real `EncodedAudioChunk` instance — a
+ * plain init object throws `TypeError` in Chromium (found via the Electron
+ * decode harness: every frame rejected). Node tests have no WebCodecs, so
+ * there a plain {type, timestamp, byteLength} record is passed and the
+ * injected fakes consume that.
+ */
+function makeChunk(init: EncodedAudioChunkInit): EncodedAudioChunkLike {
+  const w = globalThis as unknown as {
+    EncodedAudioChunk?: new (init: EncodedAudioChunkInit) => EncodedAudioChunkLike
+  }
+  if (typeof w.EncodedAudioChunk === 'function') return new w.EncodedAudioChunk(init)
+  return { type: init.type, timestamp: init.timestamp, byteLength: init.data.byteLength }
 }
 
 export interface GameChannelCounters {
@@ -237,7 +265,7 @@ export function createGameAacChannel(options: GameAacChannelOptions): GameAacCha
       frameIndex++
       counters.framesIn++
       try {
-        decoder.decode({ type: 'key', timestamp: timestampUs, data: frame.payload })
+        decoder.decode(makeChunk({ type: 'key', timestamp: timestampUs, data: frame.payload }))
       } catch (error) {
         counters.decodeErrors++
         log('warn', 'game audio AAC decode rejected a frame', { error: String(error) })
