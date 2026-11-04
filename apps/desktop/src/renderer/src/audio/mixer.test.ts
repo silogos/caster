@@ -97,12 +97,10 @@ class FakeContext implements AudioContextLike {
 
   /** Opt-in per test: the PCM game-audio path (ADR-012) needs both surfaces. */
   audioWorklet: AudioWorkletLike | undefined = undefined
-  createWorkletNode: ((name: string, options?: object) => AudioWorkletNodeLike) | undefined = undefined
 
   enableWorkletHost(): FakeWorkletHost {
     const host = new FakeWorkletHost()
     this.audioWorklet = host
-    this.createWorkletNode = () => host.node
     return host
   }
 }
@@ -155,8 +153,14 @@ const makeMixer = (
   options: Partial<ConstructorParameters<typeof AudioMixer>[0]> & { storage?: MixerStorage } = {}
 ) => {
   const createAudioContext = options.createAudioContext ?? (() => new FakeContext())
+  const createWorkletNode =
+    options.createWorkletNode ??
+    ((context: AudioContextLike) => {
+      const host = (context as FakeContext).audioWorklet as FakeWorkletHost
+      return host.node
+    })
   const log = options.log ?? (vi.fn() as unknown as MixerLogger)
-  const mixer = new AudioMixer({ createAudioContext, storage: options.storage, log })
+  const mixer = new AudioMixer({ createAudioContext, createWorkletNode, storage: options.storage, log })
   return { mixer, createAudioContext, log: log as unknown as ReturnType<typeof vi.fn> }
 }
 
@@ -593,6 +597,7 @@ describe('receiver-side channel probe (issue #101)', () => {
     const logs: Array<{ level: string; message: string; details?: Record<string, unknown> }> = []
     const mixer = new AudioMixer({
       createAudioContext: () => context,
+      createWorkletNode: () => new FakeWorkletNode(),
       log: (level, message, details) => logs.push({ level, message, details })
     })
     mixer.attachStream('game', { id: 'stream' })
@@ -617,6 +622,7 @@ describe('receiver-side channel probe (issue #101)', () => {
     const logs: Array<{ level: string; message: string }> = []
     const mixer = new AudioMixer({
       createAudioContext: () => new FakeContext(),
+      createWorkletNode: () => new FakeWorkletNode(),
       log: (level, message) => logs.push({ level, message })
     })
     mixer.attachStream('game', { id: 'stream' })
@@ -641,21 +647,21 @@ describe('game audio PCM path (ADR-012)', () => {
     return view.buffer
   })()
 
-  it('returns null with a log line when the context has no AudioWorklet', () => {
+  it('returns null with a log line when the context has no AudioWorklet', async () => {
     const context = new FakeContext()
     const { mixer, log } = makeMixer({ createAudioContext: () => context })
-    expect(mixer.attachGamePcmSource()).toBeNull()
+    expect(await mixer.attachGamePcmSource()).toBeNull()
     expect(log).toHaveBeenCalledWith('warn', 'game pcm unavailable: AudioWorklet missing in this context')
   })
 
-  it('attaches the worklet to the game gain and stashes an attached track source', () => {
+  it('attaches the worklet to the game gain and stashes an attached track source', async () => {
     const context = new FakeContext()
     const host = context.enableWorkletHost()
     const { mixer } = makeMixer({ createAudioContext: () => context })
     mixer.attachStream('game', { id: 'stream' })
     const trackSource = context.sources[0]
 
-    const feed = mixer.attachGamePcmSource()
+    const feed = await mixer.attachGamePcmSource()
     expect(feed).not.toBeNull()
     expect(host.addedModules).toHaveLength(1)
     expect(host.node.connectedTo).toContainEqual(context.gains[0])
@@ -663,11 +669,11 @@ describe('game audio PCM path (ADR-012)', () => {
     expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(1)
   })
 
-  it('push converts Int16LE stereo frames to Float32 and feeds the worklet port', () => {
+  it('push converts Int16LE stereo frames to Float32 and feeds the worklet port', async () => {
     const context = new FakeContext()
     const host = context.enableWorkletHost()
     const { mixer } = makeMixer({ createAudioContext: () => context })
-    const feed = mixer.attachGamePcmSource()!
+    const feed = (await mixer.attachGamePcmSource())!
     feed.push(chunk)
 
     expect(host.node.port.postMessage).toHaveBeenCalledTimes(1)
@@ -676,11 +682,11 @@ describe('game audio PCM path (ADR-012)', () => {
     expect(Array.from(message.right)).toEqual([-0.5, -0.25])
   })
 
-  it('a stream arriving while PCM is active is stashed, not wired to the gain', () => {
+  it('a stream arriving while PCM is active is stashed, not wired to the gain', async () => {
     const context = new FakeContext()
     context.enableWorkletHost()
     const { mixer } = makeMixer({ createAudioContext: () => context })
-    mixer.attachGamePcmSource()
+    await mixer.attachGamePcmSource()
     const gain = context.gains[0]
     const connectedBefore = gain.connectedTo.length
 
@@ -689,7 +695,7 @@ describe('game audio PCM path (ADR-012)', () => {
     expect(gain.connectedTo.slice(connectedBefore)).not.toContainEqual(context.sources[0])
   })
 
-  it('a quiet channel falls back to the stashed track, and PCM re-claims on arrival', () => {
+  it('a quiet channel falls back to the stashed track, and PCM re-claims on arrival', async () => {
     vi.useFakeTimers()
     try {
       const context = new FakeContext()
@@ -698,7 +704,7 @@ describe('game audio PCM path (ADR-012)', () => {
       mixer.attachStream('game', { id: 'stream' })
       const trackSource = context.sources[0]
       const gain = context.gains[0]
-      const feed = mixer.attachGamePcmSource()!
+      const feed = (await mixer.attachGamePcmSource())!
       feed.push(chunk)
 
       vi.advanceTimersByTime(4_000) // quiet past the 3 s grace window (1 s ticks)
@@ -712,13 +718,13 @@ describe('game audio PCM path (ADR-012)', () => {
     }
   })
 
-  it('detach stops the fallback timer and disconnects the worklet', () => {
+  it('detach stops the fallback timer and disconnects the worklet', async () => {
     vi.useFakeTimers()
     try {
       const context = new FakeContext()
       const host = context.enableWorkletHost()
       const { mixer } = makeMixer({ createAudioContext: () => context })
-      const feed = mixer.attachGamePcmSource()!
+      const feed = (await mixer.attachGamePcmSource())!
       feed.detach()
 
       vi.advanceTimersByTime(10_000)

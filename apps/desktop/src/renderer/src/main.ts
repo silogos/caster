@@ -83,6 +83,8 @@ const mixer = new AudioMixer({
     options?.sinkId !== undefined
       ? new AudioContext({ sinkId: options.sinkId } as AudioContextOptions)
       : new AudioContext(),
+  createWorkletNode: (context, name, nodeOptions) =>
+    new AudioWorkletNode(context as AudioContext, name, nodeOptions as AudioWorkletNodeOptions),
   storage: window.localStorage,
   log
 })
@@ -157,9 +159,9 @@ const receiver = new ReceiverSession({
   // `"game-audio"` DataChannel — the pinned libwebrtc encoder is mono-hard,
   // so the received track is dual-mono. The mixer owns the path switch and
   // its fallback back to the track when the channel goes quiet.
-  onDataChannel: (pc, channel) => {
+  onDataChannel: async (pc, channel) => {
     if (pc !== 'media' || channel.label !== 'game-audio') return
-    const feed = mixer.attachGamePcmSource()
+    const feed = await mixer.attachGamePcmSource()
     if (feed === null) {
       log('warn', 'game-audio channel arrived but the PCM path is unavailable — track fallback stands')
       return

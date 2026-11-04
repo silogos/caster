@@ -87,13 +87,15 @@ export interface AudioContextLike {
   createAnalyser?(): AnalyserLike
   /** ADR-012: present on Chromium; the PCM game-audio path is optional like the probe. */
   audioWorklet?: AudioWorkletLike
-  createWorkletNode?(
-    name: string,
-    options?: { numberOfInputs?: number; numberOfOutputs?: number; outputChannelCount?: number[] }
-  ): AudioWorkletNodeLike
   resume(): Promise<void>
   setSinkId?(deviceId: string): Promise<void>
   close?(): Promise<void>
+}
+
+export interface WorkletNodeOptions {
+  numberOfInputs?: number
+  numberOfOutputs?: number
+  outputChannelCount?: number[]
 }
 
 /** localStorage satisfies this; injected so tests run in plain Node. */
@@ -111,6 +113,12 @@ export type MixerLogger = (
 export interface AudioMixerOptions {
   /** Production passes `AudioContext`; the cable context is built with a sinkId. */
   createAudioContext: (options?: { sinkId?: string }) => AudioContextLike
+  /** ADR-012: production passes `new AudioWorkletNode` — no method exists on the context. */
+  createWorkletNode: (
+    context: AudioContextLike,
+    name: string,
+    options?: WorkletNodeOptions
+  ) => AudioWorkletNodeLike
   /** Persisted levels and routing mode, restored on launch; omit for an in-memory mixer. */
   storage?: MixerStorage
   log: MixerLogger
@@ -123,51 +131,8 @@ const DEFAULT_LEVEL: MixerLevel = { volume: 1, muted: false }
 /** Silence the PCM fallback waits before handing the path back to the track. */
 const GAME_PCM_FALLBACK_MS = 3_000
 
-/**
- * The worklet behind `attachGamePcmSource` (ADR-012): a stereo ring the main
- * thread feeds with Float32 frames, rendered at the graph's 128-frame quanta;
- * underruns play silence — a dropped 20 ms sliver beats a stalled stream.
- */
-const GAME_PCM_WORKLET_SOURCE = `
-class GamePcmWorklet extends AudioWorkletProcessor {
-  constructor() {
-    super()
-    this.capacity = 16384
-    this.left = new Float32Array(this.capacity)
-    this.right = new Float32Array(this.capacity)
-    this.read = 0
-    this.filled = 0
-    this.port.onmessage = (event) => {
-      const { left, right } = event.data
-      const n = Math.min(left.length, this.capacity - this.filled)
-      const tail = (this.read + this.filled) % this.capacity
-      for (let i = 0; i < n; i++) {
-        this.left[(tail + i) % this.capacity] = left[i]
-        this.right[(tail + i) % this.capacity] = right[i]
-      }
-      this.filled += n
-    }
-  }
-  process(inputs, outputs) {
-    const out = outputs[0]
-    const outL = out[0]
-    const outR = out.length > 1 ? out[1] : out[0]
-    for (let i = 0; i < outL.length; i++) {
-      if (this.filled > 0) {
-        outL[i] = this.left[this.read]
-        outR[i] = this.right[this.read]
-        this.read = (this.read + 1) % this.capacity
-        this.filled -= 1
-      } else {
-        outL[i] = 0
-        outR[i] = 0
-      }
-    }
-    return true
-  }
-}
-registerProcessor('game-pcm', GamePcmWorklet)
-`
+/** The worklet as a real asset — Blob URLs fail in file:// renderers (found live). */
+const GAME_PCM_WORKLET_URL = new URL('./game-pcm-worklet.js', import.meta.url)
 
 /** Muting silences the channel without losing the stored volume. */
 const effectiveGain = (level: MixerLevel): number => (level.muted ? 0 : level.volume)
@@ -223,6 +188,7 @@ export class AudioMixer {
   private channelProbeTimer: ReturnType<typeof setInterval> | null = null
   /** ADR-012: the PCM game-audio path — the worklet feeding the game gain. */
   private gamePcm: AudioWorkletNodeLike | null = null
+  private gamePcmModuleLoading: Promise<void> | null = null
   private gamePcmActive = false
   private gamePcmLastAt = 0
   private gamePcmFallbackTimer: ReturnType<typeof setInterval> | null = null
@@ -350,39 +316,13 @@ export class AudioMixer {
    * the channel goes quiet for [GAME_PCM_FALLBACK_MS] (older mobile build),
    * the track returns automatically, and PCM re-claims the path on arrival.
    */
-  attachGamePcmSource(): { push(chunk: ArrayBuffer): void; detach(): void } | null {
-    const context = this.ensureContext()
-    if (context === null) return null
-    if (
-      context.audioWorklet === undefined ||
-      context.createWorkletNode === undefined ||
-      typeof Blob === 'undefined'
-    ) {
-      this.options.log('warn', 'game pcm unavailable: AudioWorklet missing in this context')
-      return null
-    }
-    const gain = this.ensureGain('game', context)
-    gain.gain.value = effectiveGain(this.levels.game)
-    if (this.gamePcm === null) {
-      try {
-        const url = URL.createObjectURL(new Blob([GAME_PCM_WORKLET_SOURCE], { type: 'application/javascript' }))
-        void context.audioWorklet.addModule(url)
-        this.gamePcm = context.createWorkletNode('game-pcm', {
-          numberOfInputs: 0,
-          numberOfOutputs: 1,
-          outputChannelCount: [2]
-        })
-        this.gamePcm.connect(gain)
-        this.applyRouting()
-      } catch (error) {
-        this.options.log('warn', 'game pcm worklet build failed', { error: String(error) })
-        this.gamePcm = null
-        return null
-      }
-    }
+  async attachGamePcmSource(): Promise<{ push(chunk: ArrayBuffer): void; detach(): void } | null> {
+    const worklet = await this.ensureGamePcmWorklet()
+    if (worklet === null) return null
     this.stashGameTrack()
     this.gamePcmActive = true
     this.gamePcmLastAt = Date.now()
+    this.attachChannelProbe('game', worklet)
     if (this.gamePcmFallbackTimer === null) {
       this.gamePcmFallbackTimer = setInterval(() => this.reconcileGamePcmFallback(), 1_000)
     }
@@ -390,6 +330,42 @@ export class AudioMixer {
     return {
       push: (chunk) => this.pushGamePcm(chunk),
       detach: () => this.detachGamePcmSource()
+    }
+  }
+
+  /**
+   * Builds the worklet once. `audioWorklet.addModule` is asynchronous — the
+   * node may only be constructed after the module's promise resolves (found
+   * live: a sync build threw `InvalidStateError`, no valid global scope).
+   */
+  private async ensureGamePcmWorklet(): Promise<AudioWorkletNodeLike | null> {
+    if (this.gamePcm !== null) return this.gamePcm
+    const context = this.ensureContext()
+    if (context === null) return null
+    if (context.audioWorklet === undefined) {
+      this.options.log('warn', 'game pcm unavailable: AudioWorklet missing in this context')
+      return null
+    }
+    try {
+      if (this.gamePcmModuleLoading === null) {
+        this.gamePcmModuleLoading = context.audioWorklet.addModule(GAME_PCM_WORKLET_URL.href)
+      }
+      await this.gamePcmModuleLoading
+      const node = this.options.createWorkletNode(context, 'game-pcm', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2]
+      })
+      const gain = this.ensureGain('game', context)
+      gain.gain.value = effectiveGain(this.levels.game)
+      node.connect(gain)
+      this.applyRouting()
+      this.gamePcm = node
+      return node
+    } catch (error) {
+      this.gamePcmModuleLoading = null // a failed load must be retryable
+      this.options.log('warn', 'game pcm worklet build failed', { error: String(error) })
+      return null
     }
   }
 

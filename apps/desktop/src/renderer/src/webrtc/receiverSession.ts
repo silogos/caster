@@ -146,8 +146,17 @@ export class ReceiverSession {
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: message.sdp })
       state.remoteDescriptionSet = true
+      // ADR-012 diagnostics: the media offer must carry an m=application
+      // section for the "game-audio" channel to reach this pc at all.
+      const offerSections = message.sdp.split(/\r?\n/).filter((line) => line.startsWith('m='))
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
+      const answerSections = answer.sdp.split(/\r?\n/).filter((line) => line.startsWith('m='))
+      this.options.log('debug', 'media sections (offer → answer)', {
+        pc: pcId,
+        offer: offerSections.map((line) => line.split(' ').slice(0, 3).join(' ')),
+        answer: answerSections.map((line) => line.split(' ').slice(0, 3).join(' '))
+      })
       this.options.signaling.sendSdpAnswer(pcId, answer.sdp)
       this.options.log('info', `sdp answer sent (pc=${pcId})`, { sdpBytes: answer.sdp.length })
       // Candidates the mobile trickled while the answer was being built.
