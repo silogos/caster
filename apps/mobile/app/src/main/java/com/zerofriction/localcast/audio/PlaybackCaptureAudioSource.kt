@@ -126,6 +126,10 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            // A capped dump steps aside so the next dump starts — a long
+            // session gets successive bounded files instead of just the first.
+            captureDump?.let { dump -> if (dump.isClosed) captureDump = null }
+            if (captureDump === null) maybeStartCaptureDump()
             captureDump?.onSamples(samples.data)
             // Stereo diagnostics + tap self-heal (audio.md): whether the mix
             // carries L≠R, one report per second, a bounded capture-record

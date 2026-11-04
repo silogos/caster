@@ -28,6 +28,9 @@ internal class AudioCaptureFileRecorder private constructor(
     private var pcmBytes = 0L
     private var closed = false
 
+    /** True once this dump finished (cap reached or [close] called). */
+    val isClosed: Boolean get() = closed
+
     /** Feeds one interleaved PCM16 little-endian read (the encoder's bytes). */
     fun onSamples(samples: ByteArray) {
         if (closed) return
