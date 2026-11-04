@@ -26,7 +26,7 @@ Game audio rides a **WebRTC DataChannel as raw PCM, bypassing libwebrtc's audio 
 |---|---|
 | Newer `stream-webrtc-android` | **Rejected** — 1.3.9/1.3.10 native libs lack the trial too; 1.3.8 is the newest published |
 | Patched/rebuilt libwebrtc | **Rejected** — a permanent native build system for one flag (the exact cost ADR-003's deferred option avoided) |
-| Opus via MediaCodec + WebCodecs decode | **Rejected for now** — `audio/opus` encoder availability varies by API level, manual Opus framing; raw PCM needs neither and LAN bandwidth absorbs it |
+| Opus via MediaCodec + WebCodecs decode | **Rejected for now — promoted to a proposed follow-up** ([issue #104](https://github.com/silogos/caster/issues/104)): `audio/opus` encoder availability varies by API level and the framing needs its own phase; raw PCM needs neither and LAN bandwidth absorbs it. TikTok's cast is the existence proof of this exact shape (capture own → MediaCodec AAC → own transport — dex-verified, #101) |
 | Stereo as two mono libwebrtc tracks | **Not possible** — one ADM per factory; splitting one stereo record into two libwebrtc sources has no public API |
 | Fix on the desktop | **Impossible** — the received stream carries no stereo information (L is a copy of R); the fold precedes transmission |
 
