@@ -122,6 +122,13 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Feature 2026-11d — Game audio Opus over the DataChannel (12× lighter payload) ✅ implemented — awaiting live ear test
+*(Not a numbered phase: implements issue #104, the lighter payload ADR-012 deferred; decides [ADR-013](../decisions/ADR-013-game-audio-opus-over-datachannel.md), amending ADR-012's raw-PCM payload — the DataChannel, its reliability semantics, and the fallback chain stand.)*
+**Scope:** the `game-audio` DataChannel (the true-stereo bypass of libwebrtc's mono-hard encoder) carries **platform-encoded Opus** instead of raw PCM: the mobile encodes with MediaCodec (`c2.android.opus.encoder`, 128 kbps stereo — no preset knob yet, mobile controls; ~0.13 Mbps vs 1.5 Mbps, kind to the radio in hotspot casts), announces channel payload **v1** (`{v:1, codec:'opus', sampleRate:48000, channels:2, preskip}` — one text message, queued before the first packet so a pre-output encoder failure never advertises a format), and the desktop classifies by message type (announce → WebCodecs `AudioDecoder` with a synthesized OpusHead → the same worklet ring; binary-first → legacy PCM, older peers). Fallback chain: Opus → PCM (no platform encoder / pre-output failure) → dual-mono track (quiet > 3 s). A renegotiation's channel rebuild closes the previous payload chain — also fixing the sender-thread leak the old build had on every re-auth. Resolved #104's open questions in the ADR: Opus over AAC, 128 kbps no-knob, the second-device encoder claim is a log read (`game audio: opus payload (<name>, …)`).
+**Accept:** mobile JVM 293/293 (6 new wire-contract tests) + `assembleDebug`; desktop vitest 307/307 (13 new) + typecheck + build; live: PUBG ear test through Opus (the #102 bar, now at 12× lighter), the desktop `game-audio channel bandwidth` line (~0.13 Mbps), the encoder probe line on a second non-SM8650 device — [features/game-audio.md](../features/game-audio.md) §ADR-012 → ADR-013, pending the devices in hand. *(Implemented 2026-11-04.)*
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

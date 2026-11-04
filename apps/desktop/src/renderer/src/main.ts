@@ -1,5 +1,6 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
 import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { attachGameAudioChannel, type GameAudioFeed } from './audio/game-audio-channel'
 import { wireRoutingPanel } from './audio/routingPanel'
 import { heroView } from './pairingHero'
 import { noInputView } from './noInputView'
@@ -94,6 +95,11 @@ const mixer = new AudioMixer({
 // track, not the rendered <video>.
 let currentMediaStream: MediaStream | null = null
 
+// ADR-013: the game-audio DataChannel's payload chain (classifier + decoder),
+// replaced wholesale when a renegotiation lands a fresh channel, and closed
+// with the cast (its decoder must not outlive the session).
+let activeGameAudioFeed: GameAudioFeed | null = null
+
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
   createPeerConnection,
@@ -128,6 +134,8 @@ const receiver = new ReceiverSession({
       currentMediaStream = null
       videoEl.hidden = true
       releaseVideoWindow()
+      activeGameAudioFeed?.detach()
+      activeGameAudioFeed = null
       mixer.detachStream('game')
       document.body.classList.remove('receiving')
       castOverlayEl.hidden = true
@@ -155,23 +163,28 @@ const receiver = new ReceiverSession({
       mixer.detachStream('mic')
     }
   },
-  // ADR-012: the mobile's stereo game-audio PCM rides the in-band
+  // ADR-012/ADR-013: the mobile's stereo game audio rides the in-band
   // `"game-audio"` DataChannel — the pinned libwebrtc encoder is mono-hard,
-  // so the received track is dual-mono. The mixer owns the path switch and
-  // its fallback back to the track when the channel goes quiet.
+  // so the received track is dual-mono. The channel payload is platform Opus
+  // (channel payload v1, webrtc.md); legacy builds send raw PCM. The feeder
+  // (game-audio-channel.ts) classifies by message type, decodes Opus with
+  // WebCodecs, and feeds the mixer's worklet — the mixer owns the audible
+  // path switch and its fallback back to the track when the channel goes
+  // quiet.
   onDataChannel: async (pc, channel) => {
     if (pc !== 'media' || channel.label !== 'game-audio') return
-    const feed = await mixer.attachGamePcmSource()
+    const feed = await attachGameAudioChannel({ mixer, log })
     if (feed === null) {
-      log('warn', 'game-audio channel arrived but the PCM path is unavailable — track fallback stands')
+      log('warn', 'game-audio channel arrived but the audio path is unavailable — track fallback stands')
       return
     }
+    // One payload chain at a time: a renegotiation's fresh channel replaces
+    // the previous feeder (its decoder closes; the worklet is reused).
+    activeGameAudioFeed?.detach()
+    activeGameAudioFeed = feed
     const dataChannel = channel as { label: string; binaryType: string; onmessage: ((event: { data: unknown }) => void) | null }
     dataChannel.binaryType = 'arraybuffer'
-    dataChannel.onmessage = (event) => {
-      const data = event.data
-      if (data instanceof ArrayBuffer) feed.push(data)
-    }
+    dataChannel.onmessage = (event) => feed.onMessage(event.data)
   },
   log
 })

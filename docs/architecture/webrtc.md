@@ -98,11 +98,25 @@ The pinned libwebrtc build downmixes the ADM's stereo input to mono **before** i
 | Label | `game-audio` |
 | Negotiation | in-band — the mobile creates it **before `createOffer`**; the desktop learns it via `ondatachannel` |
 | Reliability | `ordered=false`, `maxRetransmits=0` — a lost sliver is inaudible, a stalled stream is not |
-| Payload | raw PCM16 LE, interleaved stereo, 48 kHz — chunks at the ADM's read granularity (~10 ms, 3840 B) |
-| Sender policy | bounded drop-oldest queue (50 chunks ≈ 0.5 s) + `bufferedAmount` ceiling (100 kB); muted casts keep sending silence |
-| Desktop render | `Int16LE → Float32 → AudioWorklet` ring (16 384 frames) → the mixer's existing game gain node (volume/mute/cable routing unchanged); underrun = silence; **quiet > 3 s → automatic fallback to the dual-mono track** (older mobile builds degrade, not silence) |
+| Payload | **channel payload v1** ([ADR-013](../decisions/ADR-013-game-audio-opus-over-datachannel.md)): one **text** announce, then one Opus packet per binary message (spec below). Legacy payload (ADR-012): raw PCM16 LE, interleaved stereo, 48 kHz, chunks at the ADM's read granularity — the fallback an older mobile sends when the platform Opus encoder is unavailable |
+| Sender policy | bounded drop-oldest queue (50 frames) + `bufferedAmount` ceiling (100 kB PCM / 24 kB Opus); muted casts keep sending silence |
+| Desktop render | Opus: WebCodecs `AudioDecoder` → `AudioData` planes → the **same** `AudioWorklet` ring (16 384 frames) → the mixer's existing game gain node (volume/mute/cable routing unchanged). Legacy PCM: `Int16LE → Float32` into the same ring. Underrun = silence; **quiet > 3 s → automatic fallback to the dual-mono track** (older mobile builds degrade, not silence) |
 
-Bandwidth cost: ~1.5 Mbps steady on the LAN. The channel is additive — no signaling message changes, no envelope version bump; peers without it simply never open one, and the receiver falls back. Full decision: [ADR-012](../decisions/ADR-012-game-audio-pcm-over-datachannel.md).
+Bandwidth cost: ~0.13 Mbps steady (128 kbps stereo Opus; was ~1.5 Mbps as raw PCM — ADR-013's motivation). The channel is additive — no signaling message changes, no envelope version bump; peers without it simply never open one, and the receiver falls back. Full decisions: [ADR-012](../decisions/ADR-012-game-audio-pcm-over-datachannel.md), [ADR-013](../decisions/ADR-013-game-audio-opus-over-datachannel.md).
+
+#### Channel payload v1 (ADR-013)
+
+The DataChannel's native text/binary distinction separates control from media — no length prefixes, no framing header:
+
+1. **Announce (text, exactly once, sent by the sender thread immediately before the first packet):** JSON
+   ```json
+   { "v": 1, "codec": "opus", "sampleRate": 48000, "channels": 2, "preskip": 312 }
+   ```
+   `v` is the **channel payload version** (independent of the signaling envelope's `v`); unknown `codec` or wrong `v`/`sampleRate` → the desktop ignores the channel (track fallback stands). `preskip` (samples) comes from the encoder's csd-0 OpusHead when MediaCodec emits one, else 312 (libopus's default at 48 kHz).
+2. **Media (binary):** one Opus packet (one access unit) per message. Sent only after the announce: an encoder that fails before its first output frame never advertises a format, so the desktop sees a plain PCM-or-nothing stream and the fallback chain needs no extra link. Muted casts keep encoding silence — identical flow for the desktop's quiet timer.
+3. **Desktop classification:** `ordered=false` lets the announce trail early packets, so binary messages are buffered until the stream classifies (announce → Opus decoder; no announce and binary flows on → legacy PCM, buffered chunks flushed in order). The classification window is bounded (a few messages at most).
+
+Desktop Opus decode: WebCodecs `AudioDecoder` with `{ codec: 'opus', sampleRate: 48000, numberOfChannels: 2, description: <synthesized 19-byte OpusHead — magic, version 1, channels, preskip BE, 48000 LE, gain 0, mapping family 0> }`; decoded f32 planes feed the worklet ring. `AudioDecoder` missing, `isConfigSupported` rejecting, or a decode error all degrade to the track fallback (the quiet timer does the switch).
 
 Initial sender targets (Phase 5, conservative, adjusted in Phases 10–12): 720p, 30 fps, 4–6 Mbps, `degradationPreference: BALANCED`. Sender-side parameters are set via `RTCRtpSender` parameters from the mobile `config` module only. Since the Advanced settings, the degradation preference (Balanced / Maintain framerate / Maintain resolution — per-preset defaults from the QualityProfile table) and an optional encoder-side fps cap (`maxFramerate`, none by default) are also config-driven.
 
