@@ -153,6 +153,24 @@ const receiver = new ReceiverSession({
       mixer.detachStream('mic')
     }
   },
+  // ADR-012: the mobile's stereo game-audio PCM rides the in-band
+  // `"game-audio"` DataChannel — the pinned libwebrtc encoder is mono-hard,
+  // so the received track is dual-mono. The mixer owns the path switch and
+  // its fallback back to the track when the channel goes quiet.
+  onDataChannel: (pc, channel) => {
+    if (pc !== 'media' || channel.label !== 'game-audio') return
+    const feed = mixer.attachGamePcmSource()
+    if (feed === null) {
+      log('warn', 'game-audio channel arrived but the PCM path is unavailable — track fallback stands')
+      return
+    }
+    const dataChannel = channel as { label: string; binaryType: string; onmessage: ((event: { data: unknown }) => void) | null }
+    dataChannel.binaryType = 'arraybuffer'
+    dataChannel.onmessage = (event) => {
+      const data = event.data
+      if (data instanceof ArrayBuffer) feed.push(data)
+    }
+  },
   log
 })
 

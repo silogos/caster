@@ -3,6 +3,8 @@ import {
   AudioMixer,
   type AnalyserLike,
   type AudioContextLike,
+  type AudioWorkletLike,
+  type AudioWorkletNodeLike,
   type ChannelSplitterLike,
   type GainNodeLike,
   type MediaStreamAudioDestinationNodeLike,
@@ -91,6 +93,43 @@ class FakeContext implements AudioContextLike {
     const destination = new FakeSendDestination()
     this.destinations.push(destination)
     return destination
+  }
+
+  /** Opt-in per test: the PCM game-audio path (ADR-012) needs both surfaces. */
+  audioWorklet: AudioWorkletLike | undefined = undefined
+  createWorkletNode: ((name: string, options?: object) => AudioWorkletNodeLike) | undefined = undefined
+
+  enableWorkletHost(): FakeWorkletHost {
+    const host = new FakeWorkletHost()
+    this.audioWorklet = host
+    this.createWorkletNode = () => host.node
+    return host
+  }
+}
+
+class FakeWorkletNode implements AudioWorkletNodeLike {
+  port = { postMessage: vi.fn() }
+  connectedTo: unknown[] = []
+  disconnectCount = 0
+  channelCount = 2
+
+  connect(node: unknown): unknown {
+    this.connectedTo.push(node)
+    return node
+  }
+
+  disconnect(): void {
+    this.disconnectCount += 1
+  }
+}
+
+class FakeWorkletHost implements AudioWorkletLike {
+  readonly node = new FakeWorkletNode()
+  addedModules: string[] = []
+
+  addModule(url: string): Promise<void> {
+    this.addedModules.push(url)
+    return Promise.resolve()
   }
 }
 
@@ -582,5 +621,111 @@ describe('receiver-side channel probe (issue #101)', () => {
     })
     mixer.attachStream('game', { id: 'stream' })
     expect(logs.some((entry) => entry.message === 'channel probe unavailable')).toBe(false)
+  })
+})
+
+/**
+ * ADR-012's PCM game-audio path: the DataChannel chunks arrive as Int16LE
+ * stereo frames; the mixer converts them to Float32, feeds the worklet ring
+ * behind the game gain, keeps the dual-mono track stashed (echo guard), and
+ * hands the path back to the track when the channel goes quiet.
+ */
+describe('game audio PCM path (ADR-012)', () => {
+  /** Two stereo Int16LE frames: L=16384/8192, R=-16384/-8192 (convert to 0.5/0.25 and −0.5/−0.25). */
+  const chunk = (() => {
+    const view = new DataView(new ArrayBuffer(8))
+    view.setInt16(0, 16384, true)
+    view.setInt16(2, -16384, true)
+    view.setInt16(4, 8192, true)
+    view.setInt16(6, -8192, true)
+    return view.buffer
+  })()
+
+  it('returns null with a log line when the context has no AudioWorklet', () => {
+    const context = new FakeContext()
+    const { mixer, log } = makeMixer({ createAudioContext: () => context })
+    expect(mixer.attachGamePcmSource()).toBeNull()
+    expect(log).toHaveBeenCalledWith('warn', 'game pcm unavailable: AudioWorklet missing in this context')
+  })
+
+  it('attaches the worklet to the game gain and stashes an attached track source', () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    mixer.attachStream('game', { id: 'stream' })
+    const trackSource = context.sources[0]
+
+    const feed = mixer.attachGamePcmSource()
+    expect(feed).not.toBeNull()
+    expect(host.addedModules).toHaveLength(1)
+    expect(host.node.connectedTo).toContainEqual(context.gains[0])
+    // Echo guard: the dual-mono track leaves the audible path.
+    expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(1)
+  })
+
+  it('push converts Int16LE stereo frames to Float32 and feeds the worklet port', () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = mixer.attachGamePcmSource()!
+    feed.push(chunk)
+
+    expect(host.node.port.postMessage).toHaveBeenCalledTimes(1)
+    const message = host.node.port.postMessage.mock.calls[0][0] as { left: Float32Array; right: Float32Array }
+    expect(Array.from(message.left)).toEqual([0.5, 0.25])
+    expect(Array.from(message.right)).toEqual([-0.5, -0.25])
+  })
+
+  it('a stream arriving while PCM is active is stashed, not wired to the gain', () => {
+    const context = new FakeContext()
+    context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    mixer.attachGamePcmSource()
+    const gain = context.gains[0]
+    const connectedBefore = gain.connectedTo.length
+
+    mixer.attachStream('game', { id: 'late-stream' })
+    expect(context.sources[0].connectedTo).toHaveLength(0) // stashed, silent
+    expect(gain.connectedTo.slice(connectedBefore)).not.toContainEqual(context.sources[0])
+  })
+
+  it('a quiet channel falls back to the stashed track, and PCM re-claims on arrival', () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      mixer.attachStream('game', { id: 'stream' })
+      const trackSource = context.sources[0]
+      const gain = context.gains[0]
+      const feed = mixer.attachGamePcmSource()!
+      feed.push(chunk)
+
+      vi.advanceTimersByTime(4_000) // quiet past the 3 s grace window (1 s ticks)
+      expect(trackSource.connectedTo).toContainEqual(gain) // track back on the path
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+
+      feed.push(chunk) // PCM resumes — re-claims the path
+      expect(trackSource.disconnectCount).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('detach stops the fallback timer and disconnects the worklet', () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      const feed = mixer.attachGamePcmSource()!
+      feed.detach()
+
+      vi.advanceTimersByTime(10_000)
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+      // No fallback ticks fired after detach — the log stays silent.
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

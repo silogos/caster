@@ -45,6 +45,8 @@ export interface PeerConnectionLike {
   onicecandidate: ((event: { candidate: unknown }) => void) | null
   onconnectionstatechange: (() => void) | null
   ontrack: ((event: { track: unknown; streams: unknown[] }) => void) | null
+  /** ADR-012: the mobile's in-band `"game-audio"` channel lands here on answer. */
+  ondatachannel: ((event: { channel: { label: string } & Record<string, unknown> }) => void) | null
   connectionState: string
 }
 
@@ -77,6 +79,12 @@ export interface ReceiverSessionOptions {
   /** getStats poll interval (webrtc.md: ~1 Hz); injectable for tests. */
   statsIntervalMs?: number
   now?: () => number
+  /**
+   * ADR-012: an in-band DataChannel arrived (the mobile creates
+   * `"game-audio"` pre-offer). The channel is binary (PCM stereo chunks) —
+   * the receiver switches `binaryType` and consumes its own way.
+   */
+  onDataChannel?: (pc: PcId, channel: { label: string } & Record<string, unknown>) => void
 }
 
 const DEFAULT_STATS_INTERVAL_MS = 1_000
@@ -256,6 +264,13 @@ export class ReceiverSession {
           this.options.micSink.show(stream)
         }
       }
+    }
+    state.pc.ondatachannel = (event) => {
+      // ADR-012: the mobile's stereo game-audio PCM rides this in-band
+      // channel (the mobile creates it pre-offer; it lands here on answer).
+      const label = event.channel?.label ?? 'unknown'
+      this.options.log('info', `data channel arrived (pc=${pcId}, label=${label})`)
+      this.options.onDataChannel?.(pcId, event.channel)
     }
     state.pc.onconnectionstatechange = () => {
       const stateName = state.pc.connectionState

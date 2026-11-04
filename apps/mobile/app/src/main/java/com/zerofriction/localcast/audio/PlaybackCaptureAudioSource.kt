@@ -103,6 +103,15 @@ class PlaybackCaptureAudioSource(
     @Volatile
     private var captureDump: AudioCaptureFileRecorder? = null
 
+    /**
+     * ADR-012: the encoder-input bytes offered to the session's DataChannel
+     * sender (the bytes the prebuilt encoder folds to mono). Set by the
+     * session when the game-audio channel is attached; invoked on the ADM's
+     * recording thread — implementations must not block.
+     */
+    @Volatile
+    var onEncoderInputSamples: ((ByteArray) -> Unit)? = null
+
     /** The flavor sweep runs once, at the first loud window (a silent sweep measures nothing). */
     @Volatile
     private var sweepStarted = false
@@ -126,6 +135,7 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            onEncoderInputSamples?.invoke(samples.data)
             // A capped dump steps aside so the next dump starts — a long
             // session gets successive bounded files instead of just the first.
             captureDump?.let { dump -> if (dump.isClosed) captureDump = null }

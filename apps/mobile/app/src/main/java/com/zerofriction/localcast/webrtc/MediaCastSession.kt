@@ -127,6 +127,8 @@ class MediaCastSession(
     private var capturer: ScreenCapturer? = null
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
+    /** ADR-012: stereo game audio rides this bypass (encoder is mono-hard). */
+    private var gameAudioChannel: GameAudioDataChannel? = null
 
     /** Game audio (Phase7) — null means game audio is off for this cast. */
     private var audio: PlaybackCaptureAudioSource? = null
@@ -451,6 +453,14 @@ class MediaCastSession(
         val currentAudioTrack = audioTrack
         if (currentAudioTrack !== null) {
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
+            // ADR-012: the track's encoder is mono-hard in the pinned prebuilt
+            // (audio.md) — true stereo rides the DataChannel instead; the
+            // track stays as the desktop's fallback when the channel is quiet.
+            val channel = GameAudioDataChannel()
+            if (channel.attach(newPc)) {
+                gameAudioChannel = channel
+                audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+            }
         }
         onState(State.NEGOTIATING)
         restarts.onNegotiating(System.currentTimeMillis())
@@ -887,6 +897,9 @@ class MediaCastSession(
         audioSource = null
         // Release a pre-opened capture record the substitution never consumed
         // (the consumed one is released by the ADM's own stop path).
+        audio?.onEncoderInputSamples = null
+        gameAudioChannel?.close()
+        gameAudioChannel = null
         audio?.release()
         // The audio ADM is owned (and released) by the factory below —
         // JavaAudioDeviceModule.release() must not be called from app code.
