@@ -95,6 +95,14 @@ class PlaybackCaptureAudioSource(
     @Volatile
     private var preOpenedRecord: AudioRecord? = null
 
+    /**
+     * Opt-in per-cast WAV dump of the encoder-consumed bytes (issue #101
+     * diagnostics) — enabled by the `localcast_capture_dump` global setting
+     * via adb, bounded by the recorder, closed at teardown.
+     */
+    @Volatile
+    private var captureDump: AudioCaptureFileRecorder? = null
+
     /** The flavor sweep runs once, at the first loud window (a silent sweep measures nothing). */
     @Volatile
     private var sweepStarted = false
@@ -118,6 +126,7 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            captureDump?.onSamples(samples.data)
             // Stereo diagnostics + tap self-heal (audio.md): whether the mix
             // carries L≠R, one report per second, a bounded capture-record
             // rebuild when the tap is born with a dead channel, and a
@@ -225,6 +234,35 @@ class PlaybackCaptureAudioSource(
                 preOpenedRecord = null
             }
         }
+        captureDump?.close()
+        captureDump = null
+    }
+
+    /**
+     * Starts the bounded WAV dump of the encoder-consumed bytes when the
+     * `localcast_capture_dump` global setting is 1 (a development toggle set
+     * via adb — never on in normal use, issue #101 diagnostics). Once per
+     * cast, at the swap where the encoder's stream begins.
+     */
+    private fun maybeStartCaptureDump() {
+        if (captureDump !== null) return
+        val enabled = try {
+            android.provider.Settings.Global.getInt(
+                appContext.contentResolver,
+                CAPTURE_DUMP_SETTING,
+                0,
+            ) == 1
+        } catch (t: Throwable) {
+            false
+        }
+        if (!enabled) return
+        val dir = appContext.getExternalFilesDir(null) ?: return
+        val context = swapContext ?: return
+        captureDump = AudioCaptureFileRecorder.start(
+            dir,
+            context.sampleRate,
+            context.channelCount,
+        )
     }
 
     // ---- everything below runs on the ADM's recording thread unless noted ----
@@ -285,6 +323,7 @@ class PlaybackCaptureAudioSource(
             stopAndRelease(micRecord)
             val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
             swapContext = SwapContext(audioInput, capture.sampleRate, capture.channelCount, readBytes)
+            maybeStartCaptureDump()
             Log.i(
                 TAG,
                 "playback capture active: ${capture.sampleRate} Hz, ${capture.channelCount} ch, ${capture.audioFormat}",
@@ -727,6 +766,9 @@ class PlaybackCaptureAudioSource(
          * the builder's [setInputSampleRate] call.
          */
         private const val PINNED_INPUT_SAMPLE_RATE = 48_000
+
+        /** Settings.Global key arming the bounded encoder-input WAV dump. */
+        private const val CAPTURE_DUMP_SETTING = "localcast_capture_dump"
 
         /**
          * audio.md usage filter: media, game, unknown. (TikTok's exact set
