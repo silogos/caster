@@ -43,6 +43,14 @@ data class CastConfig(
      * reversible — off leaves the cast exactly at the user's settings.
      */
     val autoQuality: Boolean,
+    /**
+     * Feature 2026-11d: keep the game-audio DataChannel on raw PCM16 (ADR-012)
+     * instead of negotiating AAC (ADR-013) — the codec's ~40–50 ms latency
+     * leaves the ear path, at the cost of wire bitrate (~1.5 vs ~0.2 Mbps,
+     * trivial on a LAN). Off = today's AAC default; the wire never changes
+     * shape (the `pcm16` announce already exists in the channel sub-protocol).
+     */
+    val lowLatencyGameAudio: Boolean = DEFAULT_LOW_LATENCY_GAME_AUDIO,
     // ---- Advanced (designs/mobile-app.html, AdvancedCastSettings.kt) ----
     /** Hardware-with-fallback (today's behavior) or software-only encoders. */
     val encoderImpl: EncoderImplementation = EncoderImplementation.HARDWARE,
@@ -76,6 +84,9 @@ data class CastConfig(
 
         /** thermal.md Phase12: auto quality is part of the good default cast; a switch turns it off. */
         const val DEFAULT_AUTO_QUALITY = true
+
+        /** Feature 2026-11d: AAC (ADR-013) stays the default wire; the toggle opts into raw PCM. */
+        const val DEFAULT_LOW_LATENCY_GAME_AUDIO = false
 
         fun default(): CastConfig = CastConfig(
             profile = DEFAULT_PROFILE,

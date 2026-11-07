@@ -2,6 +2,25 @@
 
 Implemented in: **Phase14** (see [roadmap](../development/roadmap.md)). Status: **implemented; desktop 83/83 green; verified live via CDP against the production build (2026-09-20)** — the acceptance item itself (a clean, correctly-proportioned, smooth OBS Window Capture over a **30+ min session**) needs real hardware, OBS, and the user's eyes; see *Verification*.
 
+## Audio routing recipes for the stream (Feature 2026-11d)
+
+The streamer's PC mixes more than the cast — donation alerts (Saweria and friends) play through the **default output**. One rule prevents the classic double-game-audio:
+
+> **Game audio reaches OBS through exactly ONE source.** Capturing the desktop audio (speaker loopback) *and* the "Zero-Friction Game Audio" device at the same time records the game twice ([audio-mixer.md](audio-mixer.md) — in `both` routing the mix plays to the default output *and* the per-track device).
+
+**Config A — one desktop-audio source (the current setup; simplest):**
+
+- Mixer routing **Both** (ears get the cast at full latency freshness; the cable device still fills for other uses).
+- OBS sources: **Desktop audio** (the alert sounds + the game, mixed exactly as you hear them) + **"Zero-Friction Mic"**. Do **not** add "Zero-Friction Game Audio".
+- With the mobile's **Low-latency game audio** toggle on ([game-audio.md](game-audio.md)), the game audio rides raw PCM (~1.5 Mbps wire) and lands with the smallest delay the pipeline can produce — A/V sync on the stream is then one small static per-source offset in OBS (dial it once against an on-screen clock; the paths are stable on a quiet LAN).
+- Trade-off: game vs alert volume in the stream follows the OS mix — no independent stream-side balance.
+
+**Config B — separate sources (only if you need independent game/alert volumes):**
+
+- The alerts must leave the default device first (Windows: OBS *Application Audio Capture* of the alert app; macOS: a per-app output routing tool) — only then is the desktop-audio capture free of the game.
+- OBS sources: **"Zero-Friction Game Audio"** (the cast's game-audio device) + the alerts' capture + **"Zero-Friction Mic"**.
+- The follow-up work item (bounded playout buffer on the cable path + a raised receiver delay on video/mic, candidate ADR-014) exists to make this config's game audio glitch-free and pre-synced for OBS; until it ships, Config B runs on the same play-on-arrival ring as your ears.
+
 ## What is implemented
 
 The receiver window is the streamer's "output device": OBS Window Capture records exactly one window, so that window must contain nothing but video, for the whole session — and *its shape is the user's* (§3: letterboxing is the default; an earlier window-follows-stream default was replaced after the live session below). Phase14 closed the three items left open in [architecture/desktop.md](../architecture/desktop.md) §Window design (the full-window video surface and hover overlay landed earlier, review-time after Phase9).

@@ -119,6 +119,16 @@ class SettingsViewModel(
         update { it.copy(autoQuality = on) }
     }
 
+    /**
+     * Feature 2026-11d: the low-latency audio switch — on keeps the game-audio
+     * channel on raw PCM16 (ADR-012) instead of AAC (ADR-013), trading wire
+     * bitrate for the ear path's latency. Like the audio toggles, it is not
+     * preset-owned: an explicit user choice survives preset switches.
+     */
+    fun setLowLatencyGameAudio(on: Boolean) {
+        update { it.copy(lowLatencyGameAudio = on) }
+    }
+
     // ---- Advanced (designs/mobile-app.html) — every one is a next-cast setting ----
 
     fun setEncoderImpl(impl: EncoderImplementation) {

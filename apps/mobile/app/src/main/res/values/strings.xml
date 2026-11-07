@@ -110,6 +110,10 @@
              Home-style switch row). -->
     <string name="settings_auto_quality">Automatic quality</string>
     <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
+    <string name="settings_low_latency_game_audio">Low-latency game audio</string>
+    <string name="low_latency_audio_on">Low latency</string>
+    <string name="low_latency_audio_off">Standard</string>
+    <string name="settings_low_latency_game_audio_hint">Sends game audio as raw sound data — the smallest possible delay for headphones, at a higher Wi-Fi bitrate. Standard keeps the usual compressed audio (smaller on the wire, a little more delay).</string>
     <string name="auto_quality_on">On</string>
     <string name="auto_quality_off">Off</string>
 

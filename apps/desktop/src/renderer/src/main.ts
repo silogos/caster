@@ -1,5 +1,5 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
-import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { AudioMixer, type AudioWorkletNodeLike, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { createGameAacChannel, type GameAacChannel } from './audio/gameAdtsAac'
 import { wireRoutingPanel } from './audio/routingPanel'
 import { heroView } from './pairingHero'
@@ -86,7 +86,7 @@ const mixer = new AudioMixer({
       ? new AudioContext({ sinkId: options.sinkId } as AudioContextOptions)
       : new AudioContext(),
   createWorkletNode: (context, name, nodeOptions) =>
-    new AudioWorkletNode(context as AudioContext, name, nodeOptions as AudioWorkletNodeOptions),
+    new AudioWorkletNode(context as AudioContext, name, nodeOptions as AudioWorkletNodeOptions) as unknown as AudioWorkletNodeLike,
   storage: window.localStorage,
   log
 })
@@ -107,6 +107,7 @@ const ZERO_GAME_CHANNEL_COUNTERS = {
   invalidFrames: 0,
   framesRendered: 0,
   decodeErrors: 0,
+  decodeQueueDepth: 0,
   mode: 'pcm' as const
 }
 const gameChannelSampler = createGameChannelSampler(() => gameChannelAac?.counters ?? ZERO_GAME_CHANNEL_COUNTERS)
@@ -222,8 +223,22 @@ const receiver = new ReceiverSession({
       if (data instanceof ArrayBuffer) aac.onBinary(data)
     }
   },
-  // ADR-013's stats visibility: the SCTP channel's own counters per tick.
-  onGameChannelSample: (intervalMs) => gameChannelSampler.sample(intervalMs),
+  // ADR-013's stats visibility: the SCTP channel's own counters per tick,
+  // plus the worklet ring's depth — the playout-tuning telemetry (the
+  // sampler doesn't know the mixer, so the wiring joins them here).
+  // Feature 2026-11d adds the context's output latencies: the receiver's
+  // audio-output term, measurable at last.
+  onGameChannelSample: (intervalMs) => {
+    const sample = gameChannelSampler.sample(intervalMs)
+    if (sample === null) return null
+    const output = mixer.audioOutputLatencyMs()
+    return {
+      ...sample,
+      ringDepthMs: mixer.gameRingDepthMs(),
+      ctxBaseLatencyMs: output.baseMs,
+      ctxOutputLatencyMs: output.outputMs
+    }
+  },
   log
 })
 

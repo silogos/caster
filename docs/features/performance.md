@@ -12,6 +12,7 @@ Nothing below existed before this phase; every optimization decision cites it.
 
 - The ~1 Hz stats line now carries the decode/render fields Chromium reports but we ignored until now: reported fps, frames received, **per-frame jitter-buffer residence** (ms), freeze count and duration, keyframes decoded, NACK/PLI counts, frame size (`stats.ts` → `receiverSession`).
 - **Audio reception is now visible on both pcs** (game audio on `media`, mic on `mic`): bytes/bitrate, packet loss, jitter, and **packet-loss concealment** (concealed-sample fraction — the audio-quality signal; A3-class questions are finally measurable). Until now, audio reception was invisible at the receiver end-to-end.
+- **The game-audio channel's own latency terms (Feature 2026-11d)** ride the `gameChannel` sample: `decodeQueueDepth` (frames parked inside the WebCodecs decoder — a growing queue is a starved renderer) and the main AudioContext's `ctxBaseLatencyMs`/`ctxOutputLatencyMs` (the receiver's audio-output term, previously estimated at ~10–25 ms). Together with `ringDepthMs` these make the ear-path budget fully measured — the PCM-vs-AAC comparison the low-latency toggle cites is now readable off one stats line.
 - **`measureRender`** on the existing `window.__castReceiver` CDP hook: a `requestVideoFrameCallback` probe that collects N presentation intervals (mean/median/p95/max, gaps measured against the median) — the receiver's first *direct* view of decode→render pacing, not just aggregate counters (`renderProbe.ts`, vitest-covered).
 
 **Sender (mobile):**
