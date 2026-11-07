@@ -737,6 +737,46 @@ describe('game audio PCM path (ADR-012)', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keepAlive stamps liveness without samples — the engine path survives the 3 s window', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      const feed = (await mixer.attachGamePcmSource())!
+
+      // The engine path forwards chunks past this mixer and only stamps
+      // liveness — the worklet ring stays empty, the track stays stashed.
+      for (let i = 0; i < 4; i++) {
+        feed.keepAlive()
+        vi.advanceTimersByTime(1_000)
+      }
+      expect(host.node.disconnectCount).toBe(0) // never fell back to the track
+
+      // For contrast: stop stamping and the quiet fallback does fire.
+      vi.advanceTimersByTime(4_000)
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('setGamePcmTargetMs posts the target and applies it to a later-built worklet', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    mixer.setGamePcmTargetMs(20) // remembered before any worklet exists
+
+    const feed = (await mixer.attachGamePcmSource())!
+    expect(host.node.port.postMessage).toHaveBeenCalledWith({ targetMs: 20 }) // applied at build
+
+    feed.push(chunk) // a plain feed must still reach the worklet
+    expect(host.node.port.postMessage).toHaveBeenCalledWith({ left: expect.any(Float32Array), right: expect.any(Float32Array) })
+
+    mixer.setGamePcmTargetMs(0)
+    expect(host.node.port.postMessage).toHaveBeenLastCalledWith({ targetMs: 0 })
+  })
 })
 
 /**

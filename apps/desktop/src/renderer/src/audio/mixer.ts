@@ -206,6 +206,8 @@ export class AudioMixer {
   private gamePcmTrackStash: MediaStreamAudioSourceNodeLike | null = null
   /** Last ring-depth report from the worklet (ADR-013 telemetry); null until one arrives. */
   private gamePcmDepthMs: number | null = null
+  /** Feature 2026-11e: the ear ring's bounded playout target (ms; 0 = play on arrival). */
+  private gamePcmTargetMs = 0
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -336,6 +338,8 @@ export class AudioMixer {
   async attachGamePcmSource(): Promise<{
     push(chunk: ArrayBuffer): void
     pushFrames(left: Float32Array, right: Float32Array): void
+    /** Feature 2026-11e: liveness without samples (the engine path stamps this). */
+    keepAlive(): void
     detach(): void
   } | null> {
     const worklet = await this.ensureGamePcmWorklet()
@@ -351,6 +355,14 @@ export class AudioMixer {
     return {
       push: (chunk) => this.pushGamePcm(chunk),
       pushFrames: (left, right) => this.pushGameFrames(left, right),
+      /**
+       * Feature 2026-11e: liveness without samples — the audio-engine path
+       * forwards chunks past this mixer, and without a stamp the 3 s quiet
+       * fallback would hand the path back to the dual-mono track mid-engine.
+       */
+      keepAlive: () => {
+        this.gamePcmLastAt = Date.now()
+      },
       detach: () => this.detachGamePcmSource()
     }
   }
@@ -381,6 +393,13 @@ export class AudioMixer {
       node.port.onmessage = (event) => {
         const depth = (event.data as { depthMs?: unknown } | null)?.depthMs
         if (typeof depth === 'number') this.gamePcmDepthMs = depth
+      }
+      // Re-apply the bounded playout target — a freshly built worklet starts
+      // at target 0, whatever the wiring decided earlier. (Only a non-zero
+      // target posts: 0 is the constructor default, and a silent port keeps
+      // the plain ADR-012 feed byte-for-byte observable.)
+      if (this.gamePcmTargetMs > 0) {
+        node.port.postMessage({ targetMs: this.gamePcmTargetMs })
       }
       const gain = this.ensureGain('game', context)
       gain.gain.value = effectiveGain(this.levels.game)
@@ -475,6 +494,18 @@ export class AudioMixer {
    */
   gameRingDepthMs(): number | null {
     return this.gamePcmDepthMs
+  }
+
+  /**
+   * Feature 2026-11e: the ear ring's bounded playout target (the TikTok
+   * `setAudioMaxDelayByMs` analog) — 0 = play on arrival (ADR-012), > 0 =
+   * prime-drain-reprime (the competitive contract). Applied to the live
+   * worklet and remembered for every future rebuild.
+   */
+  setGamePcmTargetMs(targetMs: number): void {
+    if (!Number.isFinite(targetMs) || targetMs < 0) return
+    this.gamePcmTargetMs = targetMs
+    this.gamePcm?.port.postMessage({ targetMs })
   }
 
   /**
