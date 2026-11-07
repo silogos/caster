@@ -75,3 +75,14 @@ Phase8's pending audible mic listen now doubles as this phase's listen: the mic 
 ## Routing + per-track live verification (2026-11-01)
 
 The issue #54 acceptance listen, on the user's machine, with the ADR-008 devices installed: **cast live, routing Cable → both "Zero-Friction Game Audio" and "Zero-Friction Mic" verified working as two independent inputs** — the consumer app picks each separately, exactly the capture-card shape (and beyond it: a physical card carries one mix, not two pickable tracks). This closes #54's "live verification with OBS" item and the per-track walkthrough pending on #69; desktop suite 220/220 at the time (9 installer + routing tests added by the series).
+
+## Bounded playout + the engine path (2026-11-08, Feature 2026-11e / ADR-014 Fase A)
+
+Two additions to the game-audio plumbing, both invisible when the toggle is off:
+
+- **`setGamePcmTargetMs(ms)`** — the worklet ring's bounded playout contract (`0` = play-on-arrival; `> 0` = silence until the ring holds the target, drain, re-prime after a drained-to-empty ring, shed the oldest backlog above it). The wiring applies `EAR_PLAYOUT_TARGET_MS = 20` while the channel is in `pcm16` mode and the audio engine is NOT running (the fallback ear path); the target is remembered and re-applied to every future worklet build.
+- **`keepAlive()` on the PCM feed handle** — liveness without samples. When the audio-engine sidecar owns the ear output, chunks are forwarded past this mixer; without a stamp the 3 s quiet fallback would hand the path back to the dual-mono track mid-engine. The engine's own ring telemetry rides the stats line as `engineDepthMs`/`engineUnderruns`.
+
+The worklet's graph position is unchanged (worklet → game gain → destination), so volume/mute/routing behave exactly as before on both paths.
+
+Verification: vitest **332/332** (the bounded contract via the worklet's eval-shim tests; mixer target apply/re-apply + the engine keepAlive case here) — details in [game-audio.md](game-audio.md) and [ADR-014](../decisions/ADR-014-native-low-latency-audio-output.md).

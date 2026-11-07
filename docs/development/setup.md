@@ -10,6 +10,7 @@ Status: Phase 0 (prerequisites for the phases ahead; app-specific guides `develo
 | JDK | 17+ (bundled with Android Studio) | Gradle builds |
 | Node.js | ≥ 20 LTS (22 LTS recommended) | Desktop app (Electron) |
 | npm | Bundled with Node | Desktop package management |
+| Rust toolchain (rustup, stable) | Latest stable | Desktop audio engine (`apps/desktop/audio-engine/`, ADR-014). `cargo build --release` builds the sidecar binary |
 | Git | Any recent | Version control |
 
 ## Android device
