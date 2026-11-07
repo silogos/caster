@@ -8,7 +8,7 @@ import type { GameChannelCounters } from '../audio/gameAdtsAac'
  * (a rebuilt channel) yielding null instead of a bogus negative window.
  */
 function counters(mode: GameChannelCounters['mode'] = 'pcm'): GameChannelCounters {
-  return { bytesIn: 0, framesIn: 0, invalidFrames: 0, framesRendered: 0, decodeErrors: 0, mode }
+  return { bytesIn: 0, framesIn: 0, invalidFrames: 0, framesRendered: 0, decodeErrors: 0, decodeQueueDepth: 0, mode }
 }
 
 describe('game channel sampler (ADR-013)', () => {
@@ -26,6 +26,14 @@ describe('game channel sampler (ADR-013)', () => {
     c.bytesIn += 25_000 // ~0.2 Mbps worth per second
     const sample = sampler.sample(1000)
     expect(sample?.bitrateBps).toBe(200_000)
+  })
+
+  it('decodeQueueDepth rides through from the live counters', () => {
+    const c = counters()
+    const sampler = createGameChannelSampler(() => c)
+    sampler.sample(1000)
+    c.decodeQueueDepth = 7 // frames parked inside the decoder at this tick
+    expect(sampler.sample(1000)?.decodeQueueDepth).toBe(7)
   })
 
   it('a format switch re-arms the baseline (no cross-format window)', () => {

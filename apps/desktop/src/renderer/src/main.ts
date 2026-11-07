@@ -107,6 +107,7 @@ const ZERO_GAME_CHANNEL_COUNTERS = {
   invalidFrames: 0,
   framesRendered: 0,
   decodeErrors: 0,
+  decodeQueueDepth: 0,
   mode: 'pcm' as const
 }
 const gameChannelSampler = createGameChannelSampler(() => gameChannelAac?.counters ?? ZERO_GAME_CHANNEL_COUNTERS)
@@ -225,9 +226,18 @@ const receiver = new ReceiverSession({
   // ADR-013's stats visibility: the SCTP channel's own counters per tick,
   // plus the worklet ring's depth — the playout-tuning telemetry (the
   // sampler doesn't know the mixer, so the wiring joins them here).
+  // Feature 2026-11d adds the context's output latencies: the receiver's
+  // audio-output term, measurable at last.
   onGameChannelSample: (intervalMs) => {
     const sample = gameChannelSampler.sample(intervalMs)
-    return sample === null ? null : { ...sample, ringDepthMs: mixer.gameRingDepthMs() }
+    if (sample === null) return null
+    const output = mixer.audioOutputLatencyMs()
+    return {
+      ...sample,
+      ringDepthMs: mixer.gameRingDepthMs(),
+      ctxBaseLatencyMs: output.baseMs,
+      ctxOutputLatencyMs: output.outputMs
+    }
   },
   log
 })
