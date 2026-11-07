@@ -34,6 +34,8 @@ data class CastSettings(
     val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
     /** Stats/thermal-driven auto quality (Phase12, thermal.md) — on by default. */
     val autoQuality: Boolean,
+    /** Keep the game-audio channel on raw PCM16 (Feature 2026-11d; off = the AAC default). */
+    val lowLatencyGameAudio: Boolean = CastConfig.DEFAULT_LOW_LATENCY_GAME_AUDIO,
     // ---- Advanced (designs/mobile-app.html; defaults reproduce today's cast) ----
     val encoderImpl: EncoderImplementation = EncoderImplementation.HARDWARE,
     val h264HighProfile: Boolean = true,
@@ -57,6 +59,7 @@ data class CastSettings(
         mic = mic,
         micDevice = micDevice,
         autoQuality = autoQuality,
+        lowLatencyGameAudio = lowLatencyGameAudio,
         encoderImpl = encoderImpl,
         h264HighProfile = h264HighProfile,
         preferredCodec = preferredCodec,

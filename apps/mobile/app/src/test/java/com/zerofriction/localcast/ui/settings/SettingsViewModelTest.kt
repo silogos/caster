@@ -124,6 +124,19 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `the low-latency audio switch toggles, persists, and survives preset picks`() {
+        val vm = viewModel()
+        assertEquals(false, vm.settings.value.lowLatencyGameAudio)
+        vm.setLowLatencyGameAudio(true)
+        assertEquals(true, vm.settings.value.lowLatencyGameAudio)
+        assertEquals(true, persisted.last().lowLatencyGameAudio)
+        assertEquals(true, vm.settings.value.toConfig().lowLatencyGameAudio)
+        // A preset pick is not preset-owned — the explicit audio choice survives.
+        vm.selectProfile(QualityProfile.PERFORMANCE)
+        assertEquals(true, vm.settings.value.lowLatencyGameAudio)
+    }
+
+    @Test
     fun `every change persists immediately`() {
         val vm = viewModel()
         vm.selectLongEdge(1920)

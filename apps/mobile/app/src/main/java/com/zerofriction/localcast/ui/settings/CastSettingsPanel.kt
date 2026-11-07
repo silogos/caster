@@ -31,7 +31,8 @@ import com.zerofriction.localcast.ui.components.CastChipRow
  * the callbacks (SettingsViewModel) and take effect on the next cast.
  *
  * The policy master switch leads — "Automatic quality" as an On/Off chip
- * pair in the card's own vocabulary — then the encoder-level knobs. Their
+ * pair in the card's own vocabulary — with the low-latency audio policy
+ * beside it — then the encoder-level knobs. Their
  * defaults reproduce today's cast; the read-only "Encoder in use" readout
  * shows what libwebrtc actually picked for the active cast
  * ([SenderStats.encoderImplementation] via the service), never faked.
@@ -41,6 +42,7 @@ fun AdvancedSettingsSection(
     settings: CastSettings,
     encoderInUse: String?,
     onSetAutoQuality: (Boolean) -> Unit,
+    onSetLowLatencyGameAudio: (Boolean) -> Unit,
     onSetEncoderImpl: (EncoderImplementation) -> Unit,
     onSetH264HighProfile: (Boolean) -> Unit,
     onSetPreferredCodec: (PreferredVideoCodec) -> Unit,
@@ -62,6 +64,18 @@ fun AdvancedSettingsSection(
                 onSelect = { index -> onSetAutoQuality(index == 0) },
             )
             HintText(R.string.settings_auto_quality_hint)
+
+            // Feature 2026-11d: the audio transport policy — raw PCM (smallest
+            // delay for headphones) vs the AAC default (smaller on the wire).
+            SubLabel(R.string.settings_low_latency_game_audio)
+            ChipRow(
+                options = listOf(
+                    stringResource(R.string.low_latency_audio_on) to settings.lowLatencyGameAudio,
+                    stringResource(R.string.low_latency_audio_off) to !settings.lowLatencyGameAudio,
+                ),
+                onSelect = { index -> onSetLowLatencyGameAudio(index == 0) },
+            )
+            HintText(R.string.settings_low_latency_game_audio_hint)
 
             SubLabel(R.string.settings_encoder)
             ChipRow(

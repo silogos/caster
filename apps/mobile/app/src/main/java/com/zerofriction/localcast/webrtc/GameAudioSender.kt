@@ -22,7 +22,9 @@ import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
  * Owns the encoder lifecycle: [start] at channel attach, [release] at
  * teardown (and at any re-auth `negotiate()`, which rebuilds the whole
  * pipeline — the release of the previous sender is the caller's job,
- * matching how the channel itself is replaced).
+ * matching how the channel itself is replaced). The caller may skip [start]
+ * entirely when the low-latency toggle forces PCM (Feature 2026-11d): every
+ * encoder touch here is null-safe, and [onSamples] keeps feeding raw PCM.
  */
 class GameAudioSender(
     private val negotiator: GameAudioFormatNegotiator,
