@@ -35,6 +35,12 @@ unsafe impl Sync for VideoWindow {}
 
 static VIDEO_WINDOW: OnceLock<VideoWindow> = OnceLock::new();
 
+/// Set once the first frame passes every gate and is enqueued — the
+/// "has the cast ever rendered" signal for the buried-window raise.
+static EVER_ENQUEUED_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// One-shot: the frame thread asks the main thread to raise the window.
+static RAISE_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 unsafe fn retain(obj: Id) -> Id {
     let _: () = msg_send![obj, retain];
     obj
@@ -166,6 +172,30 @@ pub fn enqueue_i420(
         }
         // Copy I420 (3 planes) → NV12 '420f' (Y + interleaved UV).
         let buf = &*(pb as *const objc2_core_video::CVPixelBuffer);
+        {
+            // One-shot dump: what did the pool actually give us? A blank
+            // window with the layer in Rendering state means the CONTENT
+            // is wrong, not the pipeline (live: 5400 enqueues, black).
+            use std::sync::atomic::AtomicBool;
+            static DUMPED: AtomicBool = AtomicBool::new(false);
+            if !DUMPED.swap(true, Ordering::Relaxed) {
+                let cvbuf = &*(pb as *const objc2_core_video::CVBuffer);
+                let planes = objc2_core_video::CVPixelBufferGetPlaneCount(cvbuf);
+                let cname = objc2_core_video::CVPixelBufferGetPixelFormatType(cvbuf);
+                let cw = objc2_core_video::CVPixelBufferGetWidth(cvbuf);
+                let ch = objc2_core_video::CVPixelBufferGetHeight(cvbuf);
+                let r0 = objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 0);
+                let r1 = objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 1);
+                let b0 = objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(cvbuf, 0);
+                let b1 = objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(cvbuf, 1);
+                let y0 = y.first().copied().unwrap_or(0xff);
+                println!(
+                    "[video] pool dump: fmt={cname} {cw}x{ch} planes={planes} row0={r0} row1={r1} base0={} base1={} srcY0={y0}",
+                    !b0.is_null(),
+                    !b1.is_null()
+                );
+            }
+        }
         let flags = objc2_core_video::CVPixelBufferLockFlags::empty();
         if objc2_core_video::CVPixelBufferLockBaseAddress(buf, flags) == 0 {
             let cvbuf = &*(pb as *const objc2_core_video::CVBuffer);
@@ -450,8 +480,10 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
         // at the live edge, same doctrine as the ready-gate below.
         {
             let occlusion: u64 = msg_send![vw.window, occlusionState];
-            if occlusion & 1 == 0 {
-                // NSWindowOcclusionStateVisible
+            // NSWindowOcclusionStateVisible = 1UL << 1 in the macOS 26 SDK
+            // (live-found: it is 1UL << 0 in older SDKs — checking the old
+            // bit dropped every frame of a fully visible window, blank video).
+            if occlusion & 2 == 0 {
                 use std::sync::Mutex;
                 static LAST_OCCLUDED_FLUSH: Mutex<Option<std::time::Instant>> = Mutex::new(None);
                 {
@@ -469,6 +501,48 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
                         }));
                     }
                 }
+                // Diagnostic once a second while occluded: WHY does the
+                // window read as not visible (live: it sat behind the
+                // main Tauri window from cast start — every frame dropped).
+                {
+                    use std::sync::Mutex;
+                    static LAST_DIAG: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+                    let mut diag = LAST_DIAG.lock().expect("diag clock");
+                    let due = diag
+                        .map(|t| t.elapsed().as_secs() >= 1)
+                        .unwrap_or(true);
+                    if due {
+                        *diag = Some(std::time::Instant::now());
+                        drop(diag);
+                        let vis: bool = msg_send![vw.window, isVisible];
+                        let on_space: bool = msg_send![vw.window, isOnActiveSpace];
+                        let num: isize = msg_send![vw.window, windowNumber];
+                        println!(
+                            "[video] occluded diag: occ={occlusion} visible={vis} activeSpace={on_space} win={num}"
+                        );
+                    }
+                }
+                // If the cast has NEVER rendered a frame and the window
+                // reads occluded for >1 s, request a one-time raise —
+                // the window was born buried (behind the main window).
+                {
+                    use std::sync::Mutex;
+                    static CAST_START: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+                    static RAISE_REQUESTED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    let start = CAST_START
+                        .lock()
+                        .expect("cast start")
+                        .get_or_insert_with(std::time::Instant::now)
+                        .clone();
+                    if !EVER_ENQUEUED_FLAG.load(Ordering::Relaxed)
+                        && start.elapsed().as_secs() >= 1
+                        && !RAISE_REQUESTED.swap(true, Ordering::Relaxed)
+                    {
+                        println!("[video] no frame ever rendered + window buried — requesting raise");
+                        RAISE_PENDING.store(true, Ordering::Relaxed);
+                    }
+                }
                 use std::sync::atomic::AtomicU64;
                 static OCCLUDED_DROPS: AtomicU64 = AtomicU64::new(0);
                 let _: () = msg_send![sample, release]; // never enqueued
@@ -478,6 +552,7 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
                 }
                 return;
             }
+            EVER_ENQUEUED_FLAG.store(true, Ordering::Relaxed);
         }
         // Bounded queue + live edge: the layer buffers unboundedly if we
         // enqueue while it is not ready — 20 GB RSS on a minutes-long cast
@@ -573,4 +648,21 @@ unsafe fn layer_error_description(layer: Id) -> String {
 /// fallback when it does not).
 pub fn is_active() -> bool {
     VIDEO_WINDOW.get().is_some()
+}
+
+/// Main-thread only: raises the video window above the main window.
+pub fn order_video_window_front() {
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        unsafe {
+            let _: () = msg_send![vw.window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![vw.window, orderFrontRegardless];
+        }
+        println!("[video] window raised (makeKeyAndOrderFront + orderFrontRegardless)");
+    }
+}
+
+/// One-shot raise request from the frame thread (consumed by webrtc.rs,
+/// which owns the AppHandle that can reach the main thread).
+pub fn take_raise_request() -> bool {
+    RAISE_PENDING.swap(false, Ordering::Relaxed)
 }

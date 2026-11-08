@@ -71,7 +71,12 @@ impl MediaAnswerer {
 
         let dc_app = app.clone();
         pc.on_data_channel(Some(Box::new(move |dc: DataChannel| {
-            println!("[webrtc] data channel open");
+            println!(
+                "[webrtc] data channel arrived: label={:?} id={} state={:?}",
+                dc.label(),
+                dc.id(),
+                dc.state()
+            );
             let dc_app = dc_app.clone();
             // Register the message handler on the channel itself.
             dc.on_message(Some(Box::new(move |msg| {
@@ -154,6 +159,15 @@ impl MediaAnswerer {
                                 // main thread on the first frame.
                                 let _ = window_app.run_on_main_thread(|| {
                                     crate::video::create_video_window();
+                                });
+                            }
+                            // A buried video window (born behind the main
+                            // window) asks for a one-time raise — only the
+                            // AppHandle can reach the main thread.
+                            if crate::video::take_raise_request() {
+                                let app = window_app.clone();
+                                let _ = app.run_on_main_thread(|| {
+                                    crate::video::order_video_window_front();
                                 });
                             }
                             use livekit::webrtc::video_frame::VideoBuffer;
@@ -326,7 +340,18 @@ impl MediaAnswerer {
         *self.pc.lock().expect("pc lock") = Some(pc);
 
         let sdp = answer.to_string();
-        println!("[webrtc] answer produced ({} bytes)", sdp.len());
+        // m-line summary: the phone's game-audio DC rides m=application —
+        // if our answer rejects it (port 0), the channel never opens and
+        // no announce ever arrives (the live stereo mystery).
+        let mlines: Vec<String> = sdp
+            .lines()
+            .filter(|l| l.starts_with("m="))
+            .map(|l| {
+                let port = l.split_whitespace().nth(1).unwrap_or("?");
+                format!("{}{}", &l[..2.min(l.len())], port)
+            })
+            .collect();
+        println!("[webrtc] answer produced ({} bytes) m-lines: {:?}", sdp.len(), mlines);
         Ok(sdp)
     }
 
