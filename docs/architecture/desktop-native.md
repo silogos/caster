@@ -17,6 +17,8 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `audio.rs` | The game-audio ear path: source selection, ring, CPAL playout. | CoreAudio |
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
+| `settings.rs` | The receiver's own persisted controls (game volume, mute) — `native-receiver.json` beside the trust store. | filesystem |
+| `power.rs` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected. | IOKit |
 
 `lib.rs`'s `TauriHost` implements `SignalingHost` (answerers + UI events); that seam is why the protocol is tested without WebRTC (`src/signaling/tests.rs` — a real WebSocket client against the real server).
 
@@ -68,6 +70,18 @@ The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-v
 - Closing the window hides it; the next cast shows it again.
 - Until the window exists, a ~12 fps JPEG preview goes to the webview's receiving stage.
 
+## Receiver controls (main window)
+
+Only receiver/environment controls live on the desktop (*mobile controls, desktop receives*). They sit in the **main** window, never in the video window — that one is OBS's capture source and stays pure video. A bar appears once a phone is connected (on hover while the preview shows):
+
+- **Game audio** volume (0–100 %, linear like the Electron mixer) and **Mute** — applied live by the playout callback's gain (mute = 0, the ring keeps draining so no backlog builds), persisted on release.
+- **Disconnect** — the desktop's `bye forget` (pairing.md §bye forget): a two-step button (*Disconnect → Forget this phone?*) because it revokes the persistent pairing; works with the phone offline too. The UI returns to a fresh QR.
+- **New QR code** (QR stage) — regenerates the pending session; ignored while a phone is connected.
+
+UI → server requests travel a `ServerCommand` channel into the signaling thread; a connection that ends with a `bye` (either side) records it, so a forget leaves the QR on screen instead of flipping to "waiting to reconnect".
+
+**Stay-awake:** while the media pc is connected an IOKit assertion prevents display sleep (Electron's `powerSaveBlocker('prevent-display-sleep')`, Phase 14) — check with `pmset -g assertions` during a cast.
+
 ## Logging
 
 Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` / `video` / `pairing`; dependencies only at WARN+. Never logged: the session secret, trustKey, MACs, audio samples, frames. The webrtc state lines carry `pc=media|mic`.
@@ -75,7 +89,7 @@ Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` 
 ## Known limitations
 
 - macOS only (the video module).
-- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), virtual camera and audio routing (proto 2), volume controls, stay-awake, tray.
+- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), virtual camera and audio routing (proto 2), tray, frameless window / session-info window.
 - ~0.7 % of video frames dropped at the pool bound (open).
 - The video abort fix held a 6.4-minute run with the window hidden most of the time (the aborts' trigger); longer sessions are still worth watching.
 - A mic pc the phone tears down is noticed only by its ICE failing; it is closed when the next mic offer arrives.

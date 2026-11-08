@@ -3,7 +3,7 @@
 //  - pairing:session-updated → QR hero
 //  - pairing:mobile-state    → connected/disconnected (no-input stage)
 //  - video:jpeg              → receiving stage + the cast preview
-// Keys 1/2/3 remain for visual verification without a phone.
+// The controls bar carries receiver-only settings (volume, Disconnect).
 
 const stages = {
   waiting: document.getElementById('stage-waiting'),
@@ -34,15 +34,14 @@ function sessionInfoLine(name, info) {
 }
 
 const tauri = window.__TAURI__ ?? null
-// Diagnostic: the hint line shows whether the Tauri event API is live.
-document.querySelector('.hint').textContent = tauri
-  ? 'Tauri API live — waiting for pairing'
-  : 'NO TAURI API (window.__TAURI__ missing) — events will not arrive'
+if (!tauri) console.error('window.__TAURI__ missing — events will not arrive')
 
 tauri?.event.listen('pairing:session-updated', (event) => {
   const session = event.payload
   if (!session) return
   qrImg.src = session.qrDataUrl
+  app.classList.remove('connected')
+  resetDisconnect()
   showStage('waiting')
 })
 
@@ -54,6 +53,7 @@ tauri?.event.listen('pairing:mobile-state', (event) => {
   if (state === 'connected') {
     phoneName = event.payload.name ?? 'Android device'
     noInputSubline.textContent = `Connected to ${phoneName} — start casting from your phone.`
+    app.classList.add('connected')
     showStage('noinput')
   } else if (state === 'disconnected') {
     noInputSubline.textContent = `Waiting for ${phoneName ?? 'the phone'} to reconnect…`
@@ -103,19 +103,58 @@ tauri?.core.invoke('pairing_payload').then((session) => {
   }
 }).catch((err) => console.error('pairing_payload failed:', err))
 
-// Dev stage keys — 1 waiting, 2 no-input, 3 receiving.
-window.addEventListener('keydown', (event) => {
-  if (event.key === '1') showStage('waiting')
-  if (event.key === '2') {
-    noInputSubline.textContent = 'Waiting for TB321FU to reconnect…'
-    showStage('noinput')
+// ---- receiver controls -------------------------------------------------
+
+const volumeSlider = document.getElementById('game-volume')
+const volumeValue = document.getElementById('game-volume-value')
+const muteButton = document.getElementById('game-mute')
+const disconnectButton = document.getElementById('disconnect')
+const newQrButton = document.getElementById('new-qr')
+let gameAudio = { gameVolume: 1, gameMuted: false }
+
+function renderGameAudio() {
+  volumeSlider.value = String(Math.round(gameAudio.gameVolume * 100))
+  volumeValue.textContent = gameAudio.gameMuted ? 'muted' : `${volumeSlider.value}%`
+  muteButton.textContent = gameAudio.gameMuted ? 'Unmute' : 'Mute'
+}
+
+function applyGameAudio(volume, muted, persist) {
+  tauri?.core
+    .invoke('set_game_audio', { volume, muted, persist })
+    .then((saved) => { gameAudio = saved; renderGameAudio() })
+    .catch((err) => console.error('set_game_audio failed:', err))
+}
+
+// Live while dragging; saved once on release.
+volumeSlider.addEventListener('input', () => applyGameAudio(Number(volumeSlider.value) / 100, false, false))
+volumeSlider.addEventListener('change', () => applyGameAudio(Number(volumeSlider.value) / 100, false, true))
+muteButton.addEventListener('click', () => applyGameAudio(gameAudio.gameVolume, !gameAudio.gameMuted, true))
+
+tauri?.core.invoke('receiver_settings').then((saved) => { gameAudio = saved; renderGameAudio() })
+
+// Disconnect forgets the phone (it must scan again) — a two-step button
+// instead of a dialog, so a stray click cannot end a cast.
+const CONFIRM_WINDOW_MS = 4000
+let confirmTimer = null
+function resetDisconnect() {
+  clearTimeout(confirmTimer)
+  confirmTimer = null
+  disconnectButton.textContent = 'Disconnect'
+  disconnectButton.classList.remove('confirming')
+}
+disconnectButton.addEventListener('click', () => {
+  if (confirmTimer === null) {
+    disconnectButton.textContent = 'Forget this phone?'
+    disconnectButton.classList.add('confirming')
+    confirmTimer = setTimeout(resetDisconnect, CONFIRM_WINDOW_MS)
+    return
   }
-  if (event.key === '3') {
-    statusChip.textContent = sessionInfoLine('TB321FU', {
-      width: 1280, height: 720, fps: 30, profile: 'balanced', gameAudio: true, mic: false,
-    })
-    showStage('receiving')
-  }
+  resetDisconnect()
+  tauri?.core.invoke('forget_phone').catch((err) => console.error('forget_phone failed:', err))
+})
+
+newQrButton.addEventListener('click', () => {
+  tauri?.core.invoke('regenerate_pairing').catch((err) => console.error('regenerate_pairing failed:', err))
 })
 
 showStage('waiting')

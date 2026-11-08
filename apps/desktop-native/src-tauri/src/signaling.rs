@@ -70,6 +70,27 @@ pub struct OutboundIce {
 
 pub type IceSender = UnboundedSender<OutboundIce>;
 
+/// Requests from the desktop UI (main window / tray) to the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerCommand {
+    /// Desktop-side Disconnect: `bye forget` to the phone (if connected),
+    /// revoke the persistent trust, tear the cast down, show a fresh QR.
+    ForgetPhone,
+    /// A fresh QR while no phone is connected (the old one is invalidated).
+    RegeneratePairing,
+}
+
+pub type CommandSender = UnboundedSender<ServerCommand>;
+
+/// How a connection ended on purpose — decides what the UI shows after.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Farewell {
+    /// A plain `bye`: the trust survives, the no-input stage stays.
+    Plain,
+    /// `bye forget` (either side): the QR is already on screen.
+    Forget,
+}
+
 /// Everything the server needs from the rest of the app — WebRTC and the UI.
 pub trait SignalingHost {
     /// Answers `pc`'s offer; local candidates go out through `ice`.
@@ -102,13 +123,16 @@ struct Shared {
     store: SessionStore,
     /// The one authorized connection (QR or resume) — a second gets `busy`.
     authorized: Option<u64>,
+    /// Reaches the authorized connection's task (desktop-side `bye`).
+    authorized_control: Option<UnboundedSender<Farewell>>,
     failures: HashMap<IpAddr, AuthFailures>,
     next_conn: u64,
 }
 
 /// Starts the server on its own thread: a current-thread runtime plus a
 /// LocalSet, so every connection task shares one thread with the host.
-pub fn start<H: SignalingHost + Send + 'static>(host: H, store: SessionStore, config: ServerConfig) {
+pub fn start<H: SignalingHost + Send + 'static>(host: H, store: SessionStore, config: ServerConfig) -> CommandSender {
+    let (commands_tx, commands) = unbounded_channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -124,9 +148,10 @@ pub fn start<H: SignalingHost + Send + 'static>(host: H, store: SessionStore, co
                 }
             };
             log::info!(target: "signaling", "listening on port {SIGNALING_PORT} at {SIGNALING_PATH}");
-            serve(listener, store, Rc::new(config), Rc::new(host)).await;
+            serve(listener, store, Rc::new(config), Rc::new(host), commands).await;
         });
     });
+    commands_tx
 }
 
 /// Accept loop + session sweep. Must run inside a `LocalSet`.
@@ -135,8 +160,15 @@ pub async fn serve<H: SignalingHost + 'static>(
     store: SessionStore,
     config: Rc<ServerConfig>,
     host: Rc<H>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<ServerCommand>,
 ) {
-    let shared = Rc::new(RefCell::new(Shared { store, authorized: None, failures: HashMap::new(), next_conn: 0 }));
+    let shared = Rc::new(RefCell::new(Shared {
+        store,
+        authorized: None,
+        authorized_control: None,
+        failures: HashMap::new(),
+        next_conn: 0,
+    }));
     // The store arrives with a fresh session — the first check is one period out.
     let period = config.timings.sweep_interval;
     let mut sweep = tokio::time::interval_at(Instant::now() + period, period);
@@ -156,6 +188,7 @@ pub async fn serve<H: SignalingHost + 'static>(
                 }
                 Err(e) => log::warn!(target: "signaling", "accept failed: {e}"),
             },
+            Some(command) = commands.recv() => on_command(command, &shared, &config, &*host),
             _ = sweep.tick() => {
                 let hosts = (config.hosts)();
                 let stale = shared.borrow().store.needs_regeneration(pairing::unix_now(), &hosts);
@@ -163,6 +196,33 @@ pub async fn serve<H: SignalingHost + 'static>(
                     regenerate(&shared, &*host, hosts, true);
                 }
             }
+        }
+    }
+}
+
+fn on_command<H: SignalingHost + ?Sized>(command: ServerCommand, shared: &RefCell<Shared>, config: &ServerConfig, host: &H) {
+    match command {
+        ServerCommand::ForgetPhone => {
+            log::info!(target: "signaling", "desktop Disconnect — forgetting the phone");
+            if let Err(e) = pairing::clear_trust(&config.paths.trust) {
+                log::warn!(target: "signaling", "forget: {e}");
+            }
+            let control = shared.borrow_mut().authorized_control.take();
+            if let Some(control) = control {
+                // The connection sends `bye forget` and closes itself.
+                let _ = control.send(Farewell::Forget);
+            }
+            shared.borrow_mut().store.invalidate();
+            host.close_peers();
+            regenerate(shared, host, (config.hosts)(), true);
+        }
+        ServerCommand::RegeneratePairing => {
+            if shared.borrow().authorized.is_some() {
+                log::info!(target: "signaling", "new QR ignored — a phone is connected");
+                return;
+            }
+            shared.borrow_mut().store.invalidate();
+            regenerate(shared, host, (config.hosts)(), true);
         }
     }
 }
@@ -202,6 +262,10 @@ struct Conn {
     hello: Option<Hello>,
     auth: Option<AuthKey>,
     last_seen: Instant,
+    /// Set when the connection ends with a `bye` (either side).
+    farewell: Option<Farewell>,
+    /// Handed to the server on auth so the desktop can say `bye`.
+    control_tx: UnboundedSender<Farewell>,
 }
 
 type WsSink = SplitSink<WebSocketStream<TcpStream>, Message>;
@@ -273,6 +337,7 @@ async fn handle_connection<H: SignalingHost + 'static>(
 
     let (sink, mut stream) = ws.split();
     let mut out = Outbox { sink, seq: 0 };
+    let (control_tx, mut control_rx) = unbounded_channel::<Farewell>();
     let mut conn = Conn {
         id,
         remote,
@@ -282,6 +347,8 @@ async fn handle_connection<H: SignalingHost + 'static>(
         hello: None,
         auth: None,
         last_seen: Instant::now(),
+        farewell: None,
+        control_tx,
     };
     let (ice_tx, mut ice_rx) = unbounded_channel::<OutboundIce>();
     let interval = config.timings.heartbeat_interval;
@@ -303,6 +370,12 @@ async fn handle_connection<H: SignalingHost + 'static>(
                 if out.send(&conn.sid, "ping", json!({ "t": t })).await.is_err() {
                     break Flow::Gone;
                 }
+            }
+            Some(farewell) = control_rx.recv() => {
+                let reason = if farewell == Farewell::Forget { protocol::BYE_FORGET } else { "desktop-ended" };
+                conn.farewell = Some(farewell);
+                let _ = out.send(&conn.sid, "bye", json!({ "reason": reason })).await;
+                break Flow::Close(CloseCode::Normal, "bye");
             }
             Some(ice) = ice_rx.recv() => {
                 if out.send(&conn.sid, "ice", ice_payload(&ice)).await.is_err() {
@@ -337,10 +410,15 @@ async fn handle_connection<H: SignalingHost + 'static>(
             s.store.release(conn.id);
             if s.authorized == Some(conn.id) {
                 s.authorized = None;
+                s.authorized_control = None;
             }
         }
-        log::info!(target: "signaling", "authorized mobile disconnected (connection {id}) — reconnect window open");
-        host.mobile_state(json!({ "state": "disconnected" }));
+        // After a forget the fresh QR is already on screen — announcing
+        // "disconnected" would flip the UI back to the no-input stage.
+        if conn.farewell != Some(Farewell::Forget) {
+            log::info!(target: "signaling", "authorized mobile disconnected (connection {id}) — reconnect window open");
+            host.mobile_state(json!({ "state": "disconnected" }));
+        }
     }
 }
 
@@ -520,6 +598,7 @@ async fn on_auth<H: SignalingHost>(
             || (matches!(auth, AuthKey::Session(_)) && s.store.authorize(&conn.sid, conn.id) == Authorize::Busy);
         if !busy {
             s.authorized = Some(conn.id);
+            s.authorized_control = Some(conn.control_tx.clone());
         }
         busy
     };
@@ -588,9 +667,10 @@ async fn on_sdp_offer<H: SignalingHost>(conn: &Conn, envelope: &Envelope, out: &
     }
 }
 
-fn on_bye<H: SignalingHost>(conn: &Conn, envelope: &Envelope, shared: &RefCell<Shared>, config: &ServerConfig, host: &H) -> Flow {
+fn on_bye<H: SignalingHost>(conn: &mut Conn, envelope: &Envelope, shared: &RefCell<Shared>, config: &ServerConfig, host: &H) -> Flow {
     let reason = envelope.payload["reason"].as_str().unwrap_or("");
     let forget = reason == protocol::BYE_FORGET;
+    conn.farewell = Some(if forget { Farewell::Forget } else { Farewell::Plain });
     if forget {
         if let Err(e) = pairing::clear_trust(&config.paths.trust) {
             log::warn!(target: "signaling", "bye forget: {e}");

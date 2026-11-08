@@ -47,6 +47,7 @@ impl SignalingHost for FakeHost {
 
 struct Server {
     addr: SocketAddr,
+    commands: CommandSender,
     host: Rc<FakeHost>,
     paths: StorePaths,
     /// The QR the phone scanned: (sid, secret).
@@ -83,8 +84,9 @@ async fn start_server(timings: Timings, ttl_seconds: u64) -> Server {
         desktop_name: "Test Mac".into(),
         hosts: Box::new(|| vec!["127.0.0.1".to_string()]),
     };
-    tokio::task::spawn_local(serve(listener, store, Rc::new(config), Rc::clone(&host)));
-    Server { addr, host, paths, qr: (sid, secret) }
+    let (commands, commands_rx) = unbounded_channel();
+    tokio::task::spawn_local(serve(listener, store, Rc::new(config), Rc::clone(&host), commands_rx));
+    Server { addr, commands, host, paths, qr: (sid, secret) }
 }
 
 struct Client {
@@ -402,5 +404,82 @@ fn the_sweep_replaces_an_expired_qr_and_announces_it() {
         let (fresh, announced) = sessions.first().expect("regenerated");
         assert!(*announced, "a pending QR that expired is replaced on screen");
         assert_ne!(fresh["payload"]["s"], server.qr.0.as_str());
+    });
+}
+
+#[test]
+fn a_phone_side_forget_shows_the_qr_not_the_reconnect_stage() {
+    local(async {
+        let server = start_server(fast_timings(), 600).await;
+        let mut c = paired(&server).await;
+        c.send("bye", json!({ "reason": "forget" })).await;
+        c.expect_closed().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let states = server.host.states.borrow();
+        assert!(states.iter().all(|s| s["state"] != "disconnected"), "after forget the UI keeps the fresh QR: {states:?}");
+    });
+}
+
+#[test]
+fn desktop_disconnect_says_bye_forget_and_revokes_trust() {
+    local(async {
+        let server = start_server(fast_timings(), 600).await;
+        let mut c = paired(&server).await;
+        server.commands.send(ServerCommand::ForgetPhone).unwrap();
+        let bye = c.expect("bye").await;
+        assert_eq!(bye["reason"], "forget", "the phone must drop its saved entry too");
+        c.expect_closed().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(pairing::read_trust(&server.paths.trust).is_none(), "trust revoked");
+        assert_eq!(server.host.closed.get(), 1, "the cast is torn down");
+        assert!(server.host.sessions.borrow().last().unwrap().1, "a fresh QR is shown");
+        assert!(server.host.states.borrow().iter().all(|s| s["state"] != "disconnected"));
+        // A new phone can pair right away with the fresh QR (no busy).
+        let (view, _) = server.host.sessions.borrow().last().unwrap().clone();
+        let sid = view["payload"]["s"].as_str().unwrap().to_string();
+        let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(view["payload"]["k"].as_str().unwrap()).unwrap();
+        let mut next = Client::connect(server.addr).await;
+        assert_eq!(next.handshake(&sid, &secret, hello(Some("phone-2"), false)).await["type"], "auth-ok");
+    });
+}
+
+#[test]
+fn desktop_disconnect_with_no_phone_online_still_forgets() {
+    local(async {
+        let server = start_server(fast_timings(), 600).await;
+        pairing::write_trust(&server.paths.trust, &TrustEntry { device_id: "phone-1".into(), name: "x".into(), key: vec![1; 32] }).unwrap();
+        server.commands.send(ServerCommand::ForgetPhone).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(pairing::read_trust(&server.paths.trust).is_none());
+        let mut c = Client::connect(server.addr).await;
+        c.sid = "phone-1".into();
+        c.send("hello", hello(Some("phone-1"), true)).await;
+        c.expect_error("unknown-device").await;
+    });
+}
+
+#[test]
+fn new_qr_replaces_an_idle_session_but_not_a_live_cast() {
+    local(async {
+        let server = start_server(fast_timings(), 600).await;
+        server.commands.send(ServerCommand::RegeneratePairing).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let fresh = server.host.sessions.borrow().last().expect("regenerated").0.clone();
+        assert_ne!(fresh["payload"]["s"], server.qr.0.as_str());
+        let mut stale = Client::connect(server.addr).await;
+        stale.sid = server.qr.0.clone();
+        stale.send("hello", hello(None, false)).await;
+        stale.expect_error("unknown-session").await;
+
+        // While a phone is connected the request is ignored.
+        let sid = fresh["payload"]["s"].as_str().unwrap().to_string();
+        let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(fresh["payload"]["k"].as_str().unwrap()).unwrap();
+        let mut phone = Client::connect(server.addr).await;
+        assert_eq!(phone.handshake(&sid, &secret, hello(None, false)).await["type"], "auth-ok");
+        let before = server.host.sessions.borrow().len();
+        server.commands.send(ServerCommand::RegeneratePairing).unwrap();
+        phone.send("ping", json!({ "t": 1 })).await;
+        phone.expect("pong").await;
+        assert_eq!(server.host.sessions.borrow().len(), before, "a live cast keeps its session");
     });
 }

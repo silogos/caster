@@ -41,6 +41,21 @@
         border-radius: 8px; padding: 8px 16px; font-size: 13px; margin-top: 14px;
         cursor: pointer;
       }
+      button.confirming { border-color: #d9534f; color: #ffb3b0; }
+      /* Receiver controls: only receiver/environment settings live here
+         (cast settings belong to the phone). Hidden until a phone connects. */
+      #controls {
+        position: absolute; left: 0; right: 0; bottom: 0;
+        display: none; align-items: center; gap: 12px;
+        padding: 10px 16px; background: rgba(10, 12, 16, 0.85);
+        border-top: 1px solid #1f2430; font-size: 13px;
+      }
+      #app.connected #controls { display: flex; }
+      #app.receiving #controls { opacity: 0; transition: opacity 0.2s; }
+      #app.receiving:hover #controls { opacity: 1; }
+      #controls button { margin-top: 0; padding: 6px 12px; }
+      #controls .spacer { flex: 1; }
+      #game-volume { width: 160px; }
     </style>
   </head>
   <body>
@@ -50,18 +65,26 @@
         <div class="heading">Scan with your Android device</div>
         <div class="subline">Waiting for mobile device…</div>
         <div class="qr-card"><img id="qr-img" alt="pairing QR" /></div>
-        <div class="hint">desktop-native M0-r — keys 1/2/3 switch stages</div>
+        <button id="new-qr" title="Invalidates this code and shows a new one">New QR code</button>
       </div>
       <!-- No input -->
       <div id="stage-no-input" class="stage hidden" style="justify-content: center;">
         <div class="heading">No input video</div>
         <div class="subline" id="no-input-subline"></div>
-        <button id="disconnect">Disconnect</button>
       </div>
       <!-- Receiving -->
       <div id="stage-receiving" class="stage hidden">
         <img id="video-frame" alt="cast" />
         <div id="status-chip"></div>
+      </div>
+      <!-- Receiver controls (phone connected) -->
+      <div id="controls">
+        <label for="game-volume">Game audio</label>
+        <input id="game-volume" type="range" min="0" max="100" step="1" />
+        <span id="game-volume-value"></span>
+        <button id="game-mute">Mute</button>
+        <span class="spacer"></span>
+        <button id="disconnect" title="Ends the cast and forgets this phone">Disconnect</button>
       </div>
     </div>
     <script type="module" src="./main.js"></script>

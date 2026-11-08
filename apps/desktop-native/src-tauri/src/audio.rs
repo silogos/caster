@@ -20,7 +20,7 @@
 //! otherwise channel mapping + linear resampling (44.1 kHz DACs, 16/24 kHz
 //! Bluetooth HFP). Never logs samples (AGENTS.md) — counters and dB only.
 
-use std::sync::atomic::{AtomicI16, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -140,6 +140,9 @@ struct Engine {
     /// Side/mid energy (i16²·frames) of the DataChannel PCM for the 1 Hz
     /// stereo meter: side ≈ −∞ while the wire carries L = R.
     stereo_energy: Mutex<(f64, f64)>,
+    /// The receiver's game-audio level (0.0–1.0, mute = 0) as f32 bits —
+    /// a receiver/environment control, never a cast setting (AGENTS.md).
+    gain_bits: AtomicU32,
     output: OnceLock<Option<Output>>,
 }
 
@@ -149,8 +152,20 @@ fn engine() -> &'static Engine {
         ring: Arc::new(Ring::new()),
         producer: Mutex::new(Producer { active: None, last_dc: None }),
         stereo_energy: Mutex::new((0.0, 0.0)),
+        gain_bits: AtomicU32::new(1.0f32.to_bits()),
         output: OnceLock::new(),
     })
+}
+
+/// Sets the game-audio output level (clamped to 0.0–1.0); takes effect on
+/// the next callback. Mute is a gain of 0 — the stats keep counting.
+pub fn set_game_gain(gain: f32) {
+    let gain = if gain.is_finite() { gain.clamp(0.0, 1.0) } else { 1.0 };
+    engine().gain_bits.store(gain.to_bits(), Ordering::Relaxed);
+}
+
+fn game_gain() -> f32 {
+    f32::from_bits(engine().gain_bits.load(Ordering::Relaxed))
 }
 
 /// A new media session: drop the previous session's audio and its source
@@ -292,7 +307,7 @@ fn open_output() -> Option<Output> {
         .build_output_stream(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                render(&ring, &mut state, data, out_channels, step);
+                render(&ring, &mut state, data, out_channels, step, game_gain());
             },
             |error| log::warn!(target: "audio", "output stream error: {error}"),
             None,
@@ -339,7 +354,7 @@ fn choose_config(device: &cpal::Device) -> Option<cpal::StreamConfig> {
 
 /// The real-time callback body: flush requests, priming, shedding, then
 /// channel mapping + linear resampling into `data`. No locks, no allocation.
-fn render(ring: &Ring, state: &mut Playout, data: &mut [f32], out_channels: usize, step: f64) {
+fn render(ring: &Ring, state: &mut Playout, data: &mut [f32], out_channels: usize, step: f64, gain: f32) {
     let out_frames = data.len() / out_channels;
     let mut tail = ring.tail.load(Ordering::Relaxed);
     let flush = ring.flush_to.swap(NO_FLUSH, Ordering::Acquire);
@@ -375,6 +390,11 @@ fn render(ring: &Ring, state: &mut Playout, data: &mut [f32], out_channels: usiz
         }
     }
     data[written * out_channels..].fill(0.0);
+    if gain < 1.0 {
+        for sample in &mut data[..written * out_channels] {
+            *sample *= gain;
+        }
+    }
     ring.tail.store(tail, Ordering::Release);
 }
 
@@ -469,11 +489,11 @@ mod tests {
         let ring = filled(TARGET_FRAMES - 1);
         let mut state = Playout::new();
         let mut out = vec![1.0f32; 2 * 256];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         assert!(out.iter().all(|s| *s == 0.0), "silence until 50 ms is buffered");
         assert_eq!(ring.tail.load(Ordering::Relaxed), 0, "nothing consumed");
         ring.push(&pcm(&[(5, 5)]));
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         let played = ring.tail.load(Ordering::Relaxed);
         assert!((254..=257).contains(&played), "primed: plays ~1x ({played})");
     }
@@ -483,7 +503,7 @@ mod tests {
         let ring = filled(TARGET_FRAMES);
         let mut state = Playout::new();
         let mut out = vec![0.0f32; 2 * (TARGET_FRAMES + 100)];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         assert_eq!(ring.underruns.load(Ordering::Relaxed), 1);
         assert!(!state.primed, "must rebuild the cushion before playing again");
         assert!(out[2 * TARGET_FRAMES..].iter().all(|s| *s == 0.0), "the gap is silence, not garbage");
@@ -496,7 +516,7 @@ mod tests {
         let ring = filled(4_800);
         let mut state = Playout::new();
         let mut out = vec![0.0f32; 2 * 480];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         assert_eq!(ring.sheds.load(Ordering::Relaxed), 0);
         let consumed = ring.tail.load(Ordering::Relaxed);
         assert!((480..=490).contains(&consumed), "played ~1x, no skip: {consumed}");
@@ -509,7 +529,7 @@ mod tests {
         state.primed = true;
         state.smoothed_depth = 4_800.0; // the backlog has persisted
         let mut out = vec![0.0f32; 2 * 1_000];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         let consumed = ring.tail.load(Ordering::Relaxed);
         assert!(consumed > 1_000 && consumed <= 1_011, "≤1 % faster, never a jump: {consumed}");
     }
@@ -528,7 +548,7 @@ mod tests {
         let ring = filled(EMERGENCY_SHED_FRAMES + 500);
         let mut state = Playout::new();
         let mut out = vec![0.0f32; 2 * 10];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         let head = ring.head.load(Ordering::Relaxed);
         assert_eq!(head - ring.tail.load(Ordering::Relaxed), TARGET_FRAMES - 10);
         assert_eq!(ring.sheds.load(Ordering::Relaxed), 1, "every skip is counted");
@@ -541,7 +561,7 @@ mod tests {
         state.primed = true;
         ring.request_flush();
         let mut out = vec![1.0f32; 2 * 64];
-        render(&ring, &mut state, &mut out, 2, 1.0);
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         assert_eq!(ring.tail.load(Ordering::Relaxed), TARGET_FRAMES * 2, "old source's audio dropped");
         assert!(out.iter().all(|s| *s == 0.0));
         assert!(!state.primed);
@@ -596,5 +616,29 @@ mod tests {
         // After 3 s of DataChannel silence the fallback takes over again.
         assert_eq!(admit(&mut p, Source::Track, t0 + FALLBACK_AFTER_DC_QUIET), Admit::Push { switched: true });
         assert_eq!(admit(&mut p, Source::DataChannel, t0 + Duration::from_secs(4)), Admit::Push { switched: true });
+    }
+
+    #[test]
+    fn the_game_level_scales_output_and_mute_is_silence() {
+        let ring = filled(TARGET_FRAMES * 2);
+        let mut state = Playout::new();
+        state.primed = true;
+        let mut full = vec![0.0f32; 2 * 64];
+        render(&ring, &mut state, &mut full, 2, 1.0, 1.0);
+        let ring = filled(TARGET_FRAMES * 2);
+        let mut state = Playout::new();
+        state.primed = true;
+        let mut half = vec![0.0f32; 2 * 64];
+        render(&ring, &mut state, &mut half, 2, 1.0, 0.5);
+        for (h, f) in half.iter().zip(&full) {
+            assert!((h - f * 0.5).abs() < 1e-6);
+        }
+        let ring = filled(TARGET_FRAMES * 2);
+        let mut state = Playout::new();
+        state.primed = true;
+        let mut muted = vec![1.0f32; 2 * 64];
+        render(&ring, &mut state, &mut muted, 2, 1.0, 0.0);
+        assert!(muted.iter().all(|s| *s == 0.0));
+        assert_eq!(ring.tail.load(Ordering::Relaxed), 64, "muted audio still advances — no backlog builds up");
     }
 }

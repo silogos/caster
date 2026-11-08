@@ -20,7 +20,7 @@ use livekit::webrtc::{
 use crate::protocol::{Candidate, PcId};
 use crate::signaling::{IceSender, OutboundIce};
 use futures_util::StreamExt;
-use livekit::webrtc::peer_connection::IceGatheringState;
+use livekit::webrtc::peer_connection::{IceGatheringState, PeerConnectionState};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
@@ -218,6 +218,10 @@ impl MediaAnswerer {
 
         pc.on_connection_state_change(Some(Box::new(move |state| {
             log::info!(target: "webrtc", "pc={} state: {state:?}", role.as_str());
+            // The display stays awake exactly while the cast is live.
+            if role == PcId::Media {
+                crate::power::keep_display_awake(state == PeerConnectionState::Connected);
+            }
         })));
         pc.on_ice_connection_state_change(Some(Box::new(move |state| {
             log::info!(target: "webrtc", "pc={} ice state: {state:?}", role.as_str());
@@ -283,6 +287,9 @@ impl MediaAnswerer {
 
     /// Tears this pc down (a `bye`, or before a re-offer replaces it).
     pub fn close(&self) {
+        if self.role == PcId::Media {
+            crate::power::keep_display_awake(false);
+        }
         *self.game_audio_dc.lock().expect("dc keep lock") = None;
         if let Some(pc) = self.pc.lock().expect("pc lock").take() {
             pc.close();
