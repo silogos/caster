@@ -17,7 +17,10 @@ use livekit::webrtc::{
     peer_connection_factory::{PeerConnectionFactory, RtcConfiguration},
     session_description::{SessionDescription, SdpType},
 };
+use crate::protocol::{Candidate, PcId};
+use crate::signaling::{IceSender, OutboundIce};
 use futures_util::StreamExt;
+use livekit::webrtc::peer_connection::IceGatheringState;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
@@ -31,14 +34,31 @@ static FACTORY: std::sync::OnceLock<PeerConnectionFactory> = std::sync::OnceLock
 
 /// Creates the factory on the CALLING thread. Must be called from the
 /// main thread (Tauri setup).
+/// The DataChannel stats line cadence: 100 chunks of 10 ms = ~1 s.
+const DC_LOG_EVERY_CHUNKS: u64 = 100;
+
 pub fn init_factory() {
     let _ = FACTORY.set(PeerConnectionFactory::with_zero_playout_delay());
 }
 
+/// Answers ONE of the phone's two PeerConnections (webrtc.md §Two
+/// PeerConnections): `media` (screen video, game-audio DataChannel, the
+/// dual-mono fallback track) or `mic`. Each pc has its own answerer, so a
+/// mic offer can never replace the live media connection.
 pub struct MediaAnswerer {
+    role: PcId,
+    app: tauri::AppHandle,
     factory: PeerConnectionFactory,
     pc: Arc<Mutex<Option<PeerConnection>>>,
+    /// The phone's `game-audio` channel — owned here so its message observer
+    /// lives as long as the PeerConnection (see `on_data_channel`).
+    game_audio_dc: Arc<Mutex<Option<KeptChannel>>>,
 }
+
+/// libwebrtc DataChannel handle moved across the callback threads; the
+/// underlying C++ object is internally synchronized.
+struct KeptChannel(#[allow(dead_code)] DataChannel);
+unsafe impl Send for KeptChannel {}
 
 impl MediaAnswerer {
     /// The zero-playout-delay factory — the native receiver's video latency
@@ -46,21 +66,21 @@ impl MediaAnswerer {
     /// initialized first: libwebrtc's macOS video encoder enumeration
     /// dispatches to a worker thread that needs the NSApplication context
     /// (crashed with NSException without this — found live in M0-r).
-    pub fn new() -> Self {
+    pub fn new(role: PcId, app: tauri::AppHandle) -> Self {
         Self {
+            role,
+            app,
             factory: FACTORY.get().expect("factory must be initialized first").clone(),
             pc: Arc::new(Mutex::new(None)),
+            game_audio_dc: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Answers one `media` offer. Returns the answer SDP for the signaling
-    /// layer to send. ICE candidates surface via the `on_ice` callback.
-    pub async fn answer(
-        &self,
-        app: &tauri::AppHandle,
-        sdp_text: &str,
-        ice_tx: tokio::sync::mpsc::Sender<String>,
-    ) -> Result<String, String> {
+    /// Answers this pc's offer (a re-offer replaces the previous connection).
+    /// Local candidates — then the end-of-gathering marker — go out via `ice`.
+    pub async fn answer(&self, sdp_text: &str, ice: IceSender) -> Result<String, String> {
+        // Parsed before the PeerConnection exists: a malformed offer fails
+        // fast without building (and leaking callbacks onto) a new PC.
         let offer = SessionDescription::parse(sdp_text, SdpType::Offer)
             .map_err(|e| format!("offer parse: {e}"))?;
 
@@ -69,263 +89,140 @@ impl MediaAnswerer {
             .create_peer_connection(RtcConfiguration::default())
             .map_err(|e| format!("create pc: {e}"))?;
 
-        let dc_app = app.clone();
+        // A new offer replaces the session: close the previous connection,
+        // and a new media session starts the ear output from a clean ring.
+        self.close();
+        if self.role == PcId::Media {
+            crate::audio::reset_session();
+        }
+        let role = self.role;
+        let kept_dc = Arc::clone(&self.game_audio_dc);
         pc.on_data_channel(Some(Box::new(move |dc: DataChannel| {
-            println!(
-                "[webrtc] data channel arrived: label={:?} id={} state={:?}",
+            if role != PcId::Media {
+                log::warn!(target: "webrtc", "unexpected data channel on pc={}", role.as_str());
+                return;
+            }
+            log::info!(
+                target: "webrtc", "data channel arrived: label={:?} id={} state={:?}",
                 dc.label(),
                 dc.id(),
                 dc.state()
             );
-            let dc_app = dc_app.clone();
-            // Register the message handler on the channel itself.
+            // Channel lifecycle (OPEN/CLOSED) for diagnosing the stereo path.
+            {
+                let label = dc.label();
+                dc.on_state_change(Some(Box::new(move |state| {
+                    log::info!(target: "webrtc", "dc {label:?} state -> {state:?}");
+                })));
+            }
+            // Per-channel counters (a reconnect starts from zero).
+            let mut chunks: u64 = 0;
+            let mut bytes: u64 = 0;
             dc.on_message(Some(Box::new(move |msg| {
-                use std::sync::atomic::{AtomicU64, Ordering};
-                static MSGS: AtomicU64 = AtomicU64::new(0);
-                static BYTES: AtomicU64 = AtomicU64::new(0);
-                let n = MSGS.fetch_add(1, Ordering::Relaxed);
-                BYTES.fetch_add(msg.data.len() as u64, Ordering::Relaxed);
                 if !msg.binary {
                     // The channel's text sub-protocol (announce). Deliberately
                     // NOT acked: without an ack the phone stays on raw PCM —
                     // the engine path (ADR-013's own fallback ladder).
-                    println!("[webrtc] dc control text: {}", String::from_utf8_lossy(&msg.data));
+                    log::debug!(target: "webrtc", "dc control text: {}", String::from_utf8_lossy(&msg.data));
                     return;
                 }
-                if n == 0 {
-                    println!("[webrtc] FIRST DataChannel PCM chunk ({} bytes) — feeding the engine", msg.data.len());
-                    crate::audio::start();
+                if chunks == 0 {
+                    log::info!(target: "webrtc", "first DataChannel PCM chunk ({} bytes) — feeding the engine", msg.data.len());
                 }
-                crate::audio::feed_pcm16(&msg.data);
-                if n % 100 == 0 {
-                    let (underruns, played) = crate::audio::stats();
-                    println!(
-                        "[webrtc] dc: {} msgs, {} kB total | audio underruns={underruns} played={played}",
-                        n + 1,
-                        BYTES.load(Ordering::Relaxed) / 1024
+                chunks += 1;
+                bytes += msg.data.len() as u64;
+                crate::audio::feed_dc_pcm16(&msg.data);
+                if chunks % DC_LOG_EVERY_CHUNKS == 0 {
+                    let st = crate::audio::stats();
+                    log::info!(
+                        target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} sheds={} depth={}ms played={} side={:.0}dB",
+                        bytes / 1024,
+                        st.underruns,
+                        st.sheds,
+                        st.depth_ms,
+                        st.frames_played,
+                        crate::audio::take_side_db()
                     );
                 }
-                let _ = dc_app.emit(
-                    "engine:dc-stats",
-                    json!({ "bytes": msg.data.len(), "binary": msg.binary }),
-                );
             })));
+            // Hold the channel for the PeerConnection's life: dropping the
+            // last Rust handle unregisters its observer, and the stereo PCM
+            // stops arriving (found live 2026-11-09: a 30 s debug probe
+            // thread was the only other handle — the DC went quiet at ~29 s
+            // and the receiver fell back to the dual-mono Opus track).
+            *kept_dc.lock().expect("dc keep lock") = Some(KeptChannel(dc));
         })));
 
-        let frame_app = app.clone();
+        let frame_app = self.app.clone();
         pc.on_track(Some(Box::new(move |event: TrackEvent| {
             let track = event.track;
             match track {
+                // The mic pc's track: separate from game audio end to end
+                // (AGENTS.md). Its playback output lands with the audio stage.
+                MediaStreamTrack::Audio(_) if role == PcId::Mic => {
+                    log::info!(target: "webrtc", "mic track arrived — not played yet (receiver mic output pending)");
+                }
                 MediaStreamTrack::Video(video) => {
-                    println!("[webrtc] video track arrived — consuming frames");
-                    let frame_app = frame_app.clone();
-                    let window_app = frame_app.clone();
-                    // The frame consumer runs on the async runtime; M0-r
-                    // emits dims only — the Metal subview takes over at M3.
-                    tauri::async_runtime::spawn(async move {
-                        use std::sync::atomic::{AtomicU64, Ordering};
-                        static FRAMES: AtomicU64 = AtomicU64::new(0);
-                        static BYTES: AtomicU64 = AtomicU64::new(0);
-                        let mut last_log = std::time::Instant::now();
-                        let mut last_jpeg = std::time::Instant::now();
-                        // ZFC_VIDEO_LEG bisects the VTDecoder IOSurface leak
-                        // (live: 4.5 GB grew with every frame dropped at the
-                        // occlusion gate — zero enqueues; and the "flat"
-                        // JPEG-era baseline was ps RSS, which does NOT count
-                        // kernel IOSurface memory, so it proves nothing):
-                        //   unset    — full native path (as_native → enqueue)
-                        //   nolayer  — as_native + get_cv_pixel_buffer only,
-                        //              video.rs never called
-                        //   noconsume — no NativeVideoStream at all; frames
-                        //              decoded by libwebrtc, never delivered
-                        let leg = std::env::var("ZFC_VIDEO_LEG").unwrap_or_default();
-                        if leg == "noconsume" {
-                            println!("[webrtc] leg=noconsume — track decoded, frames never delivered");
-                            return;
-                        }
-                        println!("[webrtc] video leg={}", if leg.is_empty() { "(full)" } else { &leg });
-                        let mut stream = NativeVideoStream::new(video);
-                        let mut first = true;
-                        while let Some(frame) = stream.next().await {
-                            if first {
-                                first = false;
-                                println!(
-                                    "[webrtc] first frame dims: {}x{} buffer_type={:?}",
-                                    frame.buffer.width(),
-                                    frame.buffer.height(),
-                                    frame.buffer.buffer_type()
-                                );
-                                // M3: the native video window — created on the
-                                // main thread on the first frame.
-                                let _ = window_app.run_on_main_thread(|| {
-                                    crate::video::create_video_window();
-                                });
-                            }
-                            // A buried video window (born behind the main
-                            // window) asks for a one-time raise — only the
-                            // AppHandle can reach the main thread.
-                            if crate::video::take_raise_request() {
-                                let app = window_app.clone();
-                                let _ = app.run_on_main_thread(|| {
-                                    crate::video::order_video_window_front();
-                                });
-                            }
-                            use livekit::webrtc::video_frame::VideoBuffer;
-                            if leg == "nolayer" {
-                                // diagnostic only: the zero-copy bridge leaks
-                                // one wrapper + native ref per call — see
-                                // video::enqueue_i420 for the full story.
-                                if let Some(native) = frame.buffer.as_native() {
-                                    let _ = native.get_cv_pixel_buffer();
-                                }
-                            } else {
-                                // The zero-copy path is unusable: webrtc-sys's
-                                // get_cv_pixel_buffer leaks one ObjC wrapper +
-                                // one native ref per call (every decoded
-                                // IOSurface pinned — 9 GB in 2 min, measured).
-                                // CPU-copy I420 → OUR pooled NV12 buffers.
-                                let (w, h) = (frame.buffer.width(), frame.buffer.height());
-                                let i420 = frame.buffer.to_i420();
-                                let (yd, ud, vd) = i420.data();
-                                let (sy, su, sv) = i420.strides();
-                                crate::video::enqueue_i420(w, h, yd, ud, vd, sy, su, sv);
-                            }
-                            FRAMES.fetch_add(1, Ordering::Relaxed);
-                            BYTES.fetch_add(frame.buffer.width() as u64 * frame.buffer.height() as u64 * 4, Ordering::Relaxed);
-                            frame_app
-                                .emit(
-                                    "video:frame",
-                                    json!({
-                                        "width": frame.buffer.width(),
-                                        "height": frame.buffer.height(),
-                                    }),
-                                )
-                                .ok();
-                            // M3-lite preview: ~12 fps downscaled JPEG data URLs
-                            // to the webview — ONLY while the native video window
-                            // is not live (both showing at once doubled the view).
-                            if !crate::video::is_active()
-                                && last_jpeg.elapsed() >= std::time::Duration::from_millis(80)
-                            {
-                                last_jpeg = std::time::Instant::now();
-                                println!("[webrtc] JPEG-BRANCH-ENTERED");
-                                let sw = frame.buffer.width();
-                                let sh = frame.buffer.height();
-                                if sw > 0 && sh > 0 {
-                                    let scale = (640.0 / sw as f32).min(1.0);
-                                    let dw = (sw as f32 * scale).max(2.0) as i32;
-                                    let dh = (sh as f32 * scale).max(2.0) as i32;
-                                    let mut rgba = vec![0u8; (dw * dh * 4) as usize];
-                                    use livekit::webrtc::video_frame::VideoBuffer;
-                                    frame.buffer.to_argb(
-                                        livekit::webrtc::video_frame::VideoFormatType::RGBA,
-                                        &mut rgba,
-                                        (dw * 4) as u32,
-                                        dw,
-                                        dh,
-                                    );
-                                    static GATE: AtomicU64 = AtomicU64::new(0);
-                                    let g = GATE.fetch_add(1, Ordering::Relaxed);
-                                    // to_argb(RGBA) yields A,B,G,R memory order here
-                                    // (live-evidenced twice: byte0 = alpha 255 → all-red
-                                    // when read as RGBA; then R↔B swap made orange blue).
-                                    // Plus BT.601/709 limited-range expansion (16-235 →
-                                    // 0-255): without it bright greens read gray-ish
-                                    // (found live: "hijau terang di HP, abu-abu di desktop").
-                                    for px in rgba.chunks_exact_mut(4) {
-                                        let expand = |v: u8| -> u8 {
-                                            let f = (v as i32 - 16) * 255 / 219;
-                                            f.clamp(0, 255) as u8
-                                        };
-                                        let a = px[0];
-                                        px[0] = expand(px[3]); // R
-                                        px[1] = expand(px[2]); // G
-                                        px[2] = expand(px[1]); // B
-                                        px[3] = a;             // A
-                                    }
-                                    if let Some(img) = image::RgbaImage::from_raw(dw as u32, dh as u32, rgba) {
-                                        let mut jpg = Vec::new();
-                                        // Explicit quality — the default encoder washed out
-                                        // saturated greens (user-visible on the preview).
-                                        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 88);
-                                        let enc = image::DynamicImage::ImageRgba8(img)
-                                            .write_with_encoder(encoder);
-                                        if g == 0 {
-                                            match &enc { Ok(_) => println!("[webrtc] jpeg encode OK"), Err(e) => println!("[webrtc] jpeg encode ERR: {e}") };
-                                        }
-                                        if enc.is_ok()
-                                        {
-                                            use base64::Engine;
-                                            static JPEGS: AtomicU64 = AtomicU64::new(0);
-                                            let jn = JPEGS.fetch_add(1, Ordering::Relaxed);
-                                            if jn == 0 {
-                                                let _ = std::fs::write("/tmp/zf-native-preview.jpg", &jpg);
-                                                println!("[webrtc] first jpeg preview written ({} kB) — emitting to ui", jpg.len() / 1024);
-                                            }
-                                            if jn % 100 == 0 {
-                                                println!("[webrtc] jpeg previews emitted: {}", jn + 1);
-                                            }
-                                            let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
-                                            frame_app
-                                                .emit("video:jpeg", json!({ "dataUrl": format!("data:image/jpeg;base64,{b64}") }))
-                                                .ok();
-                                        }
-                                    }
-                                }
-                            }
-                            if last_log.elapsed() >= std::time::Duration::from_secs(1) {
-                                last_log = std::time::Instant::now();
-                                println!(
-                                    "[webrtc] video: {} frames, {} Mpx/s",
-                                    FRAMES.load(Ordering::Relaxed),
-                                    BYTES.swap(0, Ordering::Relaxed) / 1_048_576
-                                );
-                            }
-                        }
-                        println!("[webrtc] video frame stream ended");
+                    log::info!(target: "webrtc", "video track arrived — consuming frames");
+                    let app = frame_app.clone();
+                    // Its own thread (not the shared Tauri runtime): the
+                    // per-frame copy + layer calls must not stall signaling
+                    // or audio tasks. The stream ends when the pc closes.
+                    let spawned = std::thread::Builder::new().name("video-frames".into()).spawn(move || {
+                        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                            Ok(rt) => rt,
+                            Err(e) => return log::error!(target: "webrtc", "video runtime: {e}"),
+                        };
+                        runtime.block_on(consume_video(app, video));
                     });
+                    if let Err(e) = spawned {
+                        log::error!(target: "webrtc", "video thread: {e}");
+                    }
                 }
                 MediaStreamTrack::Audio(audio) => {
-                    println!("[webrtc] audio track arrived — feeding the engine (fallback path)");
+                    log::info!(target: "webrtc", "audio track arrived — feeding the engine (fallback path)");
                     tauri::async_runtime::spawn(async move {
                         use livekit::webrtc::audio_stream::native::NativeAudioStream;
                         use futures_util::StreamExt as _;
-                        crate::audio::start();
                         let mut stream = NativeAudioStream::new(audio, 48_000, 2);
                         while let Some(frame) = stream.next().await {
                             let mut bytes = Vec::with_capacity(frame.data.len() * 2);
                             for sample in frame.data.iter() {
                                 bytes.extend_from_slice(&sample.to_le_bytes());
                             }
-                            crate::audio::feed_pcm16(&bytes);
+                            crate::audio::feed_track_pcm16(&bytes);
                         }
-                        println!("[webrtc] audio track stream ended");
+                        log::info!(target: "webrtc", "audio track stream ended");
                     });
                 }
-                other => println!("[webrtc] other track arrived: {other:?}"),
             }
         })));
 
-        let ice_app = app.clone();
-        let ice_tx = Arc::new(tokio::sync::Mutex::new(ice_tx));
+        let candidate_tx = ice.clone();
         pc.on_ice_candidate(Some(Box::new(move |candidate| {
-            let line = candidate.candidate();
-            let _ = ice_app.clone();
-            if let Ok(tx) = ice_tx.clone().try_lock() {
-                let _ = tx.try_send(line);
+            // A send fails only once the signaling connection is gone.
+            let _ = candidate_tx.send(OutboundIce {
+                pc: role,
+                candidate: Some(Candidate {
+                    candidate: candidate.candidate(),
+                    sdp_mid: candidate.sdp_mid(),
+                    sdp_mline_index: candidate.sdp_mline_index(),
+                }),
+            });
+        })));
+        pc.on_ice_gathering_state_change(Some(Box::new(move |state| {
+            if state == IceGatheringState::Complete {
+                let _ = ice.send(OutboundIce { pc: role, candidate: None });
             }
-            let _ = ice_app;
         })));
 
         pc.on_connection_state_change(Some(Box::new(move |state| {
-            println!("[webrtc] pc state: {state:?}");
+            log::info!(target: "webrtc", "pc={} state: {state:?}", role.as_str());
         })));
         pc.on_ice_connection_state_change(Some(Box::new(move |state| {
-            println!("[webrtc] ice state: {state:?}");
+            log::info!(target: "webrtc", "pc={} ice state: {state:?}", role.as_str());
         })));
 
-        let offer = SessionDescription::parse(sdp_text, SdpType::Offer)
-            .map_err(|e| format!("offer parse: {e}"))?;
         pc.set_remote_description(offer)
             .await
             .map_err(|e| format!("set remote: {e}"))?;
@@ -340,40 +237,135 @@ impl MediaAnswerer {
         *self.pc.lock().expect("pc lock") = Some(pc);
 
         let sdp = answer.to_string();
-        // m-line summary: the phone's game-audio DC rides m=application —
-        // if our answer rejects it (port 0), the channel never opens and
-        // no announce ever arrives (the live stereo mystery).
-        let mlines: Vec<String> = sdp
-            .lines()
-            .filter(|l| l.starts_with("m="))
-            .map(|l| {
-                let port = l.split_whitespace().nth(1).unwrap_or("?");
-                format!("{}{}", &l[..2.min(l.len())], port)
-            })
-            .collect();
-        println!("[webrtc] answer produced ({} bytes) m-lines: {:?}", sdp.len(), mlines);
+        log::info!(target: "webrtc", "answer produced ({} bytes)", sdp.len());
+        // Structure comparison (offer vs answer): mids, bundle group, setup —
+        // an m-section without a mid cannot join the BUNDLE group and its
+        // transport never starts (the Connecting-forever DC).
+        let structure = |label: &str, text: &str| {
+            let hits: Vec<&str> = text
+                .lines()
+                .filter(|l| {
+                    l.starts_with("a=group:")
+                        || l.starts_with("a=mid:")
+                        || l.starts_with("a=setup:")
+                        || l.starts_with("a=sctp-port")
+                        || l.starts_with("m=")
+                })
+                .collect();
+            log::debug!(target: "webrtc", "{label} structure: {hits:?}");
+        };
+        structure("offer", sdp_text);
+        structure("answer", &sdp);
         Ok(sdp)
     }
 
     /// Adds a remote ICE candidate (trickled by the phone over signaling),
     /// with the phone-provided mid/mline — the indices are part of the
     /// candidate's identity under BUNDLE.
-    pub async fn add_remote_candidate(&self, line: &str, mid: &str, mline: i32) {
-        let candidate = livekit::webrtc::ice_candidate::IceCandidate::parse(line, mline, mid);
+    pub async fn add_remote_candidate(&self, c: &Candidate) {
+        // parse(sdp_mid, sdp_mline_index, sdp) — the arguments were once
+        // passed in the reverse order and every phone candidate failed to
+        // parse (`SdpParseError { line: "0" }`, found in review 2026-11-09).
+        let candidate = livekit::webrtc::ice_candidate::IceCandidate::parse(&c.sdp_mid, c.sdp_mline_index, &c.candidate);
+        let pc = self.pc.lock().expect("pc lock").clone();
         match candidate {
             Ok(candidate) => {
-                if let Some(pc) = self.pc.lock().expect("pc lock").as_ref() {
+                // No std MutexGuard is held across this await (cloned above).
+                if let Some(pc) = pc {
                     if let Err(e) = pc.add_ice_candidate(candidate).await {
-                        println!("[webrtc] add_ice_candidate failed: {e:?}");
+                        log::warn!(target: "webrtc", "pc={} add_ice_candidate failed: {e:?}", self.role.as_str());
                     }
                 }
             }
-            Err(e) => {
-                // IPv6/mDNS lines fail this parser on some paths — logged,
-                // non-fatal: the UDP host pair carries the connection (found
-                // live in M0-r; the IPv6 candidate was never needed).
-                println!("[webrtc] candidate parse skipped: {e:?}")
-            }
+            Err(e) => log::warn!(target: "webrtc", "pc={} remote candidate rejected: {e:?}", self.role.as_str()),
         }
     }
+
+    /// Tears this pc down (a `bye`, or before a re-offer replaces it).
+    pub fn close(&self) {
+        *self.game_audio_dc.lock().expect("dc keep lock") = None;
+        if let Some(pc) = self.pc.lock().expect("pc lock").take() {
+            pc.close();
+            log::info!(target: "webrtc", "pc={} closed", self.role.as_str());
+        }
+    }
+}
+
+/// Preview cadence for the webview (~12 fps) while the native window does
+/// not exist yet, and its size/quality.
+const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
+const PREVIEW_MAX_WIDTH: f32 = 640.0;
+const PREVIEW_JPEG_QUALITY: u8 = 88;
+const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The video frame loop for one stream (one cast): renders into the native
+/// window, keeps its visibility fresh from the main thread, and feeds the
+/// webview preview until the window exists.
+async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
+    let mut stream = NativeVideoStream::new(video);
+    let mut renderer = crate::video::Renderer::new();
+    let mut frames: u64 = 0;
+    let mut window_requested = false;
+    let mut last_visibility_poll: Option<std::time::Instant> = None;
+    let mut last_preview: Option<std::time::Instant> = None;
+    let mut last_log = std::time::Instant::now();
+    let mut frames_at_last_log: u64 = 0;
+    while let Some(frame) = stream.next().await {
+        let (w, h) = (frame.buffer.width(), frame.buffer.height());
+        if !window_requested {
+            window_requested = true;
+            log::info!(target: "webrtc", "first frame {w}x{h}");
+            // Creates the window, or shows it again if a previous cast's was closed.
+            let _ = app.run_on_main_thread(crate::video::create_video_window);
+        }
+        if last_visibility_poll.map_or(true, |t| t.elapsed() >= crate::video::VISIBILITY_POLL_INTERVAL) {
+            last_visibility_poll = Some(std::time::Instant::now());
+            let _ = app.run_on_main_thread(crate::video::refresh_visibility);
+        }
+        let i420 = frame.buffer.to_i420();
+        let (y, u, v) = i420.data();
+        let (sy, su, sv) = i420.strides();
+        if renderer.render_i420(w, h, y, u, v, sy, su, sv) == crate::video::Followup::RaiseWindow {
+            let _ = app.run_on_main_thread(crate::video::show_video_window);
+        }
+        frames += 1;
+        if !crate::video::is_active() && last_preview.map_or(true, |t| t.elapsed() >= PREVIEW_INTERVAL) {
+            last_preview = Some(std::time::Instant::now());
+            if let Some(data_url) = preview_jpeg(&*frame.buffer) {
+                let _ = app.emit("video:jpeg", json!({ "dataUrl": data_url }));
+            }
+        }
+        if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
+            let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
+            log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
+            last_log = std::time::Instant::now();
+            frames_at_last_log = frames;
+        }
+    }
+    log::info!(target: "webrtc", "video frame stream ended after {frames} frames");
+}
+
+/// A downscaled JPEG data URL of one frame for the webview's receiving stage.
+fn preview_jpeg(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> Option<String> {
+    use base64::Engine;
+    let (sw, sh) = (buffer.width(), buffer.height());
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let scale = (PREVIEW_MAX_WIDTH / sw as f32).min(1.0);
+    let (dw, dh) = ((sw as f32 * scale).max(2.0) as i32, (sh as f32 * scale).max(2.0) as i32);
+    let mut pixels = vec![0u8; (dw * dh * 4) as usize];
+    // libyuv's "ABGR" is R,G,B,A in memory — exactly RgbaImage's layout
+    // (asking for "RGBA" produced A,B,G,R bytes: all-red, found live). It
+    // also expands the limited range, so no manual 16–235 stretch.
+    buffer.to_argb(livekit::webrtc::video_frame::VideoFormatType::ABGR, &mut pixels, (dw * 4) as u32, dw, dh);
+    let image = image::RgbaImage::from_raw(dw as u32, dh as u32, pixels)?;
+    let mut jpg = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, PREVIEW_JPEG_QUALITY);
+    if let Err(e) = image::DynamicImage::ImageRgba8(image).write_with_encoder(encoder) {
+        log::warn!(target: "webrtc", "preview jpeg encode failed: {e}");
+        return None;
+    }
+    // Frames never touch the disk (AGENTS.md logging rules).
+    Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpg)))
 }

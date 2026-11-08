@@ -30,6 +30,8 @@ objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "C
 objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVPixelBufferPool", "CVBuffer", "CVReturn"] }
 cpal = "0.15"
 anyhow = "1"
+log = { version = "0.4", features = ["std"] }
+libc = "0.2"
 livekit = "0.10"
 
 [lib]
