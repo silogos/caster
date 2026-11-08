@@ -90,6 +90,21 @@ class AudioCaptureFileRecorderTest {
         started?.close()
         assertNull(started)
     }
+
+    @Test
+    fun `a new dump keeps the total under the cap, oldest first, and touches nothing else`() {
+        val dir = tmp.newFolder("dumps")
+        // 12 older dumps (creation millis in the name) + an unrelated file.
+        val olds = (1..12).map { i -> java.io.File(dir, "capture-dump-${1_000L + i}-48000Hz-2ch.wav").apply { writeBytes(ByteArray(4)) } }
+        val unrelated = java.io.File(dir, "notes.txt").apply { writeText("keep me") }
+        val recorder = AudioCaptureFileRecorder.start(dir, 48_000, 2)!!
+        recorder.close()
+        val dumps = dir.listFiles { f -> f.name.startsWith("capture-dump-") }!!.map { it.name }.toSet()
+        assertEquals(AudioCaptureFileRecorder.MAX_KEPT_DUMPS, dumps.size)
+        assertTrue("the newest old dumps survive", olds.takeLast(AudioCaptureFileRecorder.MAX_KEPT_DUMPS - 1).all { it.name in dumps })
+        assertTrue("the oldest are gone", olds.take(3).none { it.name in dumps })
+        assertTrue(unrelated.exists())
+    }
 }
 
 /** Reads the recorder's single dump file back out of [dir]. */
