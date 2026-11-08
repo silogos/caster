@@ -92,6 +92,17 @@ tauri?.event.listen('video:jpeg', (event) => {
   }
 })
 
+// Pull the session on load. The setup-time emit races the webview load
+// (no listener attached yet) and is dropped — the QR never showed in-app,
+// which is why a Preview PNG was used as a workaround. The command is
+// the reliable path: the app window is the only QR surface.
+tauri?.core.invoke('pairing_payload').then((session) => {
+  if (session?.qrDataUrl) {
+    qrImg.src = session.qrDataUrl
+    showStage('waiting')
+  }
+}).catch((err) => console.error('pairing_payload failed:', err))
+
 // Dev stage keys — 1 waiting, 2 no-input, 3 receiving.
 window.addEventListener('keydown', (event) => {
   if (event.key === '1') showStage('waiting')

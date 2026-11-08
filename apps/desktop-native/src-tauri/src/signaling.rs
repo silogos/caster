@@ -119,6 +119,7 @@ fn new_pairing_session() -> Result<PairingSession, String> {
 }
 
 fn qr_data_url(payload: &str) -> Result<String, String> {
+    use base64::Engine;
     let image = qrcode::QrCode::new(payload.as_bytes())
         .map_err(|e| e.to_string())?
         .render::<image::Luma<u8>>()
@@ -128,7 +129,14 @@ fn qr_data_url(payload: &str) -> Result<String, String> {
     image
         .write_to(&mut IoCursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
-    Ok(format!("data:image/png;base64,{}", b64url(&png)))
+    // STANDARD base64 — a data URL is decoded by the webview's base64
+    // decoder, which rejects the URL-safe alphabet (`-`/`_`) that the
+    // pairing fields use. Encoding the PNG with b64url rendered a broken
+    // "?" image (found live once the invoke-on-load QR actually displayed).
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    ))
 }
 
 
