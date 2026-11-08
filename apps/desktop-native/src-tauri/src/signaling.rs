@@ -73,11 +73,18 @@ fn lan_ipv4_hosts() -> Vec<String> {
     hosts
 }
 
+#[derive(Clone)]
 struct PairingSession {
     sid: String,
     secret: Vec<u8>,
     payload: Value,
     qr_data_url: String,
+}
+
+impl PairingSession {
+    fn clone_impl(&self) -> PairingSession {
+        self.clone()
+    }
 }
 
 fn new_pairing_session() -> Result<PairingSession, String> {
@@ -112,25 +119,54 @@ fn new_pairing_session() -> Result<PairingSession, String> {
 }
 
 fn qr_data_url(payload: &str) -> Result<String, String> {
-    use image::ImageFormat;
-    let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
-    let modules = code.width();
-    let mut img = image::GrayImage::new(modules as u32, modules as u32);
-    for (i, color) in code.to_colors().into_iter().enumerate() {
-        let v = if color == qrcode::Color::Dark { 0 } else { 255 };
-        img.put_pixel((i % modules) as u32, (i / modules) as u32, image::Luma([v]));
-    }
+    let image = qrcode::QrCode::new(payload.as_bytes())
+        .map_err(|e| e.to_string())?
+        .render::<image::Luma<u8>>()
+        .quiet_zone(true)
+        .build();
     let mut png = Vec::new();
-    image::DynamicImage::ImageLuma8(img)
-        .write_to(&mut IoCursor::new(&mut png), ImageFormat::Png)
+    image
+        .write_to(&mut IoCursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(format!("data:image/png;base64,{}", b64url(&png)))
 }
 
 
+/// THE pairing session — one per app run. Both the UI QR and the WS
+/// server's HMAC verification MUST read the same secret; generating two
+/// sessions (one for the QR, one for auth) made every scan fail with
+/// bad-auth (found live in M0-r).
+static SESSION: std::sync::Mutex<Option<PairingSession>> = std::sync::Mutex::new(None);
+
+fn current_session() -> Result<PairingSession, String> {
+    let mut guard = SESSION.lock().expect("session lock");
+    if guard.is_none() {
+        let session = new_pairing_session()?;
+        // Also write the live QR PNG to /tmp so an external `open` shows
+        // THE live session's QR (a stale file once made every scan fail
+        // bad-auth — found live in M0-r).
+        let payload_text = serde_json::to_string(&session.payload).unwrap_or_default();
+        let _ = write_qr_png(&payload_text, "/tmp/zfc-native-qr.png");
+        *guard = Some(session);
+    }
+    Ok(guard.as_ref().expect("just set").clone_impl())
+}
+
+fn write_qr_png(payload: &str, path: &str) -> Result<(), String> {
+    // The renderer scales modules (default 8px) + quiet zone — a 1px/module
+    // image was too small/blurry for the phone's camera after Preview's
+    // smooth-scaling (found live: zero scans reached the server).
+    let image = qrcode::QrCode::new(payload.as_bytes())
+        .map_err(|e| e.to_string())?
+        .render::<image::Luma<u8>>()
+        .quiet_zone(true)
+        .build();
+    image.save(path).map_err(|e| e.to_string())
+}
+
 /// The pairing session view for the UI (mirror of PairingSessionView).
 pub fn pairing_payload_json() -> Result<Value, String> {
-    let session = new_pairing_session()?;
+    let session = current_session()?;
     Ok(json!({
         "qrDataUrl": session.qr_data_url,
         "payload": session.payload,
@@ -182,7 +218,7 @@ async fn run(app: tauri::AppHandle, answerer: std::sync::Arc<crate::webrtc::Medi
         .map_err(|e| format!("bind signaling port {SIGNALING_PORT}: {e}"))?;
     println!("[signaling] listening on port {SIGNALING_PORT} at {SIGNALING_PATH}");
 
-    let session = new_pairing_session()?;
+    let session = current_session()?;
     let _ = app.emit(
         "pairing:session-updated",
         json!({
@@ -281,9 +317,10 @@ async fn run_signaling(
     loop {
         tokio::select! {
             Some(candidate_line) = cand_rx.recv() => {
+                println!("[signaling] desktop ice candidate → phone: {candidate_line}");
                 send_envelope(&mut sink, &mut seq, &sid, "ice", json!({
                     "pc": "media",
-                    "candidate": { "candidate": candidate_line },
+                    "candidate": { "candidate": candidate_line, "sdpMid": "0", "sdpMLineIndex": 0 },
                 })).await?;
             }
             message = stream.next() => {
@@ -358,9 +395,15 @@ async fn run_signaling(
                         send_envelope(&mut sink, &mut seq, &sid, "sdp-answer", payload).await?;
                     }
                     "ice" if authorized => {
-                        let candidate = envelope["payload"]["candidate"]["candidate"].as_str().unwrap_or("").to_string();
-                        if !candidate.is_empty() {
-                            answerer.add_remote_candidate(&candidate).await;
+                        let cand = envelope["payload"]["candidate"].clone();
+                        let line = cand["candidate"].as_str().unwrap_or("").to_string();
+                        if line.is_empty() {
+                            println!("[signaling] phone finished ice gathering (end-of-gathering marker)");
+                        } else {
+                            let mid = cand["sdpMid"].as_str().unwrap_or("0").to_string();
+                            let mline = cand["sdpMLineIndex"].as_i64().unwrap_or(0) as i32;
+                            println!("[signaling] phone ice candidate (mid={mid} mline={mline}): {line}");
+                            answerer.add_remote_candidate(&line, &mid, mline).await;
                         }
                     }
                     "ping" => {

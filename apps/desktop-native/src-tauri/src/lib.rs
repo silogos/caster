@@ -20,16 +20,19 @@ pub fn run() {
             if let Ok(payload) = signaling::pairing_payload_json() {
                 let _ = app.handle().emit("pairing:session-updated", payload);
             }
-            // The signaling server + the media answerer run for the app's
-            // lifetime (the phone pairs and negotiates against them). The
-            // factory is created HERE on the main thread — libwebrtc's
-            // macOS backend needs the main run loop during init (found
-            // live: NSException crash on a background tokio thread).
+            // Create the libwebrtc factory on the main thread — the video
+            // encoder enumeration needs NSApplication context (found live:
+            // NSException crash on background threads).
+            webrtc::init_factory();
             let answerer = std::sync::Arc::new(webrtc::MediaAnswerer::new());
             signaling::start(app.handle().clone(), std::sync::Arc::clone(&answerer));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![pairing_payload])
-        .run(tauri::generate_context!())
-        .expect("error while running desktop-native");
+        .build(tauri::generate_context!())
+        .expect("error while building desktop-native")
+        .run(|_app, _event| {
+            // Factory + signaling start in setup (above). This callback
+            // handles run events that need attention in future milestones.
+        });
 }

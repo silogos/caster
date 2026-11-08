@@ -22,6 +22,19 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 
+/// The PeerConnectionFactory — created ONCE on the main thread (Tauri
+/// setup), accessed from the signaling thread. libwebrtc's macOS video
+/// encoder enumeration dispatches internally and requires NSApplication
+/// context during creation (crashed with NSException otherwise, found
+/// live in M0-r).
+static FACTORY: std::sync::OnceLock<PeerConnectionFactory> = std::sync::OnceLock::new();
+
+/// Creates the factory on the CALLING thread. Must be called from the
+/// main thread (Tauri setup).
+pub fn init_factory() {
+    let _ = FACTORY.set(PeerConnectionFactory::with_zero_playout_delay());
+}
+
 pub struct MediaAnswerer {
     factory: PeerConnectionFactory,
     pc: Arc<Mutex<Option<PeerConnection>>>,
@@ -29,10 +42,13 @@ pub struct MediaAnswerer {
 
 impl MediaAnswerer {
     /// The zero-playout-delay factory — the native receiver's video latency
-    /// knob (the thing Chromium locked at ~91 ms).
+    /// knob (the thing Chromium locked at ~91 ms). NSApplication is
+    /// initialized first: libwebrtc's macOS video encoder enumeration
+    /// dispatches to a worker thread that needs the NSApplication context
+    /// (crashed with NSException without this — found live in M0-r).
     pub fn new() -> Self {
         Self {
-            factory: PeerConnectionFactory::with_zero_playout_delay(),
+            factory: FACTORY.get().expect("factory must be initialized first").clone(),
             pc: Arc::new(Mutex::new(None)),
         }
     }
@@ -59,6 +75,17 @@ impl MediaAnswerer {
             let dc_app = dc_app.clone();
             // Register the message handler on the channel itself.
             dc.on_message(Some(Box::new(move |msg| {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static MSGS: AtomicU64 = AtomicU64::new(0);
+                static BYTES: AtomicU64 = AtomicU64::new(0);
+                let n = MSGS.fetch_add(1, Ordering::Relaxed);
+                BYTES.fetch_add(msg.data.len() as u64, Ordering::Relaxed);
+                if n == 0 {
+                    println!("[webrtc] FIRST DataChannel message ({} bytes) — game audio flowing", msg.data.len());
+                }
+                if n % 100 == 0 {
+                    println!("[webrtc] dc: {} msgs, {} kB total", n + 1, BYTES.load(Ordering::Relaxed) / 1024);
+                }
                 let _ = dc_app.emit(
                     "engine:dc-stats",
                     json!({ "bytes": msg.data.len(), "binary": msg.binary }),
@@ -76,8 +103,14 @@ impl MediaAnswerer {
                     // The frame consumer runs on the async runtime; M0-r
                     // emits dims only — the Metal subview takes over at M3.
                     tauri::async_runtime::spawn(async move {
+                        use std::sync::atomic::{AtomicU64, Ordering};
+                        static FRAMES: AtomicU64 = AtomicU64::new(0);
+                        static BYTES: AtomicU64 = AtomicU64::new(0);
+                        let mut last_log = std::time::Instant::now();
                         let mut stream = NativeVideoStream::new(video);
                         while let Some(frame) = stream.next().await {
+                            FRAMES.fetch_add(1, Ordering::Relaxed);
+                            BYTES.fetch_add(frame.buffer.width() as u64 * frame.buffer.height() as u64 * 4, Ordering::Relaxed);
                             frame_app
                                 .emit(
                                     "video:frame",
@@ -87,6 +120,14 @@ impl MediaAnswerer {
                                     }),
                                 )
                                 .ok();
+                            if last_log.elapsed() >= std::time::Duration::from_secs(1) {
+                                last_log = std::time::Instant::now();
+                                println!(
+                                    "[webrtc] video: {} frames, {} kB/s",
+                                    FRAMES.load(Ordering::Relaxed),
+                                    BYTES.swap(0, Ordering::Relaxed) / 1024
+                                );
+                            }
                         }
                         println!("[webrtc] video frame stream ended");
                     });
@@ -133,13 +174,20 @@ impl MediaAnswerer {
         Ok(sdp)
     }
 
-    /// Adds a remote ICE candidate (trickled by the phone over signaling).
-    pub async fn add_remote_candidate(&self, line: &str) {
-        let candidate = livekit::webrtc::ice_candidate::IceCandidate::parse(line, 0, "0");
-        if let Ok(candidate) = candidate {
-            if let Some(pc) = self.pc.lock().expect("pc lock").as_ref() {
-                pc.add_ice_candidate(candidate).await;
+    /// Adds a remote ICE candidate (trickled by the phone over signaling),
+    /// with the phone-provided mid/mline — the indices are part of the
+    /// candidate's identity under BUNDLE.
+    pub async fn add_remote_candidate(&self, line: &str, mid: &str, mline: i32) {
+        let candidate = livekit::webrtc::ice_candidate::IceCandidate::parse(line, mline, mid);
+        match candidate {
+            Ok(candidate) => {
+                if let Some(pc) = self.pc.lock().expect("pc lock").as_ref() {
+                    if let Err(e) = pc.add_ice_candidate(candidate).await {
+                        println!("[webrtc] add_ice_candidate failed: {e:?}");
+                    }
+                }
             }
+            Err(e) => println!("[webrtc] candidate parse failed: {e:?} line={line}"),
         }
     }
 }
