@@ -123,8 +123,9 @@ function detachGameAacChannel(): void {
 // and the channel is in pcm16 mode, raw PCM chunks bypass the worklet graph
 // entirely (the engine's CPAL output skips Chromium's audio chain). The
 // bounded playout target only applies on the worklet fallback — the engine
-// carries its own 20 ms ring.
-const EAR_PLAYOUT_TARGET_MS = 20
+// carries its own 40 ms keep (tuned from the first live cast: 20 ms crackled
+// on Wi-Fi chunk bursts).
+const EAR_PLAYOUT_TARGET_MS = 40
 let engineRunning = false
 let engineDepthMs: number | null = null
 let engineUnderruns: number | null = null

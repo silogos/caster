@@ -15,10 +15,14 @@ use std::sync::atomic::{AtomicI16, AtomicUsize, Ordering};
 
 /// Ring capacity in frames (100 ms @48 kHz stereo).
 pub const RING_CAPACITY_FRAMES: usize = 4_800;
-/// Backlog above this (30 ms) is shed on the next render callback.
-pub const SHED_TRIGGER_FRAMES: usize = 1_440;
-/// Frames kept after a shed (20 ms) — the playout buffer.
-pub const SHED_KEEP_FRAMES: usize = 960;
+/// Backlog above this (60 ms) is shed on the next render callback. Tuned
+/// 2026-11-08 from the first live cast: 30 ms shed on every Wi-Fi burst
+/// (chunks arrive stacked) crackled — bursts up to ~60 ms now absorb
+/// without shedding.
+pub const SHED_TRIGGER_FRAMES: usize = 2_880;
+/// Frames kept after a shed (40 ms) — the playout buffer. 20 ms underran on
+/// chunk gaps >20 ms; 40 ms absorbs the common burst gaps.
+pub const SHED_KEEP_FRAMES: usize = 1_920;
 
 pub struct AudioRing {
     buf: Box<[AtomicI16]>,
@@ -142,10 +146,10 @@ mod tests {
     #[test]
     fn the_reader_sheds_backlog_above_the_trigger_to_the_keep_level() {
         let ring = AudioRing::new(4_800, 2);
-        ring.push(&frame_samples(2_000, 2, 0)); // depth 2000 > trigger 1440
+        ring.push(&frame_samples(4_000, 2, 0)); // depth 4000 > trigger 2880
         let mut out = vec![0f32; SHED_KEEP_FRAMES * 2]; // callback smaller than the keep
         let drained = ring.drain_f32(&mut out);
-        assert_eq!(drained, SHED_KEEP_FRAMES); // shed to 960 frames, drain 960
+        assert_eq!(drained, SHED_KEEP_FRAMES); // shed to 1920 frames, drain 1920
         assert_eq!(ring.depth_frames(), 0);
     }
 
