@@ -156,4 +156,110 @@ class MonoTapRecoveryTest {
         }
         assertTrue(rebuilds >= 10)
     }
+
+    private fun dualMono(level: Long = 5000) =
+        StereoContentProbe.Report(meanAbsLeft = level, meanAbsRight = level, meanAbsDiff = 0)
+
+    private fun stereo() = StereoContentProbe.Report(meanAbsLeft = 5000, meanAbsRight = 4600, meanAbsDiff = 1200)
+
+    @Test
+    fun `a loud L=R fold triggers a rebuild after four windows`() {
+        val recovery = recovery()
+        repeat(3) { assertNull(recovery.onReport(dualMono())) }
+        val reason = recovery.onReport(dualMono())
+        assertNotNull("4 s of L=R must rebuild", reason)
+        assertTrue(reason!!.contains("L=R"))
+    }
+
+    @Test
+    fun `a centred passage of a stereo test clip does not rebuild as L=R`() {
+        // Live 2026-11-09: left ~3 s, right ~3 s, centre ~3 s, repeating.
+        // (The hard-panned sides may trip the dead-channel path — pre-existing,
+        // budget-bounded; this test pins only the L=R path.)
+        val recovery = recovery()
+        val reasons = mutableListOf<String>()
+        fun feed(r: StereoContentProbe.Report) { recovery.onReport(r)?.let(reasons::add) }
+        repeat(5) {
+            repeat(3) { feed(report(3000, 0)) }
+            feed(report(0, 0))
+            repeat(3) { feed(report(0, 3000)) }
+            feed(report(0, 0))
+            repeat(3) { feed(dualMono()) }
+            feed(stereo())
+            advanceSeconds(12)
+        }
+        assertTrue("centre is content, not a fold: $reasons", reasons.none { it.contains("L=R") })
+    }
+
+    @Test
+    fun `dual-mono rebuilds never hard-reset`() {
+        val recovery = recovery()
+        repeat(6) {
+            advanceSeconds(30)
+            assertNull(recovery.onReport(stereo())) // re-arm the unhealed bound
+            repeat(3) { recovery.onReport(dualMono()) }
+            val reason = recovery.onReport(dualMono())
+            assertNotNull(reason)
+            assertFalse("no 1.5 s silence for a possibly-centred passage", reason!!.contains(HARD_RESET_MARKER))
+        }
+    }
+
+    @Test
+    fun `narrow but real stereo is not dual-mono`() {
+        val recovery = recovery()
+        // L−R at ~1% of the amplitude: a narrow mix, not a fold.
+        val narrow = StereoContentProbe.Report(meanAbsLeft = 5000, meanAbsRight = 4990, meanAbsDiff = 50)
+        repeat(20) { assertNull(recovery.onReport(narrow)) }
+    }
+
+    @Test
+    fun `quiet L=R says nothing`() {
+        val recovery = recovery()
+        repeat(10) { assertNull(recovery.onReport(dualMono(level = 100))) }
+    }
+
+    @Test
+    fun `genuinely mono content stops rebuilding after the unhealed bound`() {
+        val recovery = recovery()
+        var rebuilds = 0
+        repeat(120) {
+            if (recovery.onReport(dualMono()) != null) rebuilds++
+            advanceSeconds(1)
+        }
+        assertTrue("a mono podcast costs at most two rebuilds, got $rebuilds", rebuilds == MonoTapRecovery.MAX_UNHEALED_DUAL_MONO)
+    }
+
+    @Test
+    fun `true stereo re-arms the dual-mono bound so every re-fold heals`() {
+        val recovery = recovery()
+        var rebuilds = 0
+        repeat(10) {
+            advanceSeconds(30) // stereo holds between re-folds
+            repeat(3) { assertNull(recovery.onReport(stereo())) }
+            repeat(3) { assertNull(recovery.onReport(dualMono())) }
+            if (recovery.onReport(dualMono()) != null) rebuilds++
+        }
+        assertTrue("each of 10 re-folds must rebuild, got $rebuilds", rebuilds == 10)
+    }
+
+    @Test
+    fun `a dual-mono rebuild respects the shared cooldown`() {
+        val recovery = recovery()
+        assertNull(recovery.onReport(report(5000, 0)))
+        repeat(3) { recovery.onReport(report(5000, 0)) }
+        assertNotNull(recovery.onReport(report(5000, 0))) // dead-channel rebuild
+        repeat(3) { assertNull(recovery.onReport(dualMono())) }
+        assertNull("inside the cooldown", recovery.onReport(dualMono()))
+        advanceSeconds(9)
+        assertNotNull("streak stood through the cooldown", recovery.onReport(dualMono()))
+    }
+
+    @Test
+    fun `quiet splits an L=R streak`() {
+        // Live 2026-11-09: MMqqqMM fired as one 4 s fold.
+        val recovery = recovery()
+        repeat(2) { assertNull(recovery.onReport(dualMono())) }
+        repeat(3) { assertNull(recovery.onReport(dualMono(level = 100))) }
+        repeat(2) { assertNull("two 2 s centred passages are not a 4 s fold", recovery.onReport(dualMono())) }
+    }
 }
