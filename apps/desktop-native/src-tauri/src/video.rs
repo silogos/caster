@@ -186,13 +186,40 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
             }
             return;
         }
-        let layer_status: isize = msg_send![vw.layer, status];
+        // Bounded queue + live edge: the layer buffers unboundedly if we
+        // enqueue while it is not ready — 20 GB RSS on a minutes-long cast
+        // (found live). For a live cast, dropping is CORRECT: the newest
+        // frame is the one that matters.
+        let ready: bool = msg_send![vw.layer, isReadyForMoreMediaData];
+        if !ready {
+            use std::sync::atomic::{AtomicI64, AtomicU64};
+            static DROPPED: AtomicU64 = AtomicU64::new(0);
+            static LAST_FLUSH_TICK: AtomicI64 = AtomicI64::new(0);
+            let _: () = msg_send![sample, release]; // not enqueued — free now
+            let dropped = DROPPED.fetch_add(1, Ordering::Relaxed);
+            // If the layer stalls >1 s (occlusion, drawable starvation),
+            // flush and resume at the live edge. PTS ticks at 600 Hz.
+            let now = PTS.load(Ordering::Relaxed);
+            let last = LAST_FLUSH_TICK.load(Ordering::Relaxed);
+            if now - last > 600 {
+                LAST_FLUSH_TICK.store(now, Ordering::Relaxed);
+                let _: () = msg_send![vw.layer, flush];
+                let _: () = msg_send![vw.layer, setNeedsDisplay: true];
+            }
+            if dropped == 1 || dropped % 300 == 0 {
+                println!("[video] layer not ready — dropped {dropped} frames (bounded queue, live edge)");
+            }
+            return;
+        }
         let _: () = msg_send![vw.layer, enqueueSampleBuffer: sample];
-        let _: () = msg_send![sample, release];
+        let _: () = msg_send![sample, release]; // our ref; the layer retains
         if n < 3 {
+            let layer_status: isize = msg_send![vw.layer, status];
             println!("[video] enqueue #{n} ok — layer status={layer_status}");
         }
-        if layer_status == 2 {
+        if n % 600 == 0 {
+            let layer_status: isize = msg_send![vw.layer, status];
+            if layer_status == 2 {
             // AVSampleBufferDisplayLayerStatusFailed
             let err: Id = msg_send![vw.layer, error];
             let desc: Id = if err.is_null() { std::ptr::null_mut() } else { msg_send![err, localizedDescription] };
@@ -207,7 +234,8 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
                 }
             };
             println!("[video] layer FAILED: {desc_str} — flushing");
-            let _: () = msg_send![vw.layer, flush];
+                let _: () = msg_send![vw.layer, flush];
+            }
         }
     }
 }
