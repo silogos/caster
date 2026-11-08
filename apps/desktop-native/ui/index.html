@@ -36,7 +36,7 @@
       }
       .stage { position: absolute; inset: 0; overflow-y: auto; }
       .stage.hidden { display: none; }
-      .column { max-width: 600px; margin: 0 auto; padding: 22px 28px 28px; }
+      .column { max-width: 600px; margin: 0 auto; padding: 20px 28px 20px; }
       .label {
         font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
         text-transform: uppercase; color: var(--muted);
@@ -61,13 +61,13 @@
       .annunciator.reconnecting { color: var(--caution); background: #2a2112; }
 
       /* source block */
-      .source { margin-top: 30px; display: flex; align-items: flex-start; gap: 16px; }
+      .source { margin-top: 22px; display: flex; align-items: flex-start; gap: 16px; }
       .source-name {
         font-family: var(--display); font-size: 34px; font-weight: 800; letter-spacing: 0.01em;
         text-transform: uppercase; line-height: 1.1; margin-top: 8px; word-break: break-word;
       }
       .pill {
-        display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 7px 14px;
+        display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 14px;
         border-radius: 999px; background: #161b21; font-size: 13px; color: var(--muted);
       }
       .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
@@ -82,7 +82,7 @@
 
       /* buttons */
       .btn {
-        width: 100%; margin-top: 22px; padding: 18px; border-radius: 16px; cursor: pointer;
+        width: 100%; margin-top: 18px; padding: 17px; border-radius: 16px; cursor: pointer;
         font: 600 17px var(--body); border: 1px solid transparent;
       }
       .btn-primary {
@@ -91,23 +91,23 @@
       }
       .btn-secondary { color: var(--text); background: #12161b; border-color: #2a313a; }
       .btn:active { transform: translateY(1px); }
-      .hint { margin-top: 10px; font-size: 12px; color: var(--faint); text-align: center; }
+      .hint { margin-top: 8px; font-size: 12px; color: var(--faint); text-align: center; }
 
       /* cards */
       .card {
-        margin-top: 22px; padding: 18px 20px; border-radius: 20px;
+        margin-top: 14px; padding: 15px 20px 16px; border-radius: 20px;
         background: linear-gradient(180deg, var(--surface-top), var(--surface-bottom));
         border: 1px solid var(--hairline); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
       }
       .card-head { display: flex; align-items: center; }
       .well {
-        margin-top: 12px; padding: 16px 18px; border-radius: 12px; background: var(--well);
+        margin-top: 10px; padding: 12px 18px; border-radius: 12px; background: var(--well);
         display: flex; align-items: center; gap: 16px;
       }
       .timecode { font-family: var(--mono); font-size: 34px; font-weight: 700; color: var(--tally); letter-spacing: 0.02em; }
       .timecode.idle { color: var(--faint); }
       .readout { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--text); text-align: right; }
-      .chips { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+      .chips { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
       .chip {
         display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
         background: var(--well); font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
@@ -117,12 +117,12 @@
       .chip.on::before { background: var(--ok); }
 
       /* audio row */
-      .row { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+      .row { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
       .icon-tile { width: 44px; height: 44px; border-radius: 12px; background: var(--well); display: grid; place-items: center; }
       .row-title { font-size: 15px; font-weight: 600; }
       .row-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
       input[type="range"] { width: 100%; accent-color: var(--signal); }
-      .volume { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+      .volume { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
       .volume-value { font-family: var(--mono); font-size: 12px; color: var(--muted); width: 52px; text-align: right; }
       .switch {
         width: 52px; height: 30px; border-radius: 999px; border: none; cursor: pointer; position: relative;
