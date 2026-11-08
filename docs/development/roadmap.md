@@ -140,6 +140,11 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Scope:** game volume + mute (persisted, applied as the playout gain), stay-awake while the media pc is connected (IOKit assertion), desktop-side **Disconnect** (`bye forget`, two-step) and **New QR code** via a UI→server command channel; fixes the forget path flipping the UI to "waiting to reconnect"; removes the dev stage keys and diagnostic hint.
 **Accept:** `cargo test --lib` 51/51 (desktop forget with the phone online and offline, new QR idle vs live cast, the phone-side forget stage, gain/mute, settings round-trip/fallback, the power assertion); UI logic checked in a browser against a mocked Tauri API; app launch + no assertion while idle. **On-device pending:** volume/mute audible on a cast, `pmset -g assertions` during a cast, Disconnect from the desktop drops the phone to its QR flow.
 
+## Feature 2026-11h — Native receiver tray (port from Electron, phase 2 of 6) ✅ implemented — awaiting on-device check
+*(Not a numbered phase: ADR-010's tray lifecycle on `apps/desktop-native`.)*
+**Scope:** close → hide (window + Dock icon) while the server keeps listening and casts keep running; tray menu with the Electron status vocabulary, Open window, Forget phone (armed only while trusted), Quit; every quit path sends a plain `bye desktop-quit` (trust kept); a connecting phone or a Dock click reopens the window; the server reports `forgotten` so the tray disarms after a forget from either side. Not ported: Launch at login, the virtual-camera checkbox.
+**Accept:** `cargo test --lib` 56/56 (tray status lines + armed state, quit goodbye keeps trust), zero warnings; the app starts with the tray installed. **On-device pending (needs clicks):** close hides and the phone can still connect, the menu items, Quit's bye reaching the phone (it should keep its saved desktop).
+
 ---
 
 ## Definition of Done (every phase)

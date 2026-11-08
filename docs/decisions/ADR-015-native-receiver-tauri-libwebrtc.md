@@ -51,7 +51,7 @@ The work went ahead as one native app instead of an Electron sidecar, and two of
 **Costs / accepted:**
 - **macOS only** — `video.rs` is AppKit/CoreVideo. A Windows receiver needs its own video module (the rest is portable Rust).
 - **Prebuilt libwebrtc binaries** via livekit (aarch64-apple-darwin) — the version is livekit's, not ours.
-- **Missing vs the Electron receiver:** microphone playback (the `mic` pc is answered and connected, its track not yet played), the virtual camera and audio routing (proto 2), tray. (Game volume/mute, stay-awake and the desktop Disconnect landed in Feature 2026-11g.) The mic is currently routed to the laptop headset by the user, so its playback is deferred, not urgent.
+- **Missing vs the Electron receiver:** microphone playback (the `mic` pc is answered and connected, its track not yet played), the virtual camera and audio routing (proto 2), launch at login. (Game volume/mute, stay-awake, the desktop Disconnect and the tray landed in Features 2026-11g/h.) The mic is currently routed to the laptop headset by the user, so its playback is deferred, not urgent.
 - **Video pool drops ~0.7 %** of frames at 8 buffers (a frame every ~2 s) — open.
 - **The video crash fix** held a 6.4-minute run with the window hidden for most of it (14,400+ frames dropped while hidden — the exact condition of the four aborts, which hit at ~5–6 minutes), with no abort and no exception caught. Longer sessions remain worth watching.
 

@@ -483,3 +483,18 @@ fn new_qr_replaces_an_idle_session_but_not_a_live_cast() {
         assert_eq!(server.host.sessions.borrow().len(), before, "a live cast keeps its session");
     });
 }
+
+#[test]
+fn quitting_says_a_plain_bye_and_keeps_the_trust() {
+    local(async {
+        let server = start_server(fast_timings(), 600).await;
+        let mut c = paired(&server).await;
+        server.commands.send(ServerCommand::SayGoodbye).unwrap();
+        assert_eq!(c.expect("bye").await["reason"], BYE_DESKTOP_QUIT);
+        c.expect_closed().await;
+        assert!(pairing::read_trust(&server.paths.trust).is_some(), "a quit is not a forget");
+        // With no phone connected it is a harmless no-op.
+        server.commands.send(ServerCommand::SayGoodbye).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    });
+}

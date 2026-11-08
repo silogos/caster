@@ -18,6 +18,7 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
 | `settings.rs` | The receiver's own persisted controls (game volume, mute) — `native-receiver.json` beside the trust store. | filesystem |
+| `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |
 | `power.rs` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected. | IOKit |
 
 `lib.rs`'s `TauriHost` implements `SignalingHost` (answerers + UI events); that seam is why the protocol is tested without WebRTC (`src/signaling/tests.rs` — a real WebSocket client against the real server).
@@ -80,6 +81,8 @@ Only receiver/environment controls live on the desktop (*mobile controls, deskto
 
 UI → server requests travel a `ServerCommand` channel into the signaling thread; a connection that ends with a `bye` (either side) records it, so a forget leaves the QR on screen instead of flipping to "waiting to reconnect".
 
+**Tray (ADR-010, the Electron lifecycle):** closing the main window **hides** it — and the Dock icon (activation policy *Accessory*) — while the signaling server keeps listening and a live cast keeps running; a phone connecting, the tray's *Open window*, or a Dock click bring it back. The tray menu: a status line in the Electron vocabulary (`Waiting…` / `Connected to <phone> — <cast summary>` / `Waiting for <phone> to reconnect…`), *Open window*, *Forget phone* (armed only while a phone is trusted — `bye forget`, same path as Disconnect), *Quit*. Quit is the only exit — tray, Cmd+Q and the app menu all send a plain `bye desktop-quit` first (the trust survives a quit, ADR-006), wait 300 ms for it to leave the socket, then exit. Not ported: *Launch at login* (needs a login-item plugin) and the virtual-camera checkbox (no virtual camera yet).
+
 **Stay-awake:** while the media pc is connected an IOKit assertion prevents display sleep (Electron's `powerSaveBlocker('prevent-display-sleep')`, Phase 14) — check with `pmset -g assertions` during a cast.
 
 ## Logging
@@ -89,7 +92,7 @@ Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` 
 ## Known limitations
 
 - macOS only (the video module).
-- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), virtual camera and audio routing (proto 2), tray, frameless window / session-info window.
+- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), virtual camera and audio routing (proto 2), launch at login, frameless window / session-info window.
 - ~0.7 % of video frames dropped at the pool bound (open).
 - The video abort fix held a 6.4-minute run with the window hidden most of the time (the aborts' trigger); longer sessions are still worth watching.
 - A mic pc the phone tears down is noticed only by its ICE failing; it is closed when the next mic offer arrives.

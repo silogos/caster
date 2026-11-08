@@ -5,6 +5,7 @@ mod power;
 mod protocol;
 mod settings;
 mod signaling;
+mod tray;
 mod video;
 mod webrtc;
 
@@ -128,6 +129,15 @@ impl SignalingHost for TauriHost {
     }
 
     fn mobile_state(&self, state: Value) {
+        if let Some(tray) = self.app.try_state::<tray::Tray>() {
+            tray.on_mobile_state(&state);
+        }
+        // A phone connecting brings a hidden window back (ADR-010): the
+        // phone's Connect flow needs zero desktop interaction.
+        if state["state"] == "connected" {
+            let app = self.app.clone();
+            let _ = self.app.run_on_main_thread(move || tray::show_main_window(&app));
+        }
         let _ = self.app.emit("pairing:mobile-state", state);
     }
 }
@@ -146,6 +156,7 @@ pub fn run() {
 
             let paths = pairing::StorePaths::from_home().ok_or("HOME is not set")?;
             let desktop_id = pairing::desktop_id(&paths.desktop_id)?;
+            let trusted_at_launch = pairing::read_trust(&paths.trust).is_some();
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
             audio::set_game_gain(saved.effective_game_gain());
@@ -169,8 +180,26 @@ pub fn run() {
                 hosts: Box::new(pairing::lan_ipv4_hosts),
             };
             let commands = signaling::start(host, store, config);
-            *app.state::<ServerControl>().0.lock().map_err(|_| "server control lock")? = Some(commands);
+            *app.state::<ServerControl>().0.lock().map_err(|_| "server control lock")? = Some(commands.clone());
+
+            let (forget_tx, goodbye_tx) = (commands.clone(), commands);
+            let tray = tray::install(
+                app.handle(),
+                trusted_at_launch,
+                move || { let _ = forget_tx.send(signaling::ServerCommand::ForgetPhone); },
+                move || { let _ = goodbye_tx.send(signaling::ServerCommand::SayGoodbye); },
+            )?;
+            app.manage(tray);
             Ok(())
+        })
+        // Close → hide: the receiver keeps listening from the menu bar.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == tray::MAIN_WINDOW && !tray::quitting() {
+                    api.prevent_close();
+                    tray::hide_main_window(window.app_handle());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             pairing_payload,
@@ -181,5 +210,16 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building desktop-native")
-        .run(|_app, _event| {});
+        .run(|app, event| match event {
+            // Cmd+Q / the app menu's Quit walk the same goodbye as the tray.
+            tauri::RunEvent::ExitRequested { api, .. } if !tray::quitting() => {
+                api.prevent_exit();
+                let control = app.state::<ServerControl>();
+                tray::quit(app, &|| { let _ = send_command(&control, signaling::ServerCommand::SayGoodbye); });
+            }
+            // Dock icon click while hidden.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+            _ => {}
+        });
 }

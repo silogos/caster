@@ -78,7 +78,14 @@ pub enum ServerCommand {
     ForgetPhone,
     /// A fresh QR while no phone is connected (the old one is invalidated).
     RegeneratePairing,
+    /// The app is quitting: a plain `bye desktop-quit` to the connected
+    /// phone — the persistent trust survives a quit (ADR-006).
+    SayGoodbye,
 }
+
+/// The `bye` reason a quitting desktop sends (any non-`forget` reason
+/// keeps the persistent session).
+pub const BYE_DESKTOP_QUIT: &str = "desktop-quit";
 
 pub type CommandSender = UnboundedSender<ServerCommand>;
 
@@ -214,7 +221,15 @@ fn on_command<H: SignalingHost + ?Sized>(command: ServerCommand, shared: &RefCel
             }
             shared.borrow_mut().store.invalidate();
             host.close_peers();
+            host.mobile_state(json!({ "state": "forgotten" }));
             regenerate(shared, host, (config.hosts)(), true);
+        }
+        ServerCommand::SayGoodbye => {
+            let control = shared.borrow_mut().authorized_control.take();
+            if let Some(control) = control {
+                log::info!(target: "signaling", "quitting — saying bye to the phone (trust kept)");
+                let _ = control.send(Farewell::Plain);
+            }
         }
         ServerCommand::RegeneratePairing => {
             if shared.borrow().authorized.is_some() {
@@ -372,7 +387,7 @@ async fn handle_connection<H: SignalingHost + 'static>(
                 }
             }
             Some(farewell) = control_rx.recv() => {
-                let reason = if farewell == Farewell::Forget { protocol::BYE_FORGET } else { "desktop-ended" };
+                let reason = if farewell == Farewell::Forget { protocol::BYE_FORGET } else { BYE_DESKTOP_QUIT };
                 conn.farewell = Some(farewell);
                 let _ = out.send(&conn.sid, "bye", json!({ "reason": reason })).await;
                 break Flow::Close(CloseCode::Normal, "bye");
@@ -675,6 +690,7 @@ fn on_bye<H: SignalingHost>(conn: &mut Conn, envelope: &Envelope, shared: &RefCe
         if let Err(e) = pairing::clear_trust(&config.paths.trust) {
             log::warn!(target: "signaling", "bye forget: {e}");
         }
+        host.mobile_state(json!({ "state": "forgotten" }));
     }
     log::info!(target: "signaling", "bye from {} ({reason})", conn.remote);
     shared.borrow_mut().store.invalidate();
