@@ -51,7 +51,7 @@ class PlaybackCaptureAudioSource(
 ) {
     val state: GameAudioState get() = monitor.state.value
 
-    /** For the start-of-capture diagnostics ([AudioPolicySinkProbe]). */
+    /** Reads the capture-dump global setting and resolves the dump's output dir. */
     private val appContext: Context = context
 
     /** Fed on the ADM's recording thread alongside the silence monitor. */

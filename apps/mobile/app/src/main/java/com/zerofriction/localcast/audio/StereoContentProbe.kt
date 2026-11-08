@@ -42,6 +42,16 @@ internal class StereoContentProbe(
             deadRatio: Long = MonoTapRecovery.DEAD_CHANNEL_RATIO,
         ): Boolean = amplitude >= minAmplitude && minOf(meanAbsLeft, meanAbsRight) * deadRatio < amplitude
 
+        /**
+         * Loud, both channels carrying the same signal (L−R under
+         * 1/[MonoTapRecovery.DUAL_MONO_RATIO] of the amplitude) — the L=R
+         * fold flavor, or genuinely mono content (indistinguishable here).
+         */
+        fun isDualMono(
+            minAmplitude: Long = MonoTapRecovery.MIN_AMPLITUDE,
+            ratio: Long = MonoTapRecovery.DUAL_MONO_RATIO,
+        ): Boolean = amplitude >= minAmplitude && meanAbsDiff * ratio < amplitude
+
         /** Human-readable line for the logs. */
         fun summarize(): String {
             val diffPct = if (amplitude == 0L) 0L else meanAbsDiff * 100 / amplitude
