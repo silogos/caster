@@ -175,11 +175,40 @@ unsafe fn build_no_input_card(display_layer: Id, (w, h): (f64, f64), scale: f64)
     card
 }
 
-/// Main thread: a stream started (`false`) or ended (`true`). With no input
-/// the card covers the window and the last frame is dropped, so a capture
-/// never freezes on stale video.
-pub fn set_no_input(no_input: bool) {
-    LIVE.store(!no_input, Ordering::Relaxed);
+/// Bumped for every new video stream and whenever the media pc closes;
+/// a frame loop whose generation is no longer current exits (libwebrtc's
+/// stream does not end when its pc closes — each cast leaked a thread).
+static STREAM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A new video stream starts; returns its generation.
+pub fn begin_stream() -> u64 {
+    STREAM_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// The media pc closed: whatever stream was running is over.
+pub fn end_streams() {
+    STREAM_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn is_current_stream(generation: u64) -> bool {
+    STREAM_GENERATION.load(Ordering::Relaxed) == generation
+}
+
+pub fn is_live() -> bool {
+    LIVE.load(Ordering::Relaxed)
+}
+
+/// Any thread: records whether input is live. True when it changed — the
+/// caller then tells the UI and applies the card on the main thread.
+pub fn set_live(live: bool) -> bool {
+    LIVE.swap(live, Ordering::Relaxed) != live
+}
+
+/// Main thread: shows the NO INPUT card while no input is live (dropping
+/// the last frame, so a capture never freezes on stale video) and hides it
+/// while frames flow.
+pub fn apply_no_input_card() {
+    let no_input = !is_live();
     let Some(card) = NO_INPUT_CARD.get() else { return };
     let layer = VIDEO_WINDOW.get().map(|vw| vw.layer);
     guarded("toggle no-input card", || unsafe {
@@ -692,5 +721,29 @@ mod bench {
         }
         let simd = t.elapsed() / runs;
         println!("1280x800 I420→NV12: scalar {scalar:?}/frame, libyuv {simd:?}/frame");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_pc_retires_the_running_frame_loop() {
+        let first = begin_stream();
+        assert!(is_current_stream(first));
+        end_streams(); // the phone stopped casting (bye → pc closed)
+        assert!(!is_current_stream(first), "the old loop must exit, not wait forever");
+        let second = begin_stream();
+        assert!(is_current_stream(second) && !is_current_stream(first));
+    }
+
+    #[test]
+    fn live_changes_are_reported_once() {
+        set_live(false);
+        assert!(set_live(true), "no input → live: show the video");
+        assert!(!set_live(true), "already live: nothing to announce");
+        assert!(set_live(false), "live → no input: show the card");
+        assert!(!is_live());
     }
 }

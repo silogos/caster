@@ -216,11 +216,21 @@ impl MediaAnswerer {
             }
         })));
 
+        let state_app = self.app.clone();
         pc.on_connection_state_change(Some(Box::new(move |state| {
             log::info!(target: "webrtc", "pc={} state: {state:?}", role.as_str());
+            if role != PcId::Media {
+                return;
+            }
             // The display stays awake exactly while the cast is live.
-            if role == PcId::Media {
-                crate::power::keep_display_awake(state == PeerConnectionState::Connected);
+            crate::power::keep_display_awake(state == PeerConnectionState::Connected);
+            // The link is gone (the phone stopped, dropped, or the pc was
+            // replaced): no input until frames flow again.
+            if matches!(state, PeerConnectionState::Disconnected | PeerConnectionState::Failed | PeerConnectionState::Closed) {
+                announce_input(&state_app, false);
+            }
+            if matches!(state, PeerConnectionState::Failed | PeerConnectionState::Closed) {
+                crate::video::end_streams();
             }
         })));
         pc.on_ice_connection_state_change(Some(Box::new(move |state| {
@@ -289,6 +299,8 @@ impl MediaAnswerer {
     pub fn close(&self) {
         if self.role == PcId::Media {
             crate::power::keep_display_awake(false);
+            crate::video::end_streams();
+            announce_input(&self.app, false);
         }
         *self.game_audio_dc.lock().expect("dc keep lock") = None;
         if let Some(pc) = self.pc.lock().expect("pc lock").take() {
@@ -299,6 +311,18 @@ impl MediaAnswerer {
 }
 
 const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// How often a frame loop waiting for frames checks whether its stream is
+/// still the current one.
+const STALE_STREAM_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Input went live or stopped: the deck's ON AIR, and the video window's
+/// NO INPUT card (main thread). No-op when nothing changed.
+fn announce_input(app: &tauri::AppHandle, live: bool) {
+    if crate::video::set_live(live) {
+        let _ = app.emit("cast:state", json!({ "live": live }));
+        let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+    }
+}
 
 /// The video frame loop for one stream (one cast): renders into the native
 /// window while the user has it open, keeps its visibility fresh from the
@@ -306,6 +330,7 @@ const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
+    let generation = crate::video::begin_stream();
     let mut frames: u64 = 0;
     let mut window_requested = false;
     let mut last_visibility_poll: Option<std::time::Instant> = None;
@@ -314,17 +339,28 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     // Per-frame cost of convert + copy + enqueue (rendered frames only).
     let mut render_cost = std::time::Duration::ZERO;
     let mut rendered: u32 = 0;
-    while let Some(frame) = stream.next().await {
+    loop {
+        if !crate::video::is_current_stream(generation) {
+            log::info!(target: "webrtc", "video stream replaced or closed — frame loop exits");
+            break;
+        }
+        let frame = match tokio::time::timeout(STALE_STREAM_CHECK, stream.next()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => continue, // no frame yet: re-check the generation
+        };
         let (w, h) = (frame.buffer.width(), frame.buffer.height());
         if !window_requested {
             window_requested = true;
             log::info!(target: "webrtc", "first frame {w}x{h}");
-            let _ = app.emit("cast:state", json!({ "live": true }));
-            let _ = app.run_on_main_thread(|| crate::video::set_no_input(false));
             // A window the user left open comes back for the new cast.
             if crate::video::is_open() {
                 let _ = app.run_on_main_thread(crate::video::open_video_window);
             }
+        }
+        // Frames flow: live (also after a transient disconnect recovers).
+        if !crate::video::is_live() {
+            announce_input(&app, true);
         }
         if last_visibility_poll.map_or(true, |t| t.elapsed() >= crate::video::VISIBILITY_POLL_INTERVAL) {
             last_visibility_poll = Some(std::time::Instant::now());
@@ -366,7 +402,8 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
             frames_at_last_log = frames;
         }
     }
-    log::info!(target: "webrtc", "video frame stream ended after {frames} frames");
-    let _ = app.emit("cast:state", json!({ "live": false }));
-    let _ = app.run_on_main_thread(|| crate::video::set_no_input(true));
+    log::info!(target: "webrtc", "video frame loop ended after {frames} frames");
+    if crate::video::is_current_stream(generation) {
+        announce_input(&app, false);
+    }
 }
