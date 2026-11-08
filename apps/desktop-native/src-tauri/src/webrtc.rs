@@ -159,8 +159,11 @@ impl MediaAnswerer {
                                 )
                                 .ok();
                             // M3-lite preview: ~12 fps downscaled JPEG data URLs
-                            // to the webview until the Metal subview lands.
-                            if last_jpeg.elapsed() >= std::time::Duration::from_millis(80) {
+                            // to the webview — ONLY while the native video window
+                            // is not live (both showing at once doubled the view).
+                            if !crate::video::is_active()
+                                && last_jpeg.elapsed() >= std::time::Duration::from_millis(80)
+                            {
                                 last_jpeg = std::time::Instant::now();
                                 println!("[webrtc] JPEG-BRANCH-ENTERED");
                                 let sw = frame.buffer.width();

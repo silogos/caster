@@ -72,12 +72,14 @@ pub fn create_video_window() {
             defer: false
         ];
         let title = NSString::from_str("Zero-Friction Cast");
+        // Layer attached BEFORE the view enters the window — attaching
+        // after display left the window blank once (live M3).
+        let _: () = msg_send![view, setLayer: layer];
+        let _: () = msg_send![view, setNeedsDisplay: true];
         let _: () = msg_send![window, setTitle: &*title];
         let _: () = msg_send![window, setContentView: view];
         let _: () = msg_send![window, center];
         let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
-        let _: () = msg_send![view, setLayer: layer];
-        let _: () = msg_send![view, setNeedsDisplay: true];
 
         let _ = VIDEO_WINDOW.set(VideoWindow {
             window: retain(window),
@@ -85,6 +87,55 @@ pub fn create_video_window() {
         });
         let _ = retain(view); // owned by the window's view hierarchy
         println!("[video] native video window created (AVSampleBufferDisplayLayer, resizeAspect)");
+    }
+}
+
+/// CVPixelBuffer geometry via the CoreVideo C functions — the buffer is a
+/// CF object, NOT an NSObject: msg_send on it raised a foreign exception
+/// and aborted the app at cast start (found live in M3).
+unsafe fn pixel_buffer_dims(cv: *mut c_void) -> (u64, u64, u64) {
+    use objc2_core_video::{CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth};
+    let buf = &*(cv as *const objc2_core_video::CVBuffer);
+    (
+        CVPixelBufferGetWidth(buf) as u64,
+        CVPixelBufferGetHeight(buf) as u64,
+        CVPixelBufferGetPixelFormatType(buf) as u64,
+    )
+}
+
+/// Format description cache — keyed by (width, height, pixel format); the
+/// quality ladder changes dims mid-cast, which re-creates the entry.
+fn cached_format_description(cv_pixel_buffer: *mut c_void) -> *const objc2_core_media::CMFormatDescription {
+    use std::sync::Mutex;
+    struct DescId(Id);
+    unsafe impl Send for DescId {}
+    static CACHE: Mutex<Option<((u64, u64, u64), DescId)>> = Mutex::new(None);
+    unsafe {
+        let key = pixel_buffer_dims(cv_pixel_buffer);
+        let mut cache = CACHE.lock().expect("fmt cache");
+        if let Some((cached_key, cached)) = cache.as_ref() {
+            if *cached_key == key {
+                return cached.0 as *const _;
+            }
+        }
+        let mut desc: Id = std::ptr::null_mut();
+        let status = objc2_core_media::CMVideoFormatDescriptionCreateForImageBuffer(
+            None,
+            &*(cv_pixel_buffer as *const objc2_core_video::CVBuffer),
+            std::ptr::NonNull::new_unchecked(&mut desc as *mut Id as *mut *const _),
+        );
+        if status != 0 || desc.is_null() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static FAILS: AtomicU64 = AtomicU64::new(0);
+            let fails = FAILS.fetch_add(1, Ordering::Relaxed);
+            if fails < 3 {
+                println!("[video] CMVideoFormatDescriptionCreateForImageBuffer failed status={status} dims={key:?}");
+            }
+            return std::ptr::null();
+        }
+        println!("[video] format description created for {key:?}");
+        *cache = Some((key, DescId(desc)));
+        desc as *const _
     }
 }
 
@@ -106,10 +157,14 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
             presentationTimeStamp: CMTimeMake(pts, 600),
             decodeTimeStamp: invalid,
         };
+        // The pixel buffer carries no format description — creating the
+        // sample with a NULL one failed with -12731 RequiredParameterMissing
+        // (found live in M3). Derive one from the buffer, cached per dims.
+        let format_desc = cached_format_description(cv_pixel_buffer);
+        if format_desc.is_null() {
+            return; // the failure log inside cached_format_description says why
+        }
         let mut sample: Id = std::ptr::null_mut();
-        // The formatDescription/timing refs are per-call; format is derived
-        // when null — the bindings want raw refs, so build them unsafely.
-        let format_desc: *const objc2_core_media::CMFormatDescription = std::ptr::null();
         let status = CMSampleBufferCreateForImageBuffer(
             None,
             &*(cv_pixel_buffer as *const objc2_core_video::CVBuffer),
@@ -120,11 +175,40 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
             std::ptr::NonNull::from(&timing),
             std::ptr::NonNull::new_unchecked(&mut sample as *mut Id as *mut *mut _),
         );
+        use std::sync::atomic::AtomicU64;
+        static ENQ: AtomicU64 = AtomicU64::new(0);
+        static FAILS: AtomicU64 = AtomicU64::new(0);
+        let n = ENQ.fetch_add(1, Ordering::Relaxed);
         if status != 0 || sample.is_null() {
+            let fails = FAILS.fetch_add(1, Ordering::Relaxed);
+            if fails < 3 || fails % 100 == 0 {
+                println!("[video] sample create FAILED status={status} (fail #{})", fails + 1);
+            }
             return;
         }
+        let layer_status: isize = msg_send![vw.layer, status];
         let _: () = msg_send![vw.layer, enqueueSampleBuffer: sample];
         let _: () = msg_send![sample, release];
+        if n < 3 {
+            println!("[video] enqueue #{n} ok — layer status={layer_status}");
+        }
+        if layer_status == 2 {
+            // AVSampleBufferDisplayLayerStatusFailed
+            let err: Id = msg_send![vw.layer, error];
+            let desc: Id = if err.is_null() { std::ptr::null_mut() } else { msg_send![err, localizedDescription] };
+            let desc_str = if desc.is_null() {
+                "(nil)".to_string()
+            } else {
+                let s: Id = msg_send![desc, UTF8String];
+                if s.is_null() {
+                    "(utf8 nil)".to_string()
+                } else {
+                    std::ffi::CStr::from_ptr(s as *const std::ffi::c_char).to_string_lossy().into_owned()
+                }
+            };
+            println!("[video] layer FAILED: {desc_str} — flushing");
+            let _: () = msg_send![vw.layer, flush];
+        }
     }
 }
 
