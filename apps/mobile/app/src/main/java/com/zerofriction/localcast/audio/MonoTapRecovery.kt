@@ -8,8 +8,8 @@ package com.zerofriction.localcast.audio
  * re-patches the submix input and restores the clean stereo write.
  *
  * Found live 2026-11-04 (issue #101): with the pre-opened capture record the
- * tap holds true stereo for minutes at a time, but the vendor's playback-side
- * routing into the policy sink re-folds whenever the playing app re-registers
+ * tap holds true stereo for minutes at a time, but the playback-capture
+ * write re-folds (audio.md §capture-session ordering) whenever the playing app re-registers
  * an audio track (every track change in a media player). One recovery budget
  * per cast therefore cannot be tiny: the fold recurs over a whole session,
  * and exhausting the budget mid-cast left a fold unrecovered. The budget is
@@ -17,7 +17,7 @@ package com.zerofriction.localcast.audio
  * them — enough to outlast a long session, still bounded so genuinely
  * hard-panned content cannot churn the app through rebuilds forever. The
  * bound keys on the dead side: hard-panned content keeps the SAME side dead
- * no matter how often the record is rebuilt, while the vendor re-fold
+ * no matter how often the record is rebuilt, while a re-fold
  * SHUFFLES the dead side across rebuilds (its live signature) — shuffles
  * heal uncounted, so track-heavy content recovers for a whole session.
  *
@@ -59,7 +59,7 @@ internal class MonoTapRecovery(
         }
         deadStreak++
         val side = if (report.meanAbsLeft < report.meanAbsRight) DeadSide.LEFT else DeadSide.RIGHT
-        // The dead side SHUFFLING across rebuilds is the vendor re-fold's
+        // The dead side SHUFFLING across rebuilds is a re-fold's
         // signature (the tap's channel state flips, live: L-dead → R-dead →
         // L-dead) — it heals with a rebuild and must not consume the budget.
         // The same side staying dead no matter how often the record is
