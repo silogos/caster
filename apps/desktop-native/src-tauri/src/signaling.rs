@@ -132,6 +132,72 @@ fn qr_data_url(payload: &str) -> Result<String, String> {
 }
 
 
+/// The trust store — the SAME file the Electron desktop uses (ADR-006
+/// format), so a phone that trusts one desktop resumes against the other.
+const TRUST_PATH: &str = "Library/Application Support/Zero-Friction Local Cast/trust.json";
+
+struct TrustEntry {
+    device_id: String,
+    name: String,
+    key: Vec<u8>, // 32 bytes
+}
+
+fn read_trust() -> Option<TrustEntry> {
+    let path = format!("{}/{}", std::env::var("HOME").ok()?, TRUST_PATH);
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: Value = serde_json::from_str(&text).ok()?;
+    if doc["version"].as_i64() != Some(1) {
+        return None;
+    }
+    let device_id = doc["deviceId"].as_str()?.to_string();
+    let name = doc["name"].as_str().unwrap_or("Android device").to_string();
+    let key = b64url_decode(doc["key"].as_str()?).ok()?;
+    if device_id.is_empty() || device_id.len() > 128 || key.len() != 32 {
+        return None;
+    }
+    Some(TrustEntry { device_id, name, key })
+}
+
+fn write_trust(entry: &TrustEntry) {
+    let Ok(home) = std::env::var("HOME") else { return };
+    let path = format!("{home}/{TRUST_PATH}");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let doc = json!({
+        "version": 1,
+        "deviceId": entry.device_id,
+        "name": entry.name,
+        "key": b64url(&entry.key),
+        "createdAt": now,
+        "lastConnectedAt": now,
+    });
+    let _ = std::fs::write(&path, doc.to_string());
+}
+
+/// trustKey = HKDF-SHA256(ikm = session secret, salt = ASCII(sid),
+/// info = "zfc-trust-v1", L = 32) — both sides derive the same key at
+/// pairing; it is never transmitted (handshake.ts contract).
+fn derive_trust_key(session_secret: &[u8], sid: &str) -> Vec<u8> {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let hk = Hkdf::<Sha256>::new(Some(sid.as_bytes()), session_secret);
+    let mut okm = [0u8; 32];
+    hk.expand(b"zfc-trust-v1", &mut okm).expect("32 bytes");
+    okm.to_vec()
+}
+
+/// The phone's device name from its UA — the trailing "(...)" segment.
+fn device_name_from_ua(ua: &str) -> String {
+    ua.rsplit('(')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(')')
+        .trim()
+        .to_string()
+}
+
 /// THE pairing session — one per app run. Both the UI QR and the WS
 /// server's HMAC verification MUST read the same secret; generating two
 /// sessions (one for the QR, one for auth) made every scan fail with
@@ -262,6 +328,10 @@ async fn run_signaling(
     let mut authorized = false;
     let mut last_activity = Instant::now();
     let mut last_heartbeat = Instant::now();
+    let mut hello_device_id = String::new();
+    let mut hello_resume = false;
+    let mut hello_ua = String::new();
+    let mut phone_name = "Android device".to_string();
     let _ = &udp;
 
     // PC → phone ICE candidates surface through this channel once the
@@ -359,12 +429,14 @@ async fn run_signaling(
                 match msg_type.as_str() {
                     "hello" => {
                         sid = inbound_sid.clone();
+                        hello_device_id = envelope["payload"]["deviceId"].as_str().unwrap_or("").to_string();
+                        hello_resume = envelope["payload"]["resume"].as_bool().unwrap_or(false);
+                        hello_ua = envelope["payload"]["ua"].as_str().unwrap_or("").to_string();
                         let mut bytes = [0u8; NONCE_BYTES];
                         rand::rngs::OsRng.fill_bytes(&mut bytes);
                         nonce = b64url(&bytes);
                         send_envelope(&mut sink, &mut seq, &sid, "challenge", json!({ "n": nonce })).await?;
-                        let resume = envelope["payload"]["resume"].as_bool().unwrap_or(false);
-                        println!("[signaling] hello (resume={resume}) — challenge sent");
+                        println!("[signaling] hello (resume={hello_resume}) — challenge sent");
                     }
                     "auth" => {
                         let mac = envelope["payload"]["mac"].as_str().unwrap_or("");
@@ -372,11 +444,39 @@ async fn run_signaling(
                         let mut message = Vec::new();
                         message.extend_from_slice(sid.as_bytes());
                         message.extend_from_slice(nonce.as_bytes());
-                        let expected = hmac_bytes(&session.secret, &message);
-                        if !constant_time_eq(&received, &expected) {
+                        // Two keys, two paths (signaling.md): the QR session
+                        // secret on a fresh scan, or the stored trustKey on a
+                        // resume (sid = the phone's deviceId there).
+                        let mut verified = constant_time_eq(&received, &hmac_bytes(&session.secret, &message));
+                        let mut via = "qr session secret";
+                        if !verified && hello_resume {
+                            if let Some(trust) = read_trust() {
+                                if trust.device_id == sid {
+                                    verified = constant_time_eq(&received, &hmac_bytes(&trust.key, &message));
+                                    if verified {
+                                        via = "stored trustKey (resume)";
+                                        phone_name = trust.name.clone();
+                                    }
+                                }
+                            }
+                        }
+                        if !verified {
                             send_envelope(&mut sink, &mut seq, &sid, "error", json!({ "code": "bad-auth" })).await?;
                             return Err("HMAC verify failed — close 1008 bad-auth".into());
                         }
+                        // A successful QR pairing derives + persists the
+                        // trustKey (the phone does the same) — next time the
+                        // phone resumes without scanning.
+                        if via.starts_with("qr") && !hello_device_id.is_empty() {
+                            let trust_key = derive_trust_key(&session.secret, &sid);
+                            write_trust(&TrustEntry {
+                                device_id: hello_device_id.clone(),
+                                name: device_name_from_ua(&hello_ua),
+                                key: trust_key,
+                            });
+                            println!("[signaling] trust saved (deviceId={}…)", &hello_device_id[..8.min(hello_device_id.len())]);
+                        }
+                        println!("[signaling] authorized via {via}");
                         authorized = true;
                         send_envelope(
                             &mut sink,
@@ -385,8 +485,8 @@ async fn run_signaling(
                             "auth-ok",
                             json!({ "name": "desktop-native", "proto": 2, "desktopId": "desktop-native", "hosts": hosts }),
                         ).await?;
-                        let _ = app.emit("pairing:mobile-state", json!({ "state": "connected", "name": "Android device" }));
-                        println!("[signaling] AUTH OK — authorized");
+                        let _ = app.emit("pairing:mobile-state", json!({ "state": "connected", "name": phone_name }));
+                        println!("[signaling] AUTH OK — authorized ({phone_name})");
                     }
                     "sdp-offer" if authorized => {
                         let pc = envelope["payload"]["pc"].as_str().unwrap_or("").to_string();
@@ -414,7 +514,7 @@ async fn run_signaling(
                     "bye" => {
                         let reason = envelope["payload"]["reason"].as_str().unwrap_or("");
                         println!("[signaling] bye ({reason})");
-                        let _ = app.emit("pairing:mobile-state", json!({ "state": "disconnected", "name": "Android device" }));
+                        let _ = app.emit("pairing:mobile-state", json!({ "state": "disconnected", "name": phone_name }));
                         return Ok(());
                     }
                     other => {

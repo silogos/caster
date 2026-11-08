@@ -1,3 +1,4 @@
+mod audio;
 mod signaling;
 mod webrtc;
 

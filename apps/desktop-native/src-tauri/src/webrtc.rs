@@ -80,11 +80,25 @@ impl MediaAnswerer {
                 static BYTES: AtomicU64 = AtomicU64::new(0);
                 let n = MSGS.fetch_add(1, Ordering::Relaxed);
                 BYTES.fetch_add(msg.data.len() as u64, Ordering::Relaxed);
-                if n == 0 {
-                    println!("[webrtc] FIRST DataChannel message ({} bytes) — game audio flowing", msg.data.len());
+                if !msg.binary {
+                    // The channel's text sub-protocol (announce). Deliberately
+                    // NOT acked: without an ack the phone stays on raw PCM —
+                    // the engine path (ADR-013's own fallback ladder).
+                    println!("[webrtc] dc control text: {}", String::from_utf8_lossy(&msg.data));
+                    return;
                 }
+                if n == 0 {
+                    println!("[webrtc] FIRST DataChannel PCM chunk ({} bytes) — feeding the engine", msg.data.len());
+                    crate::audio::start();
+                }
+                crate::audio::feed_pcm16(&msg.data);
                 if n % 100 == 0 {
-                    println!("[webrtc] dc: {} msgs, {} kB total", n + 1, BYTES.load(Ordering::Relaxed) / 1024);
+                    let (underruns, played) = crate::audio::stats();
+                    println!(
+                        "[webrtc] dc: {} msgs, {} kB total | audio underruns={underruns} played={played}",
+                        n + 1,
+                        BYTES.load(Ordering::Relaxed) / 1024
+                    );
                 }
                 let _ = dc_app.emit(
                     "engine:dc-stats",
@@ -107,6 +121,7 @@ impl MediaAnswerer {
                         static FRAMES: AtomicU64 = AtomicU64::new(0);
                         static BYTES: AtomicU64 = AtomicU64::new(0);
                         let mut last_log = std::time::Instant::now();
+                        let mut last_jpeg = std::time::Instant::now();
                         let mut stream = NativeVideoStream::new(video);
                         while let Some(frame) = stream.next().await {
                             FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -120,12 +135,46 @@ impl MediaAnswerer {
                                     }),
                                 )
                                 .ok();
+                            // M3-lite preview: ~12 fps downscaled JPEG data URLs
+                            // to the webview until the Metal subview lands.
+                            if last_jpeg.elapsed() >= std::time::Duration::from_millis(80) {
+                                last_jpeg = std::time::Instant::now();
+                                let sw = frame.buffer.width();
+                                let sh = frame.buffer.height();
+                                if sw > 0 && sh > 0 {
+                                    let scale = (640.0 / sw as f32).min(1.0);
+                                    let dw = (sw as f32 * scale).max(2.0) as i32;
+                                    let dh = (sh as f32 * scale).max(2.0) as i32;
+                                    let mut rgba = vec![0u8; (dw * dh * 4) as usize];
+                                    use livekit::webrtc::video_frame::VideoBuffer;
+                                    frame.buffer.to_argb(
+                                        livekit::webrtc::video_frame::VideoFormatType::RGBA,
+                                        &mut rgba,
+                                        (dw * 4) as u32,
+                                        dw,
+                                        dh,
+                                    );
+                                    if let Some(img) = image::RgbaImage::from_raw(dw as u32, dh as u32, rgba) {
+                                        let mut jpg = Vec::new();
+                                        if image::DynamicImage::ImageRgba8(img)
+                                            .write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg)
+                                            .is_ok()
+                                        {
+                                            use base64::Engine;
+                                            let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
+                                            frame_app
+                                                .emit("video:jpeg", json!({ "dataUrl": format!("data:image/jpeg;base64,{b64}") }))
+                                                .ok();
+                                        }
+                                    }
+                                }
+                            }
                             if last_log.elapsed() >= std::time::Duration::from_secs(1) {
                                 last_log = std::time::Instant::now();
                                 println!(
-                                    "[webrtc] video: {} frames, {} kB/s",
+                                    "[webrtc] video: {} frames, {} Mpx/s",
                                     FRAMES.load(Ordering::Relaxed),
-                                    BYTES.swap(0, Ordering::Relaxed) / 1024
+                                    BYTES.swap(0, Ordering::Relaxed) / 1_048_576
                                 );
                             }
                         }
@@ -187,7 +236,12 @@ impl MediaAnswerer {
                     }
                 }
             }
-            Err(e) => println!("[webrtc] candidate parse failed: {e:?} line={line}"),
+            Err(e) => {
+                // IPv6/mDNS lines fail this parser on some paths — logged,
+                // non-fatal: the UDP host pair carries the connection (found
+                // live in M0-r; the IPv6 candidate was never needed).
+                println!("[webrtc] candidate parse skipped: {e:?}")
+            }
         }
     }
 }
