@@ -49,8 +49,11 @@ const PIXEL_FORMAT: u32 = objc2_core_video::kCVPixelFormatType_420YpCbCr8BiPlana
 const POOL_ALLOCATION_THRESHOLD: i64 = 8;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
 const WINDOW_TITLE: &str = "Zero-Friction Cast";
-/// NSWindowStyleMask: titled | closable | miniaturizable | resizable.
-const WINDOW_STYLE: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+/// Frameless (product choice, 2026-11-09 — the Electron receiver's
+/// frameless spec): NSWindowStyleMaskBorderless | Resizable — no title
+/// bar, no traffic lights, square corners; OBS captures pure video. Moved
+/// by dragging the video, resized from the edges, closed from the deck.
+const WINDOW_STYLE: u64 = 1 << 3;
 const NS_BACKING_STORE_BUFFERED: usize = 2;
 /// NSWindowOcclusionStateVisible.
 const OCCLUSION_VISIBLE: u64 = 1 << 1;
@@ -255,8 +258,14 @@ fn create_video_window() {
             // Layer attached BEFORE the view enters the window — attaching
             // after display left the window blank once (live M3).
             let _: () = msg_send![view, setLayer: layer];
+            // The title still names the window in Mission Control and OBS's
+            // window list, though no title bar shows it.
             let title = NSString::from_str(WINDOW_TITLE);
             let _: () = msg_send![window, setTitle: &*title];
+            let _: () = msg_send![window, setMovableByWindowBackground: true];
+            let _: () = msg_send![window, setHasShadow: true];
+            let black: Id = msg_send![class!(NSColor), blackColor];
+            let _: () = msg_send![window, setBackgroundColor: black];
             let _: () = msg_send![window, setContentView: view];
             let _: () = msg_send![view, release]; // the window owns its content view
             let scale: f64 = msg_send![window, backingScaleFactor];
