@@ -317,6 +317,9 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     let mut last_preview: Option<std::time::Instant> = None;
     let mut last_log = std::time::Instant::now();
     let mut frames_at_last_log: u64 = 0;
+    // Per-frame cost of convert + copy + enqueue (rendered frames only).
+    let mut render_cost = std::time::Duration::ZERO;
+    let mut rendered: u32 = 0;
     while let Some(frame) = stream.next().await {
         let (w, h) = (frame.buffer.width(), frame.buffer.height());
         if !window_requested {
@@ -329,10 +332,20 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
             last_visibility_poll = Some(std::time::Instant::now());
             let _ = app.run_on_main_thread(crate::video::refresh_visibility);
         }
-        let i420 = frame.buffer.to_i420();
-        let (y, u, v) = i420.data();
-        let (sy, su, sv) = i420.strides();
-        if renderer.render_i420(w, h, y, u, v, sy, su, sv) == crate::video::Followup::RaiseWindow {
+        let started = std::time::Instant::now();
+        let followup = match renderer.drop_if_hidden() {
+            Some(followup) => followup,
+            None => {
+                let i420 = frame.buffer.to_i420();
+                let (y, u, v) = i420.data();
+                let (sy, su, sv) = i420.strides();
+                let followup = renderer.render_i420(w, h, y, u, v, sy, su, sv);
+                render_cost += started.elapsed();
+                rendered += 1;
+                followup
+            }
+        };
+        if followup == crate::video::Followup::RaiseWindow {
             let _ = app.run_on_main_thread(crate::video::show_video_window);
         }
         frames += 1;
@@ -345,6 +358,11 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
             let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
             log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
+            if rendered > 0 {
+                log::debug!(target: "video", "render cost {:?}/frame over {rendered} frames", render_cost / rendered);
+            }
+            render_cost = std::time::Duration::ZERO;
+            rendered = 0;
             last_log = std::time::Instant::now();
             frames_at_last_log = frames;
         }

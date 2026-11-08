@@ -223,6 +223,17 @@ impl Renderer {
         }
     }
 
+    /// Handles a frame the window cannot show WITHOUT converting it —
+    /// `Some(followup)` when it was dropped, `None` when it should render.
+    /// Saves the decoder-buffer → I420 conversion for every hidden frame.
+    pub fn drop_if_hidden(&mut self) -> Option<Followup> {
+        let vw = VIDEO_WINDOW.get()?;
+        if WINDOW_VISIBLE.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(self.drop_hidden(vw))
+    }
+
     /// Copies one I420 frame into a pooled NV12 buffer and enqueues it.
     #[allow(clippy::too_many_arguments)]
     pub fn render_i420(&mut self, width: u32, height: u32, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
@@ -496,5 +507,45 @@ fn cf_dict(pairs: &[(*const c_void, *const c_void)]) -> Option<CFRetained<CFDict
             &kCFTypeDictionaryKeyCallBacks,
             &kCFTypeDictionaryValueCallBacks,
         )
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    /// Why the I420 → NV12 copy stays a plain loop: measured 2026-11-09 on
+    /// the M-series dev Mac, 1280×800 — the loop (vectorized by rustc)
+    /// ~18 µs/frame, libyuv's `i420_to_nv12` ~54 µs/frame.
+    /// `cargo test --release --lib video::bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn i420_to_nv12_scalar_vs_libyuv() {
+        let (w, h) = (1280usize, 800usize);
+        let (cw, ch) = (w / 2, h / 2);
+        let (y, u, v) = (vec![16u8; w * h], vec![128u8; cw * ch], vec![130u8; cw * ch]);
+        let (mut dy, mut duv) = (vec![0u8; w * h], vec![0u8; w * h / 2]);
+        let runs = 300;
+        let t = std::time::Instant::now();
+        for _ in 0..runs {
+            for r in 0..h {
+                dy[r * w..r * w + w].copy_from_slice(&y[r * w..r * w + w]);
+            }
+            for r in 0..ch {
+                let dst = &mut duv[r * w..r * w + cw * 2];
+                let (us, vs) = (&u[r * cw..r * cw + cw], &v[r * cw..r * cw + cw]);
+                for (x, pair) in dst.chunks_exact_mut(2).enumerate() {
+                    pair[0] = us[x];
+                    pair[1] = vs[x];
+                }
+            }
+        }
+        let scalar = t.elapsed() / runs;
+        let t = std::time::Instant::now();
+        for _ in 0..runs {
+            livekit::webrtc::native::yuv_helper::i420_to_nv12(
+                &y, w as u32, &u, cw as u32, &v, cw as u32, &mut dy, w as u32, &mut duv, w as u32, w as i32, h as i32,
+            );
+        }
+        let simd = t.elapsed() / runs;
+        println!("1280x800 I420→NV12: scalar {scalar:?}/frame, libyuv {simd:?}/frame");
     }
 }
