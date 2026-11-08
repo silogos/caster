@@ -123,7 +123,17 @@ impl MediaAnswerer {
                         let mut last_log = std::time::Instant::now();
                         let mut last_jpeg = std::time::Instant::now();
                         let mut stream = NativeVideoStream::new(video);
+                        let mut first = true;
                         while let Some(frame) = stream.next().await {
+                            if first {
+                                first = false;
+                                println!(
+                                    "[webrtc] first frame dims: {}x{} buffer_type={:?}",
+                                    frame.buffer.width(),
+                                    frame.buffer.height(),
+                                    frame.buffer.buffer_type()
+                                );
+                            }
                             FRAMES.fetch_add(1, Ordering::Relaxed);
                             BYTES.fetch_add(frame.buffer.width() as u64 * frame.buffer.height() as u64 * 4, Ordering::Relaxed);
                             frame_app
@@ -139,6 +149,7 @@ impl MediaAnswerer {
                             // to the webview until the Metal subview lands.
                             if last_jpeg.elapsed() >= std::time::Duration::from_millis(80) {
                                 last_jpeg = std::time::Instant::now();
+                                println!("[webrtc] JPEG-BRANCH-ENTERED");
                                 let sw = frame.buffer.width();
                                 let sh = frame.buffer.height();
                                 if sw > 0 && sh > 0 {
@@ -154,13 +165,30 @@ impl MediaAnswerer {
                                         dw,
                                         dh,
                                     );
+                                    static GATE: AtomicU64 = AtomicU64::new(0);
+                                    let g = GATE.fetch_add(1, Ordering::Relaxed);
+                                    if g == 0 {
+                                        println!("[webrtc] to_argb done: dw={dw} dh={dh} rgba_len={}", rgba.len());
+                                    }
                                     if let Some(img) = image::RgbaImage::from_raw(dw as u32, dh as u32, rgba) {
                                         let mut jpg = Vec::new();
-                                        if image::DynamicImage::ImageRgba8(img)
-                                            .write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg)
-                                            .is_ok()
+                                        let enc = image::DynamicImage::ImageRgba8(img)
+                                            .write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg);
+                                        if g == 0 {
+                                            match &enc { Ok(_) => println!("[webrtc] jpeg encode OK"), Err(e) => println!("[webrtc] jpeg encode ERR: {e}") };
+                                        }
+                                        if enc.is_ok()
                                         {
                                             use base64::Engine;
+                                            static JPEGS: AtomicU64 = AtomicU64::new(0);
+                                            let jn = JPEGS.fetch_add(1, Ordering::Relaxed);
+                                            if jn == 0 {
+                                                let _ = std::fs::write("/tmp/zf-native-preview.jpg", &jpg);
+                                                println!("[webrtc] first jpeg preview written ({} kB) — emitting to ui", jpg.len() / 1024);
+                                            }
+                                            if jn % 100 == 0 {
+                                                println!("[webrtc] jpeg previews emitted: {}", jn + 1);
+                                            }
                                             let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
                                             frame_app
                                                 .emit("video:jpeg", json!({ "dataUrl": format!("data:image/jpeg;base64,{b64}") }))
