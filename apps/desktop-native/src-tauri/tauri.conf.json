@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zero-Friction Local Cast Native",
+  "version": "0.1.0",
+  "identifier": "app.zerofriction.desktopnative",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Zero-Friction Local Cast",
+        "width": 960,
+        "height": 640,
+        "minWidth": 800,
+        "minHeight": 520
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

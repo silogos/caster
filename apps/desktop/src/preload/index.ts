@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { DesktopApi } from '../shared/ipc'
 import type {
+  AudioEngineState,
   AudioRoutingMode,
   MobileStateEvent,
   PairingSessionView,
@@ -74,7 +75,16 @@ const desktopApi: DesktopApi = {
   },
   onAudioRoutingSet: (listener) => subscribe<AudioRoutingMode>(IPC.audioRouting.set, listener),
   onVirtualAudioState: (listener) => subscribe<VirtualAudioState>(IPC.virtualAudio.state, listener),
-  installVirtualAudio: () => ipcRenderer.invoke(IPC.virtualAudio.install)
+  installVirtualAudio: () => ipcRenderer.invoke(IPC.virtualAudio.install),
+  sendEnginePcm: (data) => {
+    // Plain send (fire-and-forget): ~100 Hz chunks — invoke()'s reply
+    // round-trips would only queue promises (the vc:frame reasoning).
+    ipcRenderer.send(IPC.audioEngine.pcm, data)
+  },
+  onAudioEngineState: (listener) => subscribe<AudioEngineState>(IPC.audioEngine.state, listener),
+  stopEngine: () => {
+    ipcRenderer.send(IPC.audioEngine.stop)
+  }
 }
 
 contextBridge.exposeInMainWorld('desktopApi', desktopApi)

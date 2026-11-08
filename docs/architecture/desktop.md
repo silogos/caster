@@ -1,5 +1,7 @@
 # Desktop Application Architecture (Electron)
 
+> **Obsolete (2026-11-09, product owner):** the Electron receiver receives no further work; the desktop receiver is now `apps/desktop-native` — [desktop-native.md](desktop-native.md), [ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md). This document stays as the record of the Electron design (the protocol and pairing rules it describes still hold).
+
 Status: Phases 2–9 + 13–14 implemented (pairing, signaling, the receiver's `ReceiverSession` + video, the Phase9 audio mixer, the Phase13 pairing-hero screens, and the Phase14 receiver-window hardening — [features/screen-capture.md](../features/screen-capture.md), [features/audio-mixer.md](../features/audio-mixer.md), [features/pairing.md](../features/pairing.md), [features/obs-streaming.md](../features/obs-streaming.md)). The **virtual camera** (ADR-007, 2026-10-30) adds the `vc/` modules and a fourth receiver stage — see §Virtual camera. The **tray lifecycle** (ADR-010, 2026-11-03) makes the tray — not the window — the app's lifetime: closing the receiver hides it, and the saved phone's one-tap Connect always finds the desktop — see §Tray lifecycle.
 
 ## Role

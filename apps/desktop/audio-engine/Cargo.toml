@@ -1,0 +1,10 @@
+[package]
+name = "caster-audio-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cpal = "0.15"
+
+[profile.release]
+opt-level = 3

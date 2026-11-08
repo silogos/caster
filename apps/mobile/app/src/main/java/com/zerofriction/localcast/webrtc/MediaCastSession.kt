@@ -470,7 +470,14 @@ class MediaCastSession(
             gameAudioChannel = null
             gameAacSender?.release()
             gameAacSender = null
-            val negotiator = GameAudioFormatNegotiator(nowMs = System::currentTimeMillis)
+            // Feature 2026-11d: the low-latency toggle forces raw PCM —
+            // selfSupportsAac=false makes the negotiator announce `pcm16` and
+            // never switch (the wire shape is unchanged, the same path an
+            // old desktop already takes).
+            val negotiator = GameAudioFormatNegotiator(
+                nowMs = System::currentTimeMillis,
+                selfSupportsAac = !config.lowLatencyGameAudio,
+            )
             val channel = GameAudioDataChannel(negotiator)
             if (channel.attach(newPc)) {
                 val sender = GameAudioSender(
@@ -481,7 +488,10 @@ class MediaCastSession(
                 )
                 gameAudioChannel = channel
                 gameAacSender = sender
-                sender.start()
+                // Forced PCM never encodes — skipping start() leaves the
+                // encoder unbuilt; onSamples stays null-safe on it and keeps
+                // feeding raw PCM (the toggle is a next-cast setting).
+                if (!config.lowLatencyGameAudio) sender.start()
                 audio?.onEncoderInputSamples = sender::onSamples
             }
         }

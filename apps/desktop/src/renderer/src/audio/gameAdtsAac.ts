@@ -97,6 +97,12 @@ export interface GameChannelCounters {
   framesRendered: number
   /** Decoder construction or decode errors. */
   decodeErrors: number
+  /**
+   * Frames currently queued inside the decoder (the last accepted frame's
+   * `decodeQueueSize`) — the decode-pipeline residence signal; a growing
+   * queue means the renderer is starved. Live per tick via the stats line.
+   */
+  decodeQueueDepth: number
   /** Current wire format. */
   mode: 'pcm' | 'aac'
 }
@@ -178,6 +184,7 @@ export function createGameAacChannel(options: GameAacChannelOptions): GameAacCha
     invalidFrames: 0,
     framesRendered: 0,
     decodeErrors: 0,
+    decodeQueueDepth: 0,
     mode: 'pcm'
   }
 
@@ -264,6 +271,7 @@ export function createGameAacChannel(options: GameAacChannelOptions): GameAacCha
       const timestampUs = Math.round((frameIndex * AAC_SAMPLES_PER_FRAME * 1_000_000) / AAC_SAMPLE_RATE)
       frameIndex++
       counters.framesIn++
+      counters.decodeQueueDepth = decoder.decodeQueueSize
       try {
         decoder.decode(makeChunk({ type: 'key', timestamp: timestampUs, data: frame.payload }))
       } catch (error) {

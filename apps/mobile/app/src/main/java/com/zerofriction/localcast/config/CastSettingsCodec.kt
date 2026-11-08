@@ -15,18 +15,20 @@ import kotlinx.serialization.json.Json
  * still accepted through the migration ladder: v1 → v2 was the Phase11 preset
  * relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added `autoQuality` (Phase12)
  * with the on default, v3 → v4 added the Advanced knobs, v4 → v5 added
- * `micDevice` with the built-in default — every other shape stays fully valid.
+ * `micDevice` with the built-in default, v5 → v6 added `lowLatencyGameAudio`
+ * with the off default — every other shape stays fully valid.
  */
 object CastSettingsCodec {
 
     /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 5
+    const val VERSION = 6
 
     /** The Phase10/11 formats — accepted through [LEGACY_PROFILE_LABELS]/[LEGACY_DEFAULT_AUTO_QUALITY]. */
     const val LEGACY_VERSION = 1
     const val LEGACY_VERSION_2 = 2
     const val LEGACY_VERSION_3 = 3
     const val LEGACY_VERSION_4 = 4
+    const val LEGACY_VERSION_5 = 5
 
     /** Older documents predate the auto-quality switch — the shipped default applies. */
     private const val LEGACY_DEFAULT_AUTO_QUALITY = CastConfig.DEFAULT_AUTO_QUALITY
@@ -67,6 +69,8 @@ object CastSettingsCodec {
         val micDevice: String = MicDeviceSource.BUILTIN.label,
         /** Absent in v1/v2 documents — the default applies (kotlinx fills defaults). */
         val autoQuality: Boolean = LEGACY_DEFAULT_AUTO_QUALITY,
+        /** Absent in pre-v6 documents — the off default applies (AAC stays the default wire). */
+        val lowLatencyGameAudio: Boolean = CastConfig.DEFAULT_LOW_LATENCY_GAME_AUDIO,
         /** Absent in pre-v4 documents — today's-behavior defaults apply (AdvancedCastSettings.kt). */
         val encoderImpl: String = EncoderImplementation.HARDWARE.label,
         val h264HighProfile: Boolean = true,
@@ -89,6 +93,7 @@ object CastSettingsCodec {
             mic = settings.mic,
             micDevice = settings.micDevice.label,
             autoQuality = settings.autoQuality,
+            lowLatencyGameAudio = settings.lowLatencyGameAudio,
             encoderImpl = settings.encoderImpl.label,
             h264HighProfile = settings.h264HighProfile,
             preferredCodec = settings.preferredCodec.label,
@@ -108,7 +113,7 @@ object CastSettingsCodec {
             return null
         }
         if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2 &&
-            stored.v != LEGACY_VERSION_3 && stored.v != LEGACY_VERSION_4
+            stored.v != LEGACY_VERSION_3 && stored.v != LEGACY_VERSION_4 && stored.v != LEGACY_VERSION_5
         ) return null
         // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
         val label = if (stored.v == LEGACY_VERSION) {
@@ -140,6 +145,7 @@ object CastSettingsCodec {
             mic = stored.mic,
             micDevice = micDevice,
             autoQuality = stored.autoQuality,
+            lowLatencyGameAudio = stored.lowLatencyGameAudio,
             encoderImpl = encoderImpl,
             h264HighProfile = stored.h264HighProfile,
             preferredCodec = preferredCodec,

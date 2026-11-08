@@ -1,4 +1,5 @@
 import type {
+  AudioEngineState,
   AudioRoutingMode,
   AudioRoutingReport,
   MobileStateEvent,
@@ -96,6 +97,18 @@ export const IPC = {
     state: 'virtual-audio:state',
     /** Renderer → main: run the one-time elevated install (admin prompt on screen). */
     install: 'virtual-audio:install'
+  },
+  audioEngine: {
+    /**
+     * Renderer → main: one raw PCM16LE chunk for the sidecar (fire-and-forget,
+     * ~100 Hz — invoke()'s reply round-trips would only queue promises; the
+     * same reasoning as vc:frame). Gain is pre-applied by the renderer.
+     */
+    pcm: 'audio-engine:pcm',
+    /** Push: the sidecar's availability/depth state (parsed from its stdout). */
+    state: 'audio-engine:state',
+    /** Renderer → main: stop the sidecar (cast ended / channel detached). */
+    stop: 'audio-engine:stop'
   }
 } as const
 
@@ -154,4 +167,10 @@ export interface DesktopApi {
   setFrameless(enabled: boolean): void
   /** Subscribes to the frameless preference's effective state; returns an unsubscribe function. */
   onFramelessChanged(listener: (enabled: boolean) => void): () => void
+  /** Renderer → main: one raw PCM16LE chunk for the audio engine (gain pre-applied). */
+  sendEnginePcm(data: ArrayBuffer): void
+  /** Subscribes to the audio engine's availability/depth state; returns an unsubscribe function. */
+  onAudioEngineState(listener: (state: AudioEngineState) => void): () => void
+  /** Renderer → main: stop the audio engine (cast ended / channel detached). */
+  stopEngine(): void
 }

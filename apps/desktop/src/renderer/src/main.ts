@@ -1,5 +1,5 @@
 import type { CastSessionInfo, MobileStateEvent, PairingSessionView } from '../../shared/types'
-import { AudioMixer, type MixerChannel, type MixerLevel } from './audio/mixer'
+import { AudioMixer, type AudioWorkletNodeLike, type MixerChannel, type MixerLevel } from './audio/mixer'
 import { createGameAacChannel, type GameAacChannel } from './audio/gameAdtsAac'
 import { wireRoutingPanel } from './audio/routingPanel'
 import { heroView } from './pairingHero'
@@ -7,6 +7,7 @@ import { noInputView } from './noInputView'
 import { sessionInfoLine } from './sessionInfoLine'
 import { ReceiverSession, type PeerConnectionLike } from './webrtc/receiverSession'
 import { createGameChannelSampler } from './webrtc/dataChannelStats'
+import { scalePcm16 } from './audio/scalePcm16'
 import { collectPresentationStamps, summarizeStamps, type RenderProbeSummary, type VideoWithFrameCallback } from './webrtc/renderProbe'
 import { FramePump, type PumpFrame, type PumpFrameSource } from './vc/framePump'
 import { createBgrCanvas } from './vc/webglBgrCanvas'
@@ -86,7 +87,7 @@ const mixer = new AudioMixer({
       ? new AudioContext({ sinkId: options.sinkId } as AudioContextOptions)
       : new AudioContext(),
   createWorkletNode: (context, name, nodeOptions) =>
-    new AudioWorkletNode(context as AudioContext, name, nodeOptions as AudioWorkletNodeOptions),
+    new AudioWorkletNode(context as AudioContext, name, nodeOptions as AudioWorkletNodeOptions) as unknown as AudioWorkletNodeLike,
   storage: window.localStorage,
   log
 })
@@ -107,6 +108,7 @@ const ZERO_GAME_CHANNEL_COUNTERS = {
   invalidFrames: 0,
   framesRendered: 0,
   decodeErrors: 0,
+  decodeQueueDepth: 0,
   mode: 'pcm' as const
 }
 const gameChannelSampler = createGameChannelSampler(() => gameChannelAac?.counters ?? ZERO_GAME_CHANNEL_COUNTERS)
@@ -114,7 +116,25 @@ const gameChannelSampler = createGameChannelSampler(() => gameChannelAac?.counte
 function detachGameAacChannel(): void {
   gameChannelAac?.detach()
   gameChannelAac = null
+  window.desktopApi.stopEngine()
 }
+
+// Feature 2026-11e (ADR-014 Fase A): the audio-engine sidecar. While it runs
+// and the channel is in pcm16 mode, raw PCM chunks bypass the worklet graph
+// entirely (the engine's CPAL output skips Chromium's audio chain). The
+// bounded playout target only applies on the worklet fallback — the engine
+// carries its own 40 ms keep (tuned from the first live cast: 20 ms crackled
+// on Wi-Fi chunk bursts).
+const EAR_PLAYOUT_TARGET_MS = 40
+let engineRunning = false
+let engineDepthMs: number | null = null
+let engineUnderruns: number | null = null
+let appliedPlayoutTargetMs: number | null = null
+window.desktopApi.onAudioEngineState((state) => {
+  engineRunning = state.available && state.running
+  engineDepthMs = state.depthMs
+  engineUnderruns = state.underruns
+})
 
 // The ReceiverSession and its <video> sink (the VideoView — desktop.md).
 const receiver = new ReceiverSession({
@@ -194,7 +214,19 @@ const receiver = new ReceiverSession({
       return
     }
     const aac = createGameAacChannel({
-      pushPcm: (chunk) => feed.push(chunk),
+      pushPcm: (chunk) => {
+        if (engineRunning) {
+          // The engine path: raw chunks out of Chromium, the mixer's game
+          // level pre-applied (the one truth for volume/mute), and a
+          // liveness stamp so the 3 s quiet fallback never fires mid-engine.
+          const level = mixer.getLevels().game
+          const gain = level.muted ? 0 : level.volume
+          window.desktopApi.sendEnginePcm(scalePcm16(chunk, gain))
+          feed.keepAlive()
+          return
+        }
+        feed.push(chunk)
+      },
       pushFrames: (left, right) => feed.pushFrames(left, right),
       log
     })
@@ -222,8 +254,33 @@ const receiver = new ReceiverSession({
       if (data instanceof ArrayBuffer) aac.onBinary(data)
     }
   },
-  // ADR-013's stats visibility: the SCTP channel's own counters per tick.
-  onGameChannelSample: (intervalMs) => gameChannelSampler.sample(intervalMs),
+  // ADR-013's stats visibility: the SCTP channel's own counters per tick,
+  // plus the worklet ring's depth — the playout-tuning telemetry (the
+  // sampler doesn't know the mixer, so the wiring joins them here).
+  // Feature 2026-11d adds the context's output latencies: the receiver's
+  // audio-output term, measurable at last. Feature 2026-11e adds the engine's
+  // own ring depth + underruns while the sidecar owns the ear output, and
+  // applies the bounded playout target: pcm16 without the engine = 20 ms
+  // (the competitive contract); pcm16 with the engine or aac = 0.
+  onGameChannelSample: (intervalMs) => {
+    const sample = gameChannelSampler.sample(intervalMs)
+    if (sample === null) return null
+    const output = mixer.audioOutputLatencyMs()
+    const engineActive = engineRunning && sample.mode === 'pcm'
+    const target = sample.mode === 'pcm' && !engineRunning ? EAR_PLAYOUT_TARGET_MS : 0
+    if (target !== appliedPlayoutTargetMs) {
+      appliedPlayoutTargetMs = target
+      mixer.setGamePcmTargetMs(target)
+    }
+    return {
+      ...sample,
+      ringDepthMs: mixer.gameRingDepthMs(),
+      ctxBaseLatencyMs: output.baseMs,
+      ctxOutputLatencyMs: output.outputMs,
+      engineDepthMs: engineActive ? engineDepthMs : null,
+      engineUnderruns: engineActive ? engineUnderruns : null
+    }
+  },
   log
 })
 

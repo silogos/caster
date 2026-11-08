@@ -65,7 +65,11 @@ export interface MediaStreamAudioDestinationNodeLike {
 }
 
 export interface AudioWorkletNodeLike {
-  port: { postMessage(message: unknown): void }
+  port: {
+    postMessage(message: unknown): void
+    /** The worklet→main direction: the game ring's depth telemetry. */
+    onmessage: ((event: { data: unknown }) => void) | null
+  }
   connect(node: unknown): unknown
   disconnect(): void
   /** Chromium exposes it; undefined on fakes — the probe logs what it has. */
@@ -79,6 +83,13 @@ export interface AudioWorkletLike {
 export interface AudioContextLike {
   readonly destination: object
   readonly state: string
+  /**
+   * The context's own latency figures, in seconds (present on Chromium's
+   * AudioContext; absent on fakes) — the receiver's audio-output latency
+   * telemetry, read via [AudioMixer.audioOutputLatencyMs].
+   */
+  readonly baseLatency?: number
+  readonly outputLatency?: number
   createGain(): GainNodeLike
   createMediaStreamSource(stream: unknown): MediaStreamAudioSourceNodeLike
   createMediaStreamDestination(): MediaStreamAudioDestinationNodeLike
@@ -193,6 +204,10 @@ export class AudioMixer {
   private gamePcmLastAt = 0
   private gamePcmFallbackTimer: ReturnType<typeof setInterval> | null = null
   private gamePcmTrackStash: MediaStreamAudioSourceNodeLike | null = null
+  /** Last ring-depth report from the worklet (ADR-013 telemetry); null until one arrives. */
+  private gamePcmDepthMs: number | null = null
+  /** Feature 2026-11e: the ear ring's bounded playout target (ms; 0 = play on arrival). */
+  private gamePcmTargetMs = 0
 
   constructor(options: AudioMixerOptions) {
     this.options = options
@@ -323,6 +338,8 @@ export class AudioMixer {
   async attachGamePcmSource(): Promise<{
     push(chunk: ArrayBuffer): void
     pushFrames(left: Float32Array, right: Float32Array): void
+    /** Feature 2026-11e: liveness without samples (the engine path stamps this). */
+    keepAlive(): void
     detach(): void
   } | null> {
     const worklet = await this.ensureGamePcmWorklet()
@@ -338,6 +355,14 @@ export class AudioMixer {
     return {
       push: (chunk) => this.pushGamePcm(chunk),
       pushFrames: (left, right) => this.pushGameFrames(left, right),
+      /**
+       * Feature 2026-11e: liveness without samples — the audio-engine path
+       * forwards chunks past this mixer, and without a stamp the 3 s quiet
+       * fallback would hand the path back to the dual-mono track mid-engine.
+       */
+      keepAlive: () => {
+        this.gamePcmLastAt = Date.now()
+      },
       detach: () => this.detachGamePcmSource()
     }
   }
@@ -365,6 +390,17 @@ export class AudioMixer {
         numberOfOutputs: 1,
         outputChannelCount: [2]
       })
+      node.port.onmessage = (event) => {
+        const depth = (event.data as { depthMs?: unknown } | null)?.depthMs
+        if (typeof depth === 'number') this.gamePcmDepthMs = depth
+      }
+      // Re-apply the bounded playout target — a freshly built worklet starts
+      // at target 0, whatever the wiring decided earlier. (Only a non-zero
+      // target posts: 0 is the constructor default, and a silent port keeps
+      // the plain ADR-012 feed byte-for-byte observable.)
+      if (this.gamePcmTargetMs > 0) {
+        node.port.postMessage({ targetMs: this.gamePcmTargetMs })
+      }
       const gain = this.ensureGain('game', context)
       gain.gain.value = effectiveGain(this.levels.game)
       node.connect(gain)
@@ -449,6 +485,41 @@ export class AudioMixer {
     const gain = this.wiring.game.gain
     if (gain !== null) this.gamePcm?.disconnect()
     this.gamePcmActive = false
+    this.gamePcmDepthMs = null
+  }
+
+  /**
+   * The game ring's depth in ms — the ADR-013 playout-tuning telemetry. The
+   * worklet reports ~1 Hz; null until the first report (or after detach).
+   */
+  gameRingDepthMs(): number | null {
+    return this.gamePcmDepthMs
+  }
+
+  /**
+   * Feature 2026-11e: the ear ring's bounded playout target (the TikTok
+   * `setAudioMaxDelayByMs` analog) — 0 = play on arrival (ADR-012), > 0 =
+   * prime-drain-reprime (the competitive contract). Applied to the live
+   * worklet and remembered for every future rebuild.
+   */
+  setGamePcmTargetMs(targetMs: number): void {
+    if (!Number.isFinite(targetMs) || targetMs < 0) return
+    this.gamePcmTargetMs = targetMs
+    this.gamePcm?.port.postMessage({ targetMs })
+  }
+
+  /**
+   * The main context's output-latency figures in ms (Feature 2026-11d) —
+   * the receiver-side term the ear-path budget could only estimate until
+   * now. Null while no context exists or the context is a fake without the
+   * members (fakes stay optional, like `setSinkId`).
+   */
+  audioOutputLatencyMs(): { baseMs: number | null; outputMs: number | null } {
+    const context = this.context
+    return {
+      baseMs: typeof context?.baseLatency === 'number' ? Math.round(context.baseLatency * 1000) : null,
+      outputMs: typeof context?.outputLatency === 'number' ? Math.round(context.outputLatency * 1000) : null
+    }
   }
 
   /**

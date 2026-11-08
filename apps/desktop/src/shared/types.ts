@@ -130,6 +130,18 @@ export interface AudioRoutingReport {
 }
 
 /**
+ * The audio engine sidecar's state (Feature 2026-11e): whether the binary is
+ * present and running, plus its own playout telemetry parsed from stdout.
+ * `depthMs`/`underruns` are null until the engine reports (or after it dies).
+ */
+export interface AudioEngineState {
+  available: boolean
+  running: boolean
+  depthMs: number | null
+  underruns: number | null
+}
+
+/**
  * The desktop's virtual audio capability (ADR-008): whether this machine can
  * install the Zero-Friction loopback devices — macOS with the bundled driver
  * present. Pushed to the renderer for the settings modal's Install row. The

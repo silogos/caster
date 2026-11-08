@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { CastSessionInfo, MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
+import type { CastSessionInfo, MobileStateEvent, PairingSessionView, TrustedDeviceView, VcDesktopState, VcPumpCommand, AudioRoutingReport, AudioRoutingMode, AudioEngineState, VirtualAudioInstallResult, VirtualAudioState } from '../shared/types'
 import type { PcId } from '../shared/types'
 import { asIceMessage, asSdpMessage, asStreamSize, asVcFrame } from './messages'
 import {
@@ -20,6 +20,7 @@ import { getLanIpv4Hosts } from './pairing/networkInfo'
 import { BYE_FORGET, SIGNALING_PORT_DEFAULT, SignalingServer } from './signaling/signalingServer'
 import { VirtualCameraController } from './vc/virtualCamera'
 import { loadDesktopEnvironment, type DesktopEnvironment } from './environment'
+import { AudioEngine } from './audioEngine'
 import {
   CastTray,
   loginItemSupported,
@@ -121,6 +122,7 @@ function pushToRenderer(
     | VcDesktopState
     | AudioRoutingMode
     | VirtualAudioState
+    | AudioEngineState
     | boolean
   ): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
@@ -459,6 +461,25 @@ app.whenReady().then(async () => {
     if (install === null) return 'unsupported'
     return install.install()
   })
+
+  // The audio engine sidecar (Feature 2026-11e, ADR-014 Fase A): the renderer
+  // forwards raw PCM16LE chunks while the game channel runs in pcm16 mode;
+  // the engine plays them straight to the default output, bypassing
+  // Chromium's audio graph. A missing binary is a logged no-op — the
+  // worklet path stands (the renderer learns availability via the state push).
+  const audioEngine = new AudioEngine({
+    binaryPath: join(app.getAppPath(), 'audio-engine', 'target', 'release', 'caster-audio-engine'),
+    log: (level, message, details) => logger[level](LOG_SCOPE, message, details),
+    onState: (state) => pushToRenderer(IPC.audioEngine.state, state)
+  })
+  ipcMain.on(IPC.audioEngine.pcm, (_event, raw) => {
+    if (!(raw instanceof ArrayBuffer)) {
+      logger.warn(LOG_SCOPE, 'renderer sent a malformed audio-engine pcm chunk — dropping')
+      return
+    }
+    audioEngine.writePcm(raw)
+  })
+  ipcMain.on(IPC.audioEngine.stop, () => audioEngine.stop())
 
   // Overlay lifecycle (Phase14): the window exists exactly while a cast is
   // live AND the user wants it. The receiver's × and the Settings checkbox

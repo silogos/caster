@@ -67,8 +67,9 @@ class PlaybackCaptureAudioSource(
 
     /**
      * The channel-mask flavor the main record builds with. The sweep adopts
-     * a healthier flavor when it finds one (found live: the test ROM's tap
-     * delivers one channel for [MaskKind.IN] records — see [sweepCaptureFlavors]).
+     * a healthier flavor when it finds one (found live: the tap delivers one
+     * channel on the [MaskKind.IN] flavor — audio.md §capture-session ordering;
+     * see [sweepCaptureFlavors]).
      */
     @Volatile
     private var preferredMask: MaskKind = MaskKind.IN
@@ -193,7 +194,7 @@ class PlaybackCaptureAudioSource(
      * WebRTC ever creates its microphone record — the session-ordering fix
      * for the one-channel fold (issue #101, live evidence 2026-11-04).
      *
-     * The mechanism: this ROM's vendor input stack allocates a voice-shaped
+     * The mechanism: the input stack allocates a voice-shaped
      * DSP session (16 kHz, mono, channel mask 0x10 — the exact signature of a
      * leaked VOICE_COMMUNICATION input found idling in audioserver) for the
      * ADM's microphone record, and a playback-capture request arriving while
@@ -308,8 +309,8 @@ class PlaybackCaptureAudioSource(
                 return
             }
             // The pre-opened record first (session-ordering fix, issue #101):
-            // it was opened before this mic record existed, so the vendor
-            // input stack could not remap it onto the mic's voice session.
+            // it was opened before this mic record existed, so the input
+            // stack could not remap it onto the mic's voice session.
             // A format mismatch means the ADM negotiated differently than the
             // pinned 48 kHz stereo — discard the pre-open and fall back.
             val capture = consumePreOpenedIfCompatible(micRecord) ?: try {
@@ -384,7 +385,7 @@ class PlaybackCaptureAudioSource(
     /**
      * TikTok's adapter pattern (decoded from its cast APK, dumpsys-confirmed
      * on this ROM): try `AUDIO_SOURCE_REMOTE_SUBMIX` FIRST — the routed
-     * loopback that stays true stereo on the Lenovo ROM whose playback-capture
+     * loopback that stays true stereo on this device whose playback-capture
      * remix folds to one channel. It must be attempted before any
      * playback-capture record exists (the submix input is single-client on
      * this ROM — "Cannot create AudioRecord" while our capture holds it), and

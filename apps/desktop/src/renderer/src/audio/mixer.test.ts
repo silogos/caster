@@ -68,6 +68,9 @@ class FakeContext implements AudioContextLike {
   state = 'running'
   sinkId: string | null = null
   closed = false
+  /** Set per test — the output-latency telemetry members (optional per the interface). */
+  baseLatency: number | undefined = undefined
+  outputLatency: number | undefined = undefined
   setSinkId = vi.fn((deviceId: string): Promise<void> => {
     this.sinkId = deviceId
     return Promise.resolve()
@@ -106,7 +109,7 @@ class FakeContext implements AudioContextLike {
 }
 
 class FakeWorkletNode implements AudioWorkletNodeLike {
-  port = { postMessage: vi.fn() }
+  port = { postMessage: vi.fn(), onmessage: null as ((event: { data: unknown }) => void) | null }
   connectedTo: unknown[] = []
   disconnectCount = 0
   channelCount = 2
@@ -734,6 +737,46 @@ describe('game audio PCM path (ADR-012)', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keepAlive stamps liveness without samples — the engine path survives the 3 s window', async () => {
+    vi.useFakeTimers()
+    try {
+      const context = new FakeContext()
+      const host = context.enableWorkletHost()
+      const { mixer } = makeMixer({ createAudioContext: () => context })
+      const feed = (await mixer.attachGamePcmSource())!
+
+      // The engine path forwards chunks past this mixer and only stamps
+      // liveness — the worklet ring stays empty, the track stays stashed.
+      for (let i = 0; i < 4; i++) {
+        feed.keepAlive()
+        vi.advanceTimersByTime(1_000)
+      }
+      expect(host.node.disconnectCount).toBe(0) // never fell back to the track
+
+      // For contrast: stop stamping and the quiet fallback does fire.
+      vi.advanceTimersByTime(4_000)
+      expect(host.node.disconnectCount).toBeGreaterThanOrEqual(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('setGamePcmTargetMs posts the target and applies it to a later-built worklet', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    mixer.setGamePcmTargetMs(20) // remembered before any worklet exists
+
+    const feed = (await mixer.attachGamePcmSource())!
+    expect(host.node.port.postMessage).toHaveBeenCalledWith({ targetMs: 20 }) // applied at build
+
+    feed.push(chunk) // a plain feed must still reach the worklet
+    expect(host.node.port.postMessage).toHaveBeenCalledWith({ left: expect.any(Float32Array), right: expect.any(Float32Array) })
+
+    mixer.setGamePcmTargetMs(0)
+    expect(host.node.port.postMessage).toHaveBeenLastCalledWith({ targetMs: 0 })
+  })
 })
 
 /**
@@ -777,5 +820,65 @@ describe('game audio decoded frames (ADR-013 pushFrames)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/**
+ * ADR-013 follow-up: the worklet's ring-depth telemetry (~1 Hz) lands on the
+ * mixer — the playout-tuning input. Depth is null until the first report and
+ * resets on detach, so a dead path never reports a stale value.
+ */
+describe('game ring depth telemetry', () => {
+  it('is null before the first worklet report', async () => {
+    const context = new FakeContext()
+    context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    await mixer.attachGamePcmSource()
+    expect(mixer.gameRingDepthMs()).toBeNull()
+  })
+
+  it('follows the worklet report and resets on detach', async () => {
+    const context = new FakeContext()
+    const host = context.enableWorkletHost()
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+    const feed = (await mixer.attachGamePcmSource())!
+
+    host.node.port.onmessage?.({ data: { depthMs: 42 } })
+    expect(mixer.gameRingDepthMs()).toBe(42)
+
+    host.node.port.onmessage?.({ data: { depthMs: 7 } })
+    expect(mixer.gameRingDepthMs()).toBe(7)
+
+    host.node.port.onmessage?.({ data: { notDepth: true } }) // malformed — ignored
+    expect(mixer.gameRingDepthMs()).toBe(7)
+
+    feed.detach()
+    expect(mixer.gameRingDepthMs()).toBeNull()
+  })
+})
+
+/**
+ * Feature 2026-11d: the context's output-latency telemetry — the
+ * receiver-side ear-path term, measurable at last. Nulls while no context
+ * exists or the context lacks the members (fakes stay optional, like
+ * `setSinkId`), converted seconds → rounded ms otherwise.
+ */
+describe('audio output latency telemetry', () => {
+  it('is null before the context exists and reads the live context after', () => {
+    const context = new FakeContext()
+    context.baseLatency = 0.0026666
+    context.outputLatency = 0.0152
+    const { mixer } = makeMixer({ createAudioContext: () => context })
+
+    expect(mixer.audioOutputLatencyMs()).toEqual({ baseMs: null, outputMs: null })
+
+    mixer.attachStream('game', {})
+    expect(mixer.audioOutputLatencyMs()).toEqual({ baseMs: 3, outputMs: 15 })
+  })
+
+  it('a context without the members reads as nulls', () => {
+    const { mixer } = makeMixer()
+    mixer.attachStream('game', {})
+    expect(mixer.audioOutputLatencyMs()).toEqual({ baseMs: null, outputMs: null })
   })
 })
