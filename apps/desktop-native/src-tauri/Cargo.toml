@@ -21,12 +21,13 @@ rand = "0.8"
 qrcode = { version = "0.14", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 if-addrs = "0.13"
-objc2 = "0.6"
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", features = ["AVSampleBufferDisplayLayer"] }
-objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription"] }
-objc2-core-video = { version = "0.3", features = ["CVPixelBuffer"] }
+objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription", "CMSync"] }
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVPixelBufferPool", "CVBuffer", "CVReturn"] }
 cpal = "0.15"
 anyhow = "1"
 livekit = "0.10"

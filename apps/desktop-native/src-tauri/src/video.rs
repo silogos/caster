@@ -17,7 +17,7 @@ use objc2_core_media::{
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 
 type Id = *mut AnyObject;
@@ -34,7 +34,6 @@ unsafe impl Send for VideoWindow {}
 unsafe impl Sync for VideoWindow {}
 
 static VIDEO_WINDOW: OnceLock<VideoWindow> = OnceLock::new();
-static PTS: AtomicI64 = AtomicI64::new(0);
 
 unsafe fn retain(obj: Id) -> Id {
     let _: () = msg_send![obj, retain];
@@ -139,22 +138,240 @@ fn cached_format_description(cv_pixel_buffer: *mut c_void) -> *const objc2_core_
     }
 }
 
-/// Enqueues one decoded frame's CVPixelBuffer. Callable from any thread
-/// (enqueue is designed for off-main); `cv_pixel_buffer` must stay valid
-/// for the duration of this call (the sample buffer retains it).
+/// The decoder's zero-copy hand-off (webrtc-sys `get_cv_pixel_buffer`)
+/// cannot be used: its bridge (objc_video_frame_buffer.mm) wraps the
+/// native buffer in an ObjC `RTCNativeVideoFrameBuffer` and never releases
+/// the wrapper — one leaked object + one pinned native ref per call, so
+/// every decoded IOSurface stayed alive in VTDecoder's pool (measured
+/// 1.46 MB/frame = exactly one 1280×800 NV12 surface; 9 GB in 2 min).
+/// Instead we copy through CPU I420 into OUR pooled CVPixelBuffers:
+/// bounded kernel memory, the same native display layer, ~0.3 ms/frame.
+pub fn enqueue_i420(
+    width: u32,
+    height: u32,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    stride_y: u32,
+    stride_u: u32,
+    stride_v: u32,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    unsafe {
+        let pb = pooled_nv12_pixel_buffer(width as u64, height as u64);
+        if pb.is_null() {
+            return;
+        }
+        // Copy I420 (3 planes) → NV12 '420f' (Y + interleaved UV).
+        let buf = &*(pb as *const objc2_core_video::CVPixelBuffer);
+        let flags = objc2_core_video::CVPixelBufferLockFlags::empty();
+        if objc2_core_video::CVPixelBufferLockBaseAddress(buf, flags) == 0 {
+            let cvbuf = &*(pb as *const objc2_core_video::CVBuffer);
+            let cw = (width as usize + 1) / 2;
+            let ch = (height as usize + 1) / 2;
+            let base0 = objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(cvbuf, 0)
+                as *mut u8;
+            let row0 = objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 0);
+            if !base0.is_null() && row0 >= width as usize {
+                for r in 0..height as usize {
+                    std::ptr::copy_nonoverlapping(
+                        y.as_ptr().add(r * stride_y as usize),
+                        base0.add(r * row0),
+                        width as usize,
+                    );
+                }
+            }
+            let base1 = objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(cvbuf, 1)
+                as *mut u8;
+            let row1 = objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(cvbuf, 1);
+            if !base1.is_null() && row1 >= cw * 2 {
+                for r in 0..ch {
+                    let dst = base1.add(r * row1);
+                    let us = u.as_ptr().add(r * stride_u as usize);
+                    let vs = v.as_ptr().add(r * stride_v as usize);
+                    for x in 0..cw {
+                        *dst.add(2 * x) = *us.add(x);
+                        *dst.add(2 * x + 1) = *vs.add(x);
+                    }
+                }
+            }
+            objc2_core_video::CVPixelBufferUnlockBaseAddress(buf, flags);
+        }
+        enqueue_cv_pixel_buffer(pb); // hands our +1 to the enqueue path
+    }
+}
+
+/// One pool per (w, h) — rotation changes dims mid-cast and a pool's
+/// buffers are fixed-size. Capped at 4 buffers: freed buffers beyond the
+/// cap are destroyed, never retained — the bound the leaky path lacked.
+unsafe fn pooled_nv12_pixel_buffer(w: u64, h: u64) -> *mut c_void {
+    use objc2_core_foundation::{
+        CFDictionary, CFNumber, CFNumberType, CFRetained, CFString,
+        kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks,
+    };
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    unsafe fn cf_str(s: &str) -> CFRetained<CFString> {
+        let c = std::ffi::CString::new(s).expect("cf key");
+        CFString::with_c_string(
+            None,
+            c.as_ptr(),
+            objc2_core_foundation::CFStringBuiltInEncodings::EncodingUTF8.0,
+        )
+        .expect("CFString")
+    }
+    unsafe fn cf_num(v: i64) -> CFRetained<CFNumber> {
+        CFNumber::new(None, CFNumberType::SInt64Type, &v as *const _ as *const _)
+            .expect("CFNumber")
+    }
+    #[allow(deprecated)]
+    unsafe fn cf_dict(pairs: &[(*const c_void, *const c_void)]) -> CFRetained<CFDictionary> {
+        let mut keys: Vec<*const c_void> = pairs.iter().map(|p| p.0).collect();
+        let mut vals: Vec<*const c_void> = pairs.iter().map(|p| p.1).collect();
+        objc2_core_foundation::CFDictionaryCreate(
+            None,
+            keys.as_mut_ptr(),
+            vals.as_mut_ptr(),
+            pairs.len() as _,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        )
+        .expect("CFDictionary")
+    }
+
+    struct Pool(*mut objc2_core_video::CVPixelBufferPool);
+    unsafe impl Send for Pool {}
+    static POOLS: Mutex<Option<HashMap<(u64, u64), Pool>>> = Mutex::new(None);
+
+    let pool = {
+        let mut pools = POOLS.lock().expect("pool cache");
+        match pools.as_ref().and_then(|m| m.get(&(w, h))) {
+            Some(p) => p.0,
+            None => {
+                // '420f' (875_704_422) — the same biplanar NV12 full-range
+                // format the hardware decoder delivered; the display-layer
+                // path is unchanged.
+                let (k_pf, k_w, k_h, k_io, k_cap) = (
+                    cf_str("PixelFormatType"),
+                    cf_str("Width"),
+                    cf_str("Height"),
+                    cf_str("IOSurfaceProperties"),
+                    cf_str("MaximumBufferCount"),
+                );
+                let empty = cf_dict(&[]);
+                let (v_pf, v_w, v_h, v_cap) = (
+                    cf_num(875_704_422),
+                    cf_num(w as i64),
+                    cf_num(h as i64),
+                    cf_num(4),
+                );
+                let as_cf = |r: &CFRetained<CFString>| {
+                    CFRetained::as_ptr(r).as_ptr() as *const c_void
+                };
+                let pb_attrs = cf_dict(&[
+                    (as_cf(&k_pf), CFRetained::as_ptr(&v_pf).as_ptr() as *const c_void),
+                    (as_cf(&k_w), CFRetained::as_ptr(&v_w).as_ptr() as *const c_void),
+                    (as_cf(&k_h), CFRetained::as_ptr(&v_h).as_ptr() as *const c_void),
+                    (
+                        as_cf(&k_io),
+                        CFRetained::as_ptr(&empty).as_ptr() as *const c_void,
+                    ),
+                ]);
+                let pool_attrs = cf_dict(&[(
+                    as_cf(&k_cap),
+                    CFRetained::as_ptr(&v_cap).as_ptr() as *const c_void,
+                )]);
+
+                let mut pool: *mut objc2_core_video::CVPixelBufferPool =
+                    std::ptr::null_mut();
+                let status = objc2_core_video::CVPixelBufferPoolCreate(
+                    None,
+                    Some(&*pool_attrs),
+                    Some(&*pb_attrs),
+                    std::ptr::NonNull::new_unchecked(&mut pool as *mut _),
+                );
+                if status != 0 || pool.is_null() {
+                    use std::sync::atomic::AtomicU64;
+                    static FAILS: AtomicU64 = AtomicU64::new(0);
+                    let fails = FAILS.fetch_add(1, Ordering::Relaxed);
+                    if fails < 3 {
+                        println!(
+                            "[video] CVPixelBufferPoolCreate failed status={status} for {w}x{h}"
+                        );
+                    }
+                    // un-pooled fallback — still bounded by our release discipline
+                    let mut pb: *mut objc2_core_video::CVPixelBuffer =
+                        std::ptr::null_mut();
+                    let status = objc2_core_video::CVPixelBufferCreate(
+                        None,
+                        w as usize,
+                        h as usize,
+                        875_704_422,
+                        Some(&*pb_attrs),
+                        std::ptr::NonNull::new_unchecked(&mut pb as *mut _),
+                    );
+                    if status == 0 && !pb.is_null() {
+                        return pb as *mut c_void;
+                    }
+                    return std::ptr::null_mut();
+                }
+                println!("[video] pixel buffer pool created for {w}x{h} (cap 4, '420f')");
+                pools.get_or_insert_with(HashMap::new).insert((w, h), Pool(pool));
+                pool
+            }
+        }
+    };
+    let mut pb: *mut objc2_core_video::CVPixelBuffer = std::ptr::null_mut();
+    let status = objc2_core_video::CVPixelBufferPoolCreatePixelBuffer(
+        None,
+        &*pool,
+        std::ptr::NonNull::new_unchecked(&mut pb as *mut _),
+    );
+    if status != 0 || pb.is_null() {
+        return std::ptr::null_mut();
+    }
+    pb as *mut c_void
+}
+
+/// Enqueues one frame's CVPixelBuffer. Takes an OWNED (+1) reference and
+/// releases it exactly once on every path — the sample buffer's own
+/// retain is what keeps the buffer alive inside the layer.
 pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
+    unsafe fn release_pb(pb: *mut c_void) {
+        if !pb.is_null() {
+            // CVPixelBuffer is a CF object — release by taking the +1 into
+            // a Retained and dropping it.
+            if let Some(r) = objc2::rc::Retained::from_raw(
+                pb as *mut objc2_core_video::CVBuffer,
+            ) {
+                drop(r);
+            }
+        }
+    }
     let Some(vw) = VIDEO_WINDOW.get() else {
+        unsafe { release_pb(cv_pixel_buffer) };
         return;
     };
     if cv_pixel_buffer.is_null() {
         return;
     }
     unsafe {
-        let pts = PTS.fetch_add(1, Ordering::Relaxed);
+        // Host-clock pts via CoreMedia's own clock — the layer's timeline.
+        // (An epoch-based value overflows CMTime's i32 and enqueueSampleBuffer
+        // raised NSException → abort; a counter-from-zero rendered but the
+        // VTDecoder surface pool grew unboundedly. CMClockGetTime is the
+        // correct, int32-safe host time.)
+        let pts = {
+            let clock = objc2_core_media::CMClockGetHostTimeClock();
+            objc2_core_media::CMClockGetTime(&clock)
+        };
         let invalid = kCMTimeInvalid;
         let timing = CMSampleTimingInfo {
             duration: invalid,
-            presentationTimeStamp: CMTimeMake(pts, 600),
+            presentationTimeStamp: pts,
             decodeTimeStamp: invalid,
         };
         // The pixel buffer carries no format description — creating the
@@ -162,7 +379,8 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
         // (found live in M3). Derive one from the buffer, cached per dims.
         let format_desc = cached_format_description(cv_pixel_buffer);
         if format_desc.is_null() {
-            return; // the failure log inside cached_format_description says why
+            release_pb(cv_pixel_buffer); // the failure log says why
+            return;
         }
         let mut sample: Id = std::ptr::null_mut();
         let status = CMSampleBufferCreateForImageBuffer(
@@ -184,7 +402,82 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
             if fails < 3 || fails % 100 == 0 {
                 println!("[video] sample create FAILED status={status} (fail #{})", fails + 1);
             }
+            release_pb(cv_pixel_buffer);
             return;
+        }
+        // The sample retains the pixel buffer — our +1 ends here; every
+        // path below only manages the sample.
+        release_pb(cv_pixel_buffer);
+        // Failed-layer guard — checked EVERY frame, BEFORE enqueue. When
+        // video decoder resources are reclaimed or a decode error occurs,
+        // the layer's status flips to Failed and the NEXT enqueue raises
+        // an NSException, aborting the whole app ("Rust cannot catch
+        // foreign exceptions" — found live ~3600 frames in, 02:04 crash;
+        // the old n%600 check was structurally too late). The header's
+        // documented recovery: -flush resets Failed → Unknown.
+        {
+            use std::sync::atomic::AtomicBool;
+            static FAILED_EPISODE: AtomicBool = AtomicBool::new(false);
+            // AVQueuedSampleBufferRenderingStatus: 0=Unknown 1=Rendering
+            // 2=Failed
+            let layer_status: isize = msg_send![vw.layer, status];
+            if layer_status == 2 {
+                if !FAILED_EPISODE.swap(true, Ordering::Relaxed) {
+                    println!(
+                        "[video] layer FAILED ({}) — flushing to reset",
+                        layer_error_description(vw.layer)
+                    );
+                }
+                let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                    let _: () = msg_send![vw.layer, flush];
+                    let _: () = msg_send![vw.layer, setNeedsDisplay: true];
+                }));
+                let _: () = msg_send![sample, release]; // this frame is dropped
+                return;
+            }
+            if FAILED_EPISODE.swap(false, Ordering::Relaxed) {
+                println!("[video] layer recovered — resuming enqueue");
+            }
+        }
+        // Occlusion gate: a fully-occluded (or minimized) window is not
+        // composited by WindowServer, so the layer never "displays" its
+        // enqueued samples — each one keeps its decoded IOSurface alive
+        // forever, attributed to the VTDecoder XPC service. Live evidence:
+        // 8.8 GB retained in ~7 min with the window hidden behind Activity
+        // Monitor (isReady stayed YES the whole time — 0 drops), draining
+        // to 13 MB the instant the window came front. While occluded:
+        // flush (rate-limited) frees whatever is queued; the frame drops
+        // at the live edge, same doctrine as the ready-gate below.
+        {
+            let occlusion: u64 = msg_send![vw.window, occlusionState];
+            if occlusion & 1 == 0 {
+                // NSWindowOcclusionStateVisible
+                use std::sync::Mutex;
+                static LAST_OCCLUDED_FLUSH: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+                {
+                    let mut clock = LAST_OCCLUDED_FLUSH.lock().expect("occlusion clock");
+                    let due = clock
+                        .map(|t| t.elapsed().as_millis() >= 500)
+                        .unwrap_or(true);
+                    if !due {
+                        drop(clock);
+                    } else {
+                        *clock = Some(std::time::Instant::now());
+                        drop(clock);
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                            let _: () = msg_send![vw.layer, flush];
+                        }));
+                    }
+                }
+                use std::sync::atomic::AtomicU64;
+                static OCCLUDED_DROPS: AtomicU64 = AtomicU64::new(0);
+                let _: () = msg_send![sample, release]; // never enqueued
+                let dropped = OCCLUDED_DROPS.fetch_add(1, Ordering::Relaxed);
+                if dropped == 1 || dropped % 600 == 0 {
+                    println!("[video] window occluded — dropped {dropped} frames at the live edge");
+                }
+                return;
+            }
         }
         // Bounded queue + live edge: the layer buffers unboundedly if we
         // enqueue while it is not ready — 20 GB RSS on a minutes-long cast
@@ -192,17 +485,21 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
         // frame is the one that matters.
         let ready: bool = msg_send![vw.layer, isReadyForMoreMediaData];
         if !ready {
-            use std::sync::atomic::{AtomicI64, AtomicU64};
+            use std::sync::atomic::AtomicU64;
+            use std::sync::Mutex;
             static DROPPED: AtomicU64 = AtomicU64::new(0);
-            static LAST_FLUSH_TICK: AtomicI64 = AtomicI64::new(0);
+            static LAST_FLUSH_TICK: Mutex<Option<std::time::Instant>> = Mutex::new(None);
             let _: () = msg_send![sample, release]; // not enqueued — free now
             let dropped = DROPPED.fetch_add(1, Ordering::Relaxed);
             // If the layer stalls >1 s (occlusion, drawable starvation),
-            // flush and resume at the live edge. PTS ticks at 600 Hz.
-            let now = PTS.load(Ordering::Relaxed);
-            let last = LAST_FLUSH_TICK.load(Ordering::Relaxed);
-            if now - last > 600 {
-                LAST_FLUSH_TICK.store(now, Ordering::Relaxed);
+            // flush and resume at the live edge.
+            let mut clock = LAST_FLUSH_TICK.lock().expect("flush clock");
+            let stalled = clock
+                .map(|t| t.elapsed().as_secs() >= 1)
+                .unwrap_or(true);
+            if stalled {
+                *clock = Some(std::time::Instant::now());
+                drop(clock);
                 let _: () = msg_send![vw.layer, flush];
                 let _: () = msg_send![vw.layer, setNeedsDisplay: true];
             }
@@ -211,33 +508,65 @@ pub fn enqueue_cv_pixel_buffer(cv_pixel_buffer: *mut c_void) {
             }
             return;
         }
-        let _: () = msg_send![vw.layer, enqueueSampleBuffer: sample];
+        // enqueueSampleBuffer, guarded: even with healthy status, readiness
+        // can flip between the check above and this call — a foreign
+        // exception must never abort the process. Flush; the next frame
+        // retries at the live edge.
+        let enqueued = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            let _: () = msg_send![vw.layer, enqueueSampleBuffer: sample];
+        }));
         let _: () = msg_send![sample, release]; // our ref; the layer retains
+        if let Err(maybe_exc) = enqueued {
+            let reason = maybe_exc
+                .map(|exc| {
+                    let r: Id = msg_send![&*exc, reason];
+                    if r.is_null() {
+                        "(no reason)".to_string()
+                    } else {
+                        let s: Id = msg_send![r, UTF8String];
+                        if s.is_null() {
+                            "(utf8 nil)".to_string()
+                        } else {
+                            std::ffi::CStr::from_ptr(s as *const std::ffi::c_char)
+                                .to_string_lossy()
+                                .into_owned()
+                        }
+                    }
+                })
+                .unwrap_or_else(|| "(foreign, no exception object)".to_string());
+            println!("[video] enqueue RAISED: {reason} — flushing layer");
+            let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                let _: () = msg_send![vw.layer, flush];
+            }));
+        }
         if n < 3 {
             let layer_status: isize = msg_send![vw.layer, status];
             println!("[video] enqueue #{n} ok — layer status={layer_status}");
         }
-        if n % 600 == 0 {
+        if n > 0 && n % 1800 == 0 {
             let layer_status: isize = msg_send![vw.layer, status];
-            if layer_status == 2 {
-            // AVSampleBufferDisplayLayerStatusFailed
-            let err: Id = msg_send![vw.layer, error];
-            let desc: Id = if err.is_null() { std::ptr::null_mut() } else { msg_send![err, localizedDescription] };
-            let desc_str = if desc.is_null() {
-                "(nil)".to_string()
-            } else {
-                let s: Id = msg_send![desc, UTF8String];
-                if s.is_null() {
-                    "(utf8 nil)".to_string()
-                } else {
-                    std::ffi::CStr::from_ptr(s as *const std::ffi::c_char).to_string_lossy().into_owned()
-                }
-            };
-            println!("[video] layer FAILED: {desc_str} — flushing");
-                let _: () = msg_send![vw.layer, flush];
-            }
+            println!("[video] enq=#{n} — layer status={layer_status}");
         }
     }
+}
+
+/// The display layer's NSError description, for the FAILED log line.
+unsafe fn layer_error_description(layer: Id) -> String {
+    let err: Id = msg_send![layer, error];
+    if err.is_null() {
+        return "(nil error)".to_string();
+    }
+    let desc: Id = msg_send![err, localizedDescription];
+    if desc.is_null() {
+        return "(nil desc)".to_string();
+    }
+    let s: Id = msg_send![desc, UTF8String];
+    if s.is_null() {
+        return "(utf8 nil)".to_string();
+    }
+    std::ffi::CStr::from_ptr(s as *const std::ffi::c_char)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// True once the native window exists (the webview JPEG preview is the

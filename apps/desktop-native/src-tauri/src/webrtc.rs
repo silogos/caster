@@ -123,6 +123,22 @@ impl MediaAnswerer {
                         static BYTES: AtomicU64 = AtomicU64::new(0);
                         let mut last_log = std::time::Instant::now();
                         let mut last_jpeg = std::time::Instant::now();
+                        // ZFC_VIDEO_LEG bisects the VTDecoder IOSurface leak
+                        // (live: 4.5 GB grew with every frame dropped at the
+                        // occlusion gate — zero enqueues; and the "flat"
+                        // JPEG-era baseline was ps RSS, which does NOT count
+                        // kernel IOSurface memory, so it proves nothing):
+                        //   unset    — full native path (as_native → enqueue)
+                        //   nolayer  — as_native + get_cv_pixel_buffer only,
+                        //              video.rs never called
+                        //   noconsume — no NativeVideoStream at all; frames
+                        //              decoded by libwebrtc, never delivered
+                        let leg = std::env::var("ZFC_VIDEO_LEG").unwrap_or_default();
+                        if leg == "noconsume" {
+                            println!("[webrtc] leg=noconsume — track decoded, frames never delivered");
+                            return;
+                        }
+                        println!("[webrtc] video leg={}", if leg.is_empty() { "(full)" } else { &leg });
                         let mut stream = NativeVideoStream::new(video);
                         let mut first = true;
                         while let Some(frame) = stream.next().await {
@@ -141,11 +157,24 @@ impl MediaAnswerer {
                                 });
                             }
                             use livekit::webrtc::video_frame::VideoBuffer;
-                            if let Some(native) = frame.buffer.as_native() {
-                                let cv = native.get_cv_pixel_buffer();
-                                if !cv.is_null() {
-                                    crate::video::enqueue_cv_pixel_buffer(cv);
+                            if leg == "nolayer" {
+                                // diagnostic only: the zero-copy bridge leaks
+                                // one wrapper + native ref per call — see
+                                // video::enqueue_i420 for the full story.
+                                if let Some(native) = frame.buffer.as_native() {
+                                    let _ = native.get_cv_pixel_buffer();
                                 }
+                            } else {
+                                // The zero-copy path is unusable: webrtc-sys's
+                                // get_cv_pixel_buffer leaks one ObjC wrapper +
+                                // one native ref per call (every decoded
+                                // IOSurface pinned — 9 GB in 2 min, measured).
+                                // CPU-copy I420 → OUR pooled NV12 buffers.
+                                let (w, h) = (frame.buffer.width(), frame.buffer.height());
+                                let i420 = frame.buffer.to_i420();
+                                let (yd, ud, vd) = i420.data();
+                                let (sy, su, sv) = i420.strides();
+                                crate::video::enqueue_i420(w, h, yd, ud, vd, sy, su, sv);
                             }
                             FRAMES.fetch_add(1, Ordering::Relaxed);
                             BYTES.fetch_add(frame.buffer.width() as u64 * frame.buffer.height() as u64 * 4, Ordering::Relaxed);
