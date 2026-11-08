@@ -143,6 +143,10 @@ struct Engine {
     /// The receiver's game-audio level (0.0–1.0, mute = 0) as f32 bits —
     /// a receiver/environment control, never a cast setting (AGENTS.md).
     gain_bits: AtomicU32,
+    /// Sound plays only while the video window is open (product choice,
+    /// 2026-11-09): the ring keeps draining either way, so opening the
+    /// window is instant and never replays a backlog.
+    output_enabled: std::sync::atomic::AtomicBool,
     output: OnceLock<Option<Output>>,
 }
 
@@ -153,6 +157,7 @@ fn engine() -> &'static Engine {
         producer: Mutex::new(Producer { active: None, last_dc: None }),
         stereo_energy: Mutex::new((0.0, 0.0)),
         gain_bits: AtomicU32::new(1.0f32.to_bits()),
+        output_enabled: std::sync::atomic::AtomicBool::new(false),
         output: OnceLock::new(),
     })
 }
@@ -164,8 +169,20 @@ pub fn set_game_gain(gain: f32) {
     engine().gain_bits.store(gain.to_bits(), Ordering::Relaxed);
 }
 
+/// Opens (`true`) or closes the ear output — it follows the video window.
+pub fn set_output_enabled(enabled: bool) {
+    engine().output_enabled.store(enabled, Ordering::Relaxed);
+}
+
 fn game_gain() -> f32 {
-    f32::from_bits(engine().gain_bits.load(Ordering::Relaxed))
+    let e = engine();
+    output_gain(f32::from_bits(e.gain_bits.load(Ordering::Relaxed)), e.output_enabled.load(Ordering::Relaxed))
+}
+
+/// The gain the callback applies: the user's level, or silence while the
+/// video window is closed.
+fn output_gain(level: f32, enabled: bool) -> f32 {
+    if enabled { level } else { 0.0 }
 }
 
 /// A new media session: drop the previous session's audio and its source
@@ -640,5 +657,12 @@ mod tests {
         render(&ring, &mut state, &mut muted, 2, 1.0, 0.0);
         assert!(muted.iter().all(|s| *s == 0.0));
         assert_eq!(ring.tail.load(Ordering::Relaxed), 64, "muted audio still advances — no backlog builds up");
+    }
+
+    #[test]
+    fn sound_is_silent_until_the_video_window_opens() {
+        assert_eq!(output_gain(0.8, false), 0.0);
+        assert_eq!(output_gain(0.8, true), 0.8);
+        assert_eq!(output_gain(0.0, true), 0.0, "mute stays mute with the window open");
     }
 }

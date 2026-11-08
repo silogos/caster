@@ -182,7 +182,7 @@ fn qr_pairing_authorizes_negotiates_proto_1_and_saves_trust() {
         assert_eq!(trust.device_id, "phone-1");
         assert_eq!(trust.key, pairing::derive_trust_key(&server.qr.1, &server.qr.0));
         assert_eq!(server.host.states.borrow()[0]["state"], "connected");
-        assert_eq!(server.host.states.borrow()[0]["name"], "Android 16; TB321FU");
+        assert_eq!(server.host.states.borrow()[0]["name"], "TB321FU");
     });
 }
 

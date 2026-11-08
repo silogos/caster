@@ -53,6 +53,30 @@ fn regenerate_pairing(control: tauri::State<'_, ServerControl>) -> Result<(), St
     send_command(&control, signaling::ServerCommand::RegeneratePairing)
 }
 
+/// "Open video": the native video window, and the sound with it.
+#[tauri::command]
+fn open_video(app: tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        video::open_video_window();
+        audio::set_output_enabled(true);
+        let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// "Close video": hides the window and silences the sound.
+#[tauri::command]
+fn close_video(app: tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        video::close_video_window();
+        audio::set_output_enabled(false);
+        let _ = handle.emit("video:window", serde_json::json!({ "open": false }));
+    })
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn receiver_settings(controls: tauri::State<'_, ReceiverControls>) -> Result<settings::ReceiverSettings, String> {
     controls.current.lock().map(|s| *s).map_err(|_| "settings unavailable".into())
@@ -206,7 +230,9 @@ pub fn run() {
             forget_phone,
             regenerate_pairing,
             receiver_settings,
-            set_game_audio
+            set_game_audio,
+            open_video,
+            close_video
         ])
         .build(tauri::generate_context!())
         .expect("error while building desktop-native")

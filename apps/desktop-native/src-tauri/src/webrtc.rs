@@ -298,23 +298,17 @@ impl MediaAnswerer {
     }
 }
 
-/// Preview cadence for the webview (~12 fps) while the native window does
-/// not exist yet, and its size/quality.
-const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
-const PREVIEW_MAX_WIDTH: f32 = 640.0;
-const PREVIEW_JPEG_QUALITY: u8 = 88;
 const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The video frame loop for one stream (one cast): renders into the native
-/// window, keeps its visibility fresh from the main thread, and feeds the
-/// webview preview until the window exists.
+/// window while the user has it open, keeps its visibility fresh from the
+/// main thread, and tells the UI when the cast goes live / ends.
 async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
     let mut frames: u64 = 0;
     let mut window_requested = false;
     let mut last_visibility_poll: Option<std::time::Instant> = None;
-    let mut last_preview: Option<std::time::Instant> = None;
     let mut last_log = std::time::Instant::now();
     let mut frames_at_last_log: u64 = 0;
     // Per-frame cost of convert + copy + enqueue (rendered frames only).
@@ -325,12 +319,22 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         if !window_requested {
             window_requested = true;
             log::info!(target: "webrtc", "first frame {w}x{h}");
-            // Creates the window, or shows it again if a previous cast's was closed.
-            let _ = app.run_on_main_thread(crate::video::create_video_window);
+            let _ = app.emit("cast:state", json!({ "live": true }));
+            // A window the user left open comes back for the new cast.
+            if crate::video::is_open() {
+                let _ = app.run_on_main_thread(crate::video::open_video_window);
+            }
         }
         if last_visibility_poll.map_or(true, |t| t.elapsed() >= crate::video::VISIBILITY_POLL_INTERVAL) {
             last_visibility_poll = Some(std::time::Instant::now());
-            let _ = app.run_on_main_thread(crate::video::refresh_visibility);
+            let poll_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                // The window's own close button: silence the sound, update the UI.
+                if crate::video::refresh_visibility() {
+                    crate::audio::set_output_enabled(false);
+                    let _ = poll_app.emit("video:window", json!({ "open": false }));
+                }
+            });
         }
         let started = std::time::Instant::now();
         let followup = match renderer.drop_if_hidden() {
@@ -349,12 +353,6 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
             let _ = app.run_on_main_thread(crate::video::show_video_window);
         }
         frames += 1;
-        if !crate::video::is_active() && last_preview.map_or(true, |t| t.elapsed() >= PREVIEW_INTERVAL) {
-            last_preview = Some(std::time::Instant::now());
-            if let Some(data_url) = preview_jpeg(&*frame.buffer) {
-                let _ = app.emit("video:jpeg", json!({ "dataUrl": data_url }));
-            }
-        }
         if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
             let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
             log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
@@ -368,29 +366,5 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         }
     }
     log::info!(target: "webrtc", "video frame stream ended after {frames} frames");
-}
-
-/// A downscaled JPEG data URL of one frame for the webview's receiving stage.
-fn preview_jpeg(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> Option<String> {
-    use base64::Engine;
-    let (sw, sh) = (buffer.width(), buffer.height());
-    if sw == 0 || sh == 0 {
-        return None;
-    }
-    let scale = (PREVIEW_MAX_WIDTH / sw as f32).min(1.0);
-    let (dw, dh) = ((sw as f32 * scale).max(2.0) as i32, (sh as f32 * scale).max(2.0) as i32);
-    let mut pixels = vec![0u8; (dw * dh * 4) as usize];
-    // libyuv's "ABGR" is R,G,B,A in memory — exactly RgbaImage's layout
-    // (asking for "RGBA" produced A,B,G,R bytes: all-red, found live). It
-    // also expands the limited range, so no manual 16–235 stretch.
-    buffer.to_argb(livekit::webrtc::video_frame::VideoFormatType::ABGR, &mut pixels, (dw * 4) as u32, dw, dh);
-    let image = image::RgbaImage::from_raw(dw as u32, dh as u32, pixels)?;
-    let mut jpg = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, PREVIEW_JPEG_QUALITY);
-    if let Err(e) = image::DynamicImage::ImageRgba8(image).write_with_encoder(encoder) {
-        log::warn!(target: "webrtc", "preview jpeg encode failed: {e}");
-        return None;
-    }
-    // Frames never touch the disk (AGENTS.md logging rules).
-    Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpg)))
+    let _ = app.emit("cast:state", json!({ "live": false }));
 }

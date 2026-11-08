@@ -84,6 +84,10 @@ unsafe impl Sync for VideoWindow {}
 static VIDEO_WINDOW: OnceLock<VideoWindow> = OnceLock::new();
 /// Published by the main thread ([`refresh_visibility`]), read per frame.
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// The user wants the video window: set by "Open video", cleared by
+/// "Close video" or the window's own close button. A closed window renders
+/// nothing (and the app keeps its audio silent — lib.rs).
+static VIDEO_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Runs an ObjC block, turning an exception into a logged `false`.
 fn guarded(what: &str, f: impl FnOnce()) -> bool {
@@ -100,8 +104,33 @@ fn exception_reason(exception: Option<Retained<objc2::exception::Exception>>) ->
     exception.map_or_else(|| "(no exception object)".to_string(), |e| format!("{e:?}"))
 }
 
+/// Whether the user has the video window open.
+pub fn is_open() -> bool {
+    VIDEO_OPEN.load(Ordering::Relaxed)
+}
+
+/// Main thread: "Open video" — creates the window on first use and shows it.
+pub fn open_video_window() {
+    VIDEO_OPEN.store(true, Ordering::Relaxed);
+    create_video_window();
+    log::info!(target: "video", "video window opened");
+}
+
+/// Main thread: "Close video" — hides the window; frames stop rendering.
+pub fn close_video_window() {
+    VIDEO_OPEN.store(false, Ordering::Relaxed);
+    WINDOW_VISIBLE.store(false, Ordering::Relaxed);
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        guarded("close video window", || unsafe {
+            let _: () = msg_send![vw.window, orderOut: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![vw.layer, flush];
+        });
+    }
+    log::info!(target: "video", "video window closed");
+}
+
 /// Main thread: creates the video window (idempotent) and shows it.
-pub fn create_video_window() {
+fn create_video_window() {
     if VIDEO_WINDOW.get().is_none() {
         guarded("create video window", || unsafe {
             let (w, h) = INITIAL_WINDOW_SIZE;
@@ -120,7 +149,7 @@ pub fn create_video_window() {
                 backing: NS_BACKING_STORE_BUFFERED,
                 defer: false
             ];
-            // Closing hides the window; the next cast shows it again.
+            // Closing hides the window (the object stays for "Open video").
             let _: () = msg_send![window, setReleasedWhenClosed: false];
             // Layer attached BEFORE the view enters the window — attaching
             // after display left the window blank once (live M3).
@@ -151,23 +180,25 @@ pub fn show_video_window() {
 }
 
 /// Main thread: publishes whether the window is actually composited.
-pub fn refresh_visibility() {
-    if let Some(vw) = VIDEO_WINDOW.get() {
-        let mut visible = false;
-        guarded("read window occlusion", || unsafe {
-            let occlusion: u64 = msg_send![vw.window, occlusionState];
-            visible = occlusion & OCCLUSION_VISIBLE != 0;
-        });
-        if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
-            log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
-        }
+/// Returns `true` when it found the user closed an open window with its
+/// own close button (the caller silences the audio and tells the UI).
+pub fn refresh_visibility() -> bool {
+    let Some(vw) = VIDEO_WINDOW.get() else { return false };
+    let (mut on_screen, mut visible) = (false, false);
+    guarded("read window state", || unsafe {
+        on_screen = msg_send![vw.window, isVisible];
+        let occlusion: u64 = msg_send![vw.window, occlusionState];
+        visible = occlusion & OCCLUSION_VISIBLE != 0;
+    });
+    let closed_by_user = !on_screen && VIDEO_OPEN.swap(false, Ordering::Relaxed);
+    let visible = visible && on_screen && is_open();
+    if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
+        log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
     }
-}
-
-/// True once the native window exists (the webview preview covers the
-/// first frames until then).
-pub fn is_active() -> bool {
-    VIDEO_WINDOW.get().is_some()
+    if closed_by_user {
+        log::info!(target: "video", "video window closed by the user");
+    }
+    closed_by_user
 }
 
 // ---- the frame path (one renderer per video stream) ------------------------
@@ -227,7 +258,8 @@ impl Renderer {
     /// `Some(followup)` when it was dropped, `None` when it should render.
     /// Saves the decoder-buffer → I420 conversion for every hidden frame.
     pub fn drop_if_hidden(&mut self) -> Option<Followup> {
-        let vw = VIDEO_WINDOW.get()?;
+        // Closed (or never opened): nothing to render, nothing to raise.
+        let Some(vw) = VIDEO_WINDOW.get().filter(|_| is_open()) else { return Some(Followup::None) };
         if WINDOW_VISIBLE.load(Ordering::Relaxed) {
             return None;
         }

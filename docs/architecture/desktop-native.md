@@ -68,16 +68,16 @@ The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-v
 - **Bounded memory:** the pool allocation threshold (8 buffers) drops a frame rather than grow; a layer not ready drops at the live edge (enqueueing anyway reached 20 GB); a hidden window (not composited — each queued sample pins a surface, 8.8 GB in 7 min) drops frames and flushes.
 - **Visibility** is read on the main thread every 250 ms and published through an atomic; a window that has never shown a frame is raised once.
 - Every layer call runs inside one `objc2::exception::catch`: an exception drops a frame, never the process.
-- Closing the window hides it; the next cast shows it again.
-- Until the window exists, a ~12 fps JPEG preview goes to the webview's receiving stage.
+- The window opens on **Open video** (never by itself); closing hides it, and its state survives casts.
 
-## Receiver controls (main window)
+## The main window: QR hero → the deck
 
-Only receiver/environment controls live on the desktop (*mobile controls, desktop receives*). They sit in the **main** window, never in the video window — that one is OBS's capture source and stays pure video. A bar appears once a phone is connected (on hover while the preview shows):
+The main window looks like the phone app (the *Signal Deck* tokens, `designs/preview/05-tokens.png`): a QR hero while nothing is paired, then **the deck** once a phone is — its name, a STANDBY / ON AIR / RECONNECTING annunciator, the cast's status (timecode, the phone's own `session-info` readout, game-audio/mic chips) and **Open video**. Only receiver/environment controls live here (*mobile controls, desktop receives*):
 
-- **Game audio** volume (0–100 %, linear like the Electron mixer) and **Mute** — applied live by the playout callback's gain (mute = 0, the ring keeps draining so no backlog builds), persisted on release.
-- **Disconnect** — the desktop's `bye forget` (pairing.md §bye forget): a two-step button (*Disconnect → Forget this phone?*) because it revokes the persistent pairing; works with the phone offline too. The UI returns to a fresh QR.
-- **New QR code** (QR stage) — regenerates the pending session; ignored while a phone is connected.
+- **Open video / Close video** — the native video window. **Video and sound play only while it is open** (product choice, 2026-11-09): the phone keeps sending, the decoder stays warm, so opening is instant; while closed no frame is converted or rendered and the ear output's gain is 0 (the ring keeps draining — opening never replays a backlog). Closing the window with its own button is noticed on the main thread and flips the UI and the sound the same way. The window stays open across casts until the user closes it. Cost, accepted for now: the phone encodes and the Mac decodes the full stream while nobody watches — an "idle mode" (ask the phone to pause/lower video while the window is closed) needs a protocol bump and is a candidate follow-up.
+- **Game audio** on/off and volume (0–100 %, linear like the Electron mixer), applied as the playout callback's gain, persisted on release.
+- **Disconnect** — the desktop's `bye forget` (pairing.md §bye forget): a two-step link (*Disconnect → Forget this phone?*) because it revokes the persistent pairing; works with the phone offline too. The UI returns to a fresh QR.
+- **New QR code** (QR hero) — regenerates the pending session; ignored while a phone is connected.
 
 UI → server requests travel a `ServerCommand` channel into the signaling thread; a connection that ends with a `bye` (either side) records it, so a forget leaves the QR on screen instead of flipping to "waiting to reconnect".
 

@@ -145,6 +145,11 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Scope:** close → hide (window + Dock icon) while the server keeps listening and casts keep running; tray menu with the Electron status vocabulary, Open window, Forget phone (armed only while trusted), Quit; every quit path sends a plain `bye desktop-quit` (trust kept); a connecting phone or a Dock click reopens the window; the server reports `forgotten` so the tray disarms after a forget from either side. Not ported: Launch at login, the virtual-camera checkbox.
 **Accept:** `cargo test --lib` 56/56 (tray status lines + armed state, quit goodbye keeps trust), zero warnings; the app starts with the tray installed. **On-device pending (needs clicks):** close hides and the phone can still connect, the menu items, Quit's bye reaching the phone (it should keep its saved desktop).
 
+## Feature 2026-11i — The deck: a phone-style main window; video and sound behind "Open video" ✅ implemented — awaiting on-device check
+*(Not a numbered phase: product-owner direction, 2026-11-09 — "when connected, look like the mobile app, with a button to the video render; sound plays while that window is open".)*
+**Scope:** the main window restyled with the Signal Deck tokens — QR hero, then the deck (source, STANDBY/ON AIR/RECONNECTING, timecode + the phone's readout, audio chips, game-audio switch + volume, two-step Disconnect). **Open video / Close video** drives the native window; video and sound play only while it is open (the phone keeps sending; closed = no conversion, gain 0); the window's own close button is detected. The webview JPEG preview is removed (the deck replaces the receiving stage). Phone names now parse like Electron's (`TB321FU`, not `Android 16; TB321FU`).
+**Accept:** `cargo test --lib` 57/57; the deck exercised in a browser against a mocked Tauri API (states, timecode, open/close, a user-closed window, reconnecting). **On-device pending:** open/close with a live cast — picture and sound start/stop together.
+
 ---
 
 ## Definition of Done (every phase)

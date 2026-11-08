@@ -187,10 +187,21 @@ pub fn parse_session_info(payload: &Value) -> Result<Value, Rejection> {
     }
 }
 
-/// The phone's model from its UA — the trailing "(...)" segment.
+/// The phone's model from its UA: the last `;`-separated part of the
+/// trailing "(...)" group — `LocalCast/1.0 (Android 16; TB321FU)` →
+/// `TB321FU`, exactly like the Electron receiver's `deviceNameFromUa`.
 pub fn device_name_from_ua(ua: &str) -> String {
-    let name = ua.rsplit('(').next().unwrap_or("").trim_end_matches(')').trim();
-    if name.is_empty() || name == ua.trim() { "Android device".to_string() } else { name.to_string() }
+    let group = ua
+        .trim_end()
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once('('))
+        .map(|(_, inside)| inside);
+    group
+        .and_then(|inside| inside.rsplit(';').next())
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.contains(['(', ')']))
+        .unwrap_or("Android device")
+        .to_string()
 }
 
 /// A short, char-safe log prefix of an identifier (never a byte slice of
@@ -266,8 +277,10 @@ mod tests {
         let info = json!({ "profile": "balanced", "width": 1920, "height": 1200, "fps": 60, "gameAudio": true, "mic": false });
         assert_eq!(parse_session_info(&info).unwrap(), info);
         assert!(parse_session_info(&json!({ "profile": "balanced" })).is_err());
-        assert_eq!(device_name_from_ua("LocalCast/1.0 (Android 16; TB321FU)"), "Android 16; TB321FU");
+        assert_eq!(device_name_from_ua("LocalCast/1.0 (Android 16; TB321FU)"), "TB321FU");
+        assert_eq!(device_name_from_ua("LocalCast/1.0 (Pixel 8)"), "Pixel 8");
         assert_eq!(device_name_from_ua("no-parens"), "Android device");
+        assert_eq!(device_name_from_ua("x (Android 16; )"), "Android device");
         assert_eq!(short_id("ééééééééé-rest"), "éééééééé");
     }
 }
