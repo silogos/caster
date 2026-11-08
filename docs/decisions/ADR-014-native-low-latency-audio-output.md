@@ -1,6 +1,7 @@
 # ADR-014: Native low-latency audio output — and the native-receiver roadmap (Fases A/B/C)
 
 - **Status:** accepted (2026-11-08) — Fase A shipped (the audio engine sidecar + the bounded PCM ring); Fase B (native video) and Fase C (shell decision) are scoped here but deliberately deferred. Amends nothing in ADR-012/013 — the wire and the codecs stand; this ADR owns the RECEIVER's playback path and the native-receiver roadmap.
+- **Amended by [ADR-015](ADR-015-native-receiver-tauri-libwebrtc.md) (2026-11-09):** the native receiver was built as one app (`apps/desktop-native`) — Fase B's transport is **libwebrtc via `livekit::webrtc`** (the str0m spike never connected; webrtc-rs was not evaluated) and Fase C's shell is **Tauri**, not the favored GPUI. The Electron receiver, and with it this ADR's Electron sidecar, is obsolete.
 
 ## Context
 

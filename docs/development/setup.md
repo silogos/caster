@@ -10,8 +10,19 @@ Status: Phase 0 (prerequisites for the phases ahead; app-specific guides `develo
 | JDK | 17+ (bundled with Android Studio) | Gradle builds |
 | Node.js | ≥ 20 LTS (22 LTS recommended) | Desktop app (Electron) |
 | npm | Bundled with Node | Desktop package management |
-| Rust toolchain (rustup, stable) | Latest stable | Desktop audio engine (`apps/desktop/audio-engine/`, ADR-014). `cargo build --release` builds the sidecar binary |
+| Rust toolchain (rustup, stable) | Latest stable | The native desktop receiver (`apps/desktop-native/`, ADR-015) — see below. (Also the obsolete Electron app's audio sidecar, `apps/desktop/audio-engine/`.) |
 | Git | Any recent | Version control |
+
+## Native desktop receiver (macOS)
+
+```bash
+cd apps/desktop-native/src-tauri
+cargo build --release          # first build downloads livekit's prebuilt libwebrtc
+cargo test --release --lib     # protocol, pairing, signaling (loopback), audio, logging
+./target/release/desktop-native
+```
+
+Logs go to stderr as `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` adds the chatty lines (DataChannel announces, SDP structure). The receiver shares `~/Library/Application Support/Zero-Friction Local Cast/{trust.json,desktop-id}` with the Electron app. Architecture: [architecture/desktop-native.md](../architecture/desktop-native.md).
 
 ## Android device
 
