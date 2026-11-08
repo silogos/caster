@@ -34,6 +34,10 @@ function sessionInfoLine(name, info) {
 }
 
 const tauri = window.__TAURI__ ?? null
+// Diagnostic: the hint line shows whether the Tauri event API is live.
+document.querySelector('.hint').textContent = tauri
+  ? 'Tauri API live — waiting for pairing'
+  : 'NO TAURI API (window.__TAURI__ missing) — events will not arrive'
 
 tauri?.event.listen('pairing:session-updated', (event) => {
   const session = event.payload
@@ -62,8 +66,29 @@ tauri?.event.listen('pairing:mobile-state', (event) => {
 
 tauri?.event.listen('video:jpeg', (event) => {
   if (event.payload?.dataUrl) {
-    frame.src = event.payload.dataUrl
-    showStage('receiving')
+    // Imperative fill (the Electron fillVideoWindow precedent): never
+    // depend on object-fit resolving — pin the element to the exact
+    // window pixels every frame, letterboxed via aspect-ratio math.
+    if (!frame.style.position) {
+      frame.style.position = 'fixed'
+      frame.style.inset = '0'
+      frame.style.margin = '0'
+      frame.style.display = 'block'
+      frame.style.background = '#000'
+    }
+    const img = new Image()
+    img.onload = () => {
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const scale = Math.min(vw / img.width, vh / img.height)
+      frame.style.width = `${Math.round(img.width * scale)}px`
+      frame.style.height = `${Math.round(img.height * scale)}px`
+      frame.style.left = `${Math.round((vw - img.width * scale) / 2)}px`
+      frame.style.top = `${Math.round((vh - img.height * scale) / 2)}px`
+      frame.src = event.payload.dataUrl
+      showStage('receiving')
+    }
+    img.src = event.payload.dataUrl
   }
 })
 

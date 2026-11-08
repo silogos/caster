@@ -114,6 +114,7 @@ impl MediaAnswerer {
                 MediaStreamTrack::Video(video) => {
                     println!("[webrtc] video track arrived — consuming frames");
                     let frame_app = frame_app.clone();
+                    let window_app = frame_app.clone();
                     // The frame consumer runs on the async runtime; M0-r
                     // emits dims only — the Metal subview takes over at M3.
                     tauri::async_runtime::spawn(async move {
@@ -133,6 +134,18 @@ impl MediaAnswerer {
                                     frame.buffer.height(),
                                     frame.buffer.buffer_type()
                                 );
+                                // M3: the native video window — created on the
+                                // main thread on the first frame.
+                                let _ = window_app.run_on_main_thread(|| {
+                                    crate::video::create_video_window();
+                                });
+                            }
+                            use livekit::webrtc::video_frame::VideoBuffer;
+                            if let Some(native) = frame.buffer.as_native() {
+                                let cv = native.get_cv_pixel_buffer();
+                                if !cv.is_null() {
+                                    crate::video::enqueue_cv_pixel_buffer(cv);
+                                }
                             }
                             FRAMES.fetch_add(1, Ordering::Relaxed);
                             BYTES.fetch_add(frame.buffer.width() as u64 * frame.buffer.height() as u64 * 4, Ordering::Relaxed);
@@ -167,13 +180,30 @@ impl MediaAnswerer {
                                     );
                                     static GATE: AtomicU64 = AtomicU64::new(0);
                                     let g = GATE.fetch_add(1, Ordering::Relaxed);
-                                    if g == 0 {
-                                        println!("[webrtc] to_argb done: dw={dw} dh={dh} rgba_len={}", rgba.len());
+                                    // to_argb(RGBA) yields A,B,G,R memory order here
+                                    // (live-evidenced twice: byte0 = alpha 255 → all-red
+                                    // when read as RGBA; then R↔B swap made orange blue).
+                                    // Plus BT.601/709 limited-range expansion (16-235 →
+                                    // 0-255): without it bright greens read gray-ish
+                                    // (found live: "hijau terang di HP, abu-abu di desktop").
+                                    for px in rgba.chunks_exact_mut(4) {
+                                        let expand = |v: u8| -> u8 {
+                                            let f = (v as i32 - 16) * 255 / 219;
+                                            f.clamp(0, 255) as u8
+                                        };
+                                        let a = px[0];
+                                        px[0] = expand(px[3]); // R
+                                        px[1] = expand(px[2]); // G
+                                        px[2] = expand(px[1]); // B
+                                        px[3] = a;             // A
                                     }
                                     if let Some(img) = image::RgbaImage::from_raw(dw as u32, dh as u32, rgba) {
                                         let mut jpg = Vec::new();
+                                        // Explicit quality — the default encoder washed out
+                                        // saturated greens (user-visible on the preview).
+                                        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 88);
                                         let enc = image::DynamicImage::ImageRgba8(img)
-                                            .write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg);
+                                            .write_with_encoder(encoder);
                                         if g == 0 {
                                             match &enc { Ok(_) => println!("[webrtc] jpeg encode OK"), Err(e) => println!("[webrtc] jpeg encode ERR: {e}") };
                                         }
@@ -209,7 +239,24 @@ impl MediaAnswerer {
                         println!("[webrtc] video frame stream ended");
                     });
                 }
-                other => println!("[webrtc] non-video track arrived: {other:?}"),
+                MediaStreamTrack::Audio(audio) => {
+                    println!("[webrtc] audio track arrived — feeding the engine (fallback path)");
+                    tauri::async_runtime::spawn(async move {
+                        use livekit::webrtc::audio_stream::native::NativeAudioStream;
+                        use futures_util::StreamExt as _;
+                        crate::audio::start();
+                        let mut stream = NativeAudioStream::new(audio, 48_000, 2);
+                        while let Some(frame) = stream.next().await {
+                            let mut bytes = Vec::with_capacity(frame.data.len() * 2);
+                            for sample in frame.data.iter() {
+                                bytes.extend_from_slice(&sample.to_le_bytes());
+                            }
+                            crate::audio::feed_pcm16(&bytes);
+                        }
+                        println!("[webrtc] audio track stream ended");
+                    });
+                }
+                other => println!("[webrtc] other track arrived: {other:?}"),
             }
         })));
 

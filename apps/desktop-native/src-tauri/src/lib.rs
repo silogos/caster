@@ -1,5 +1,6 @@
 mod audio;
 mod signaling;
+mod video;
 mod webrtc;
 
 use serde_json::Value;
