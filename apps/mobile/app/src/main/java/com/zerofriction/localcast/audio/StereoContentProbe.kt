@@ -6,7 +6,7 @@ import kotlin.math.abs
  * One question about the captured playback PCM: does it actually carry
  * stereo content (L ≠ R), or is a channel dead? The cast negotiated stereo
  * Opus yet the desktop heard no separation (found live 2026-11-03), and the
- * platform's playback-capture tap on the test ROM turns out to come up
+ * playback-capture tap turns out to come up
  * mono in three flavors (L-only, R-only, L=R) before sometimes settling
  * into true stereo — this probe is the evidence stream that feeds
  * [MonoTapRecovery]. Aggregate numbers only — never the samples themselves
