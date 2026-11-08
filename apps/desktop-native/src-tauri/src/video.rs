@@ -88,6 +88,107 @@ static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 /// "Close video" or the window's own close button. A closed window renders
 /// nothing (and the app keeps its audio silent — lib.rs).
 static VIDEO_OPEN: AtomicBool = AtomicBool::new(false);
+/// A stream is delivering frames. While false the window shows the
+/// "no input" card, like a capture card with nothing plugged in — OBS
+/// records that card, never a frozen last frame.
+static LIVE: AtomicBool = AtomicBool::new(false);
+/// The "no input" card layer (a sublayer of the display layer).
+static NO_INPUT_CARD: OnceLock<LayerRef> = OnceLock::new();
+
+struct LayerRef(Id);
+// Created and toggled on the main thread only; retained for the process.
+unsafe impl Send for LayerRef {}
+unsafe impl Sync for LayerRef {}
+
+/// `CGColorRef` with its Objective-C type encoding (`^{CGColor=}`), so the
+/// layer setters receive exactly what they declare.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct CGColorRef(*const c_void);
+unsafe impl objc2::encode::Encode for CGColorRef {
+    const ENCODING: objc2::encode::Encoding =
+        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColor", &[]));
+}
+
+/// Signal Deck colors for the card (designs/desktop-signal-deck.figcraft).
+const CARD_BG: u32 = 0x0e1216;
+const CARD_LAMP: u32 = 0x5d6672;
+const CARD_TITLE: u32 = 0xeef1f4;
+const CARD_SUB: u32 = 0x8a93a0;
+const CARD_BRAND: u32 = 0x5d6672;
+/// CALayer autoresizing: fill the parent / stay centered / stay at the bottom.
+const FILL_PARENT: u32 = 2 | 16; // width | height sizable
+const KEEP_CENTERED: u32 = 1 | 4 | 8 | 32; // all margins flexible
+const KEEP_AT_BOTTOM: u32 = 1 | 4 | 32; // x margins + top margin flexible
+
+unsafe fn cg_color(rgb: u32) -> CGColorRef {
+    let channel = |shift: u32| f64::from((rgb >> shift) & 0xff) / 255.0;
+    let color: Id = msg_send![class!(NSColor), colorWithSRGBRed: channel(16), green: channel(8), blue: channel(0), alpha: 1.0f64];
+    msg_send![color, CGColor]
+}
+
+unsafe fn text_layer(text: &str, font: &str, size: f64, rgb: u32, frame: NSRect, mask: u32, scale: f64) -> Id {
+    let layer: Id = msg_send![class!(CATextLayer), layer];
+    let string = NSString::from_str(text);
+    let font_name = NSString::from_str(font);
+    let center = NSString::from_str("center");
+    let _: () = msg_send![layer, setString: &*string];
+    let _: () = msg_send![layer, setFont: &*font_name];
+    let _: () = msg_send![layer, setFontSize: size];
+    let _: () = msg_send![layer, setForegroundColor: cg_color(rgb)];
+    let _: () = msg_send![layer, setAlignmentMode: &*center];
+    let _: () = msg_send![layer, setContentsScale: scale];
+    let _: () = msg_send![layer, setFrame: frame];
+    let _: () = msg_send![layer, setAutoresizingMask: mask];
+    layer
+}
+
+/// Builds the "no input" card over the display layer: graphite, a grey
+/// lamp, NO INPUT, a hint, and the brand — the Signal Deck look.
+unsafe fn build_no_input_card(display_layer: Id, (w, h): (f64, f64), scale: f64) -> Id {
+    let card: Id = msg_send![class!(CALayer), layer];
+    let _: () = msg_send![card, setBackgroundColor: cg_color(CARD_BG)];
+    let _: () = msg_send![card, setFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h))];
+    let _: () = msg_send![card, setAutoresizingMask: FILL_PARENT];
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    // Layer coordinates: y grows upward from the bottom edge.
+    let lamp: Id = msg_send![class!(CALayer), layer];
+    let _: () = msg_send![lamp, setBackgroundColor: cg_color(CARD_LAMP)];
+    let _: () = msg_send![lamp, setCornerRadius: 6.0f64];
+    let _: () = msg_send![lamp, setFrame: NSRect::new(NSPoint::new(cx - 6.0, cy + 46.0), NSSize::new(12.0, 12.0))];
+    let _: () = msg_send![lamp, setAutoresizingMask: KEEP_CENTERED];
+    let _: () = msg_send![card, addSublayer: lamp];
+    let title = text_layer("NO INPUT", "Menlo-Bold", 26.0, CARD_TITLE,
+        NSRect::new(NSPoint::new(cx - 200.0, cy + 4.0), NSSize::new(400.0, 34.0)), KEEP_CENTERED, scale);
+    let _: () = msg_send![card, addSublayer: title];
+    let sub = text_layer("Start casting from your phone", "HelveticaNeue", 15.0, CARD_SUB,
+        NSRect::new(NSPoint::new(cx - 250.0, cy - 28.0), NSSize::new(500.0, 22.0)), KEEP_CENTERED, scale);
+    let _: () = msg_send![card, addSublayer: sub];
+    let brand = text_layer("LOCAL CAST", "Menlo-Bold", 11.0, CARD_BRAND,
+        NSRect::new(NSPoint::new(cx - 100.0, 24.0), NSSize::new(200.0, 16.0)), KEEP_AT_BOTTOM, scale);
+    let _: () = msg_send![card, addSublayer: brand];
+    let _: () = msg_send![card, setHidden: LIVE.load(Ordering::Relaxed)];
+    let _: () = msg_send![display_layer, addSublayer: card];
+    card
+}
+
+/// Main thread: a stream started (`false`) or ended (`true`). With no input
+/// the card covers the window and the last frame is dropped, so a capture
+/// never freezes on stale video.
+pub fn set_no_input(no_input: bool) {
+    LIVE.store(!no_input, Ordering::Relaxed);
+    let Some(card) = NO_INPUT_CARD.get() else { return };
+    let layer = VIDEO_WINDOW.get().map(|vw| vw.layer);
+    guarded("toggle no-input card", || unsafe {
+        let _: () = msg_send![card.0, setHidden: !no_input];
+        if no_input {
+            if let Some(layer) = layer {
+                let _: () = msg_send![layer, flushAndRemoveImage];
+            }
+        }
+    });
+    log::info!(target: "video", "{}", if no_input { "no input — showing the no-input card" } else { "input live — card hidden" });
+}
 
 /// Runs an ObjC block, turning an exception into a logged `false`.
 fn guarded(what: &str, f: impl FnOnce()) -> bool {
@@ -158,6 +259,9 @@ fn create_video_window() {
             let _: () = msg_send![window, setTitle: &*title];
             let _: () = msg_send![window, setContentView: view];
             let _: () = msg_send![view, release]; // the window owns its content view
+            let scale: f64 = msg_send![window, backingScaleFactor];
+            let card = build_no_input_card(layer, INITIAL_WINDOW_SIZE, scale);
+            let _ = NO_INPUT_CARD.set(LayerRef(card));
             let _: () = msg_send![window, center];
             // `alloc`/`new` already returned +1: these are the process's refs.
             let _ = VIDEO_WINDOW.set(VideoWindow { window, layer });

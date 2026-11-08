@@ -320,6 +320,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
             window_requested = true;
             log::info!(target: "webrtc", "first frame {w}x{h}");
             let _ = app.emit("cast:state", json!({ "live": true }));
+            let _ = app.run_on_main_thread(|| crate::video::set_no_input(false));
             // A window the user left open comes back for the new cast.
             if crate::video::is_open() {
                 let _ = app.run_on_main_thread(crate::video::open_video_window);
@@ -367,4 +368,5 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     }
     log::info!(target: "webrtc", "video frame stream ended after {frames} frames");
     let _ = app.emit("cast:state", json!({ "live": false }));
+    let _ = app.run_on_main_thread(|| crate::video::set_no_input(true));
 }

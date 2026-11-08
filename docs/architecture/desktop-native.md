@@ -69,6 +69,7 @@ The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-v
 - **Visibility** is read on the main thread every 250 ms and published through an atomic; a window that has never shown a frame is raised once.
 - Every layer call runs inside one `objc2::exception::catch`: an exception drops a frame, never the process.
 - The window opens on **Open video** (never by itself); closing hides it, and its state survives casts.
+- **No input = a card, like a capture card with nothing plugged in:** whenever no stream is live (before the cast, the phone reconnecting, the cast stopped) the window shows a *NO INPUT* card (Signal Deck graphite, grey lamp, "Start casting from your phone") — a Core Animation sublayer over the display layer, toggled on stream start/end on the main thread, and the last frame is dropped (`flushAndRemoveImage`). OBS therefore records the card, never a frozen frame.
 
 ## The main window: QR hero → the deck
 
