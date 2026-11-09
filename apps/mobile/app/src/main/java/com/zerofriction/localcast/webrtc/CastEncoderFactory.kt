@@ -3,20 +3,22 @@ package com.zerofriction.localcast.webrtc
 import android.media.MediaCodecInfo
 import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.config.EncoderImplementation
-import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.HardwareVideoEncoderFactory
+import org.webrtc.LowLatencyHardwareEncoderFactory
 import org.webrtc.Predicate
 import org.webrtc.SoftwareVideoEncoderFactory
 import org.webrtc.VideoCodecInfo
 import org.webrtc.VideoEncoder
 import org.webrtc.VideoEncoderFactory
+import org.webrtc.defaultEncoderFactoryAround
 
 /**
  * Encoder-policy knob from the config module (designs/mobile-app.html,
- * Advanced → Encoder). [EncoderImplementation.HARDWARE] is today's behavior
- * verbatim — [DefaultVideoEncoderFactory]: the SoC's video hardware first,
- * libwebrtc's software encoders as the fallback. [EncoderImplementation.SOFTWARE]
+ * Advanced → Encoder). [EncoderImplementation.HARDWARE] is libwebrtc's
+ * DefaultVideoEncoderFactory composition — the SoC's video hardware first,
+ * libwebrtc's software encoders as the fallback — with the hardware encoders
+ * configured for low latency ([EncoderLatencyKeys], ADR-018). [EncoderImplementation.SOFTWARE]
  * restricts the MediaCodec path to software codecs
  * (OMX.google/c2.android — `!isHardwareAccelerated`) so the SoC's video
  * hardware stays free for a game (risk-register R5: the device-specific
@@ -32,10 +34,17 @@ object CastEncoderFactory {
     fun create(eglContext: EglBase.Context, config: CastConfig): VideoEncoderFactory =
         when (config.encoderImpl) {
             EncoderImplementation.HARDWARE ->
-                DefaultVideoEncoderFactory(
-                    eglContext,
-                    /* enableIntelVp8Encoder = */ true,
-                    /* enableH264HighProfile = */ config.h264HighProfile,
+                // libwebrtc's DefaultVideoEncoderFactory composition, with the
+                // hardware encoders configured for low latency (ADR-018).
+                defaultEncoderFactoryAround(
+                    LowLatencyHardwareEncoderFactory(
+                        HardwareVideoEncoderFactory(
+                            eglContext,
+                            /* enableIntelVp8Encoder = */ true,
+                            /* enableH264HighProfile = */ config.h264HighProfile,
+                        ),
+                        EncoderLatencyKeys.hardware(),
+                    ),
                 )
 
             EncoderImplementation.SOFTWARE ->

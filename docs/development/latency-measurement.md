@@ -43,4 +43,18 @@ Medians, range in brackets. Each run is a separate cast.
 - **Game audio is ~190 ms behind the picture**, and **~218 ms of it happens inside the phone**, between the click entering an `AudioTrack` and leaving the playback-capture record. Wi-Fi adds ~5 ms; the Mac's ring ~30–60 ms.
 - **Not a start-up backlog.** An experiment drained the capture record when the ADM took it over: it held 64 ms (its whole buffer), and draining it changed nothing (218 ms after). The delay is Android's playback-capture path (the remote-submix pipe and the mixer buffering in front of it), which an app does not control. The figure also includes the test track's own output buffering, which a game's audio has as well.
 
+## With the low-latency encoder keys ([ADR-018](../decisions/ADR-018-low-latency-encoder-keys.md))
+
+Same setup, encoder configured with `latency=1, priority=0` (accepted by the codec). Two passes per cast where marked: the pattern asking for the display's highest refresh, then for 60 Hz.
+
+| Cast | Pass | Video → Mac screen | Audio click → Mac playout |
+|---|---|---|---|
+| D | — | 113 ms | 252 ms |
+| E | highest refresh / 60 Hz | 46 / 62 ms | 243 / 249 ms |
+| F | highest refresh / 60 Hz | 82 / 51 ms | 233 / 252 ms |
+
+- **No measurable gain from the keys:** stock 63–117 ms, with keys 46–113 ms.
+- **The refresh request is not the variable either:** the faster pass flipped between casts E and F, and the phone reported 60 Hz in every pass.
+- **The real finding is the spread.** Each pass is tight (±10 ms) but passes differ by up to ~60 ms, even within one cast. A fixed offset that is set at some moment and then held suggests a standing queue in the phone's capture → encode path (steps of one or two 60 Hz frames). Finding it is the next latency task.
+
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.

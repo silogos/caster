@@ -31,6 +31,11 @@ import android.view.WindowManager
  * already streaming silence, so the mark is when the click enters the
  * track — not a tone generator's start-up delay.
  *
+ * It asks for the display's highest refresh rate, like a game does (the
+ * capture path runs on the display's vsync, so a 60 Hz panel measures
+ * slower than a 120 Hz one); `--ef refresh 60` asks for another rate. The
+ * rate actually running is logged with every flip.
+ *
  * Open it with:
  * `adb shell am start -n com.zerofriction.localcast/.debug.LatencyTestActivity`
  */
@@ -60,6 +65,10 @@ class LatencyTestActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val highest = display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: DEFAULT_REFRESH_HZ
+        val wanted = intent.getFloatExtra(EXTRA_REFRESH, highest)
+        window.attributes = window.attributes.apply { preferredRefreshRate = wanted }
+        Log.i(TAG, "pattern asks for $wanted Hz (display supports up to $highest Hz)")
         view = View(this).apply { setBackgroundColor(Color.BLACK) }
         strip = View(this)
         setContentView(FrameLayout(this).apply {
@@ -137,13 +146,17 @@ class LatencyTestActivity : Activity() {
         val frameMs = System.currentTimeMillis() - (System.nanoTime() - frameTimeNanos) / 1_000_000.0
         if (white) {
             clickPending = true
-            Log.i(TAG, "flip white frame_ms=${"%.1f".format(frameMs)}")
+            Log.i(TAG, "flip white frame_ms=${"%.1f".format(frameMs)} refresh_hz=${refreshHz()}")
         } else {
-            Log.i(TAG, "flip black frame_ms=${"%.1f".format(frameMs)}")
+            Log.i(TAG, "flip black frame_ms=${"%.1f".format(frameMs)} refresh_hz=${refreshHz()}")
         }
     }
 
+    private fun refreshHz(): String = "%.0f".format(display?.refreshRate ?: 0f)
+
     private companion object {
+        const val EXTRA_REFRESH = "refresh"
+        const val DEFAULT_REFRESH_HZ = 60f
         const val TAG = "LatencyTest"
         const val FLIP_PERIOD_MS = 1_000L
         const val STRIP_HEIGHT_PX = 48

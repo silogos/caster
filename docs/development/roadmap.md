@@ -259,6 +259,14 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Fix 2026-11t — Low-latency encoder keys ✅ applied on-device, no measured gain (2026-11-10)
+*(Not a numbered phase: the first item from the game-streaming comparison.)*
+**Scope:** the hardware encoder is configured with `KEY_LATENCY = 1` and `KEY_PRIORITY = 0`, the keys scrcpy sets. A wrapper replaces the pinned `HardwareVideoEncoder`'s codec-factory field, and libwebrtc is otherwise unchanged — [ADR-018](../decisions/ADR-018-low-latency-encoder-keys.md). The latency test pattern now asks for the display's highest refresh rate (`--ef refresh N` to choose one) and logs the rate in use.
+
+**Accept:** mobile `testDebugUnitTest` 403 (+3: keys reach configure, other calls pass through, and a mirror guard on the pinned field). **On-device:** the codec reports `latency=1, priority=0`. Video latency across five measured passes was 46–113 ms, against 63–117 ms stock, so no gain is demonstrated. Passes differ by up to ~60 ms even within one cast, which points at a standing queue; that is the next task.
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

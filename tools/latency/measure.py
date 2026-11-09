@@ -19,7 +19,7 @@ import statistics
 import subprocess
 import time
 
-TABLET_VSYNC_MS = 1000 / 60  # the flip shows one phone vsync after its frame time
+DEFAULT_PHONE_HZ = 60  # the flip shows one phone vsync after its frame time
 MAC_VSYNC_MS = 1000 / 120  # a paced frame shows within one display refresh
 MATCH_WINDOW_MS = 900  # a receiver mark must follow its phone mark within this
 
@@ -51,9 +51,10 @@ def clock_offset(seconds):
 def phone_marks(path):
     flips, beeps = [], []
     for line in open(path, errors="replace"):
-        m = re.search(r"flip (white|black) frame_ms=([\d.]+)", line)
+        m = re.search(r"flip (white|black) frame_ms=([\d.]+)(?: refresh_hz=(\d+))?", line)
         if m:
-            flips.append((m.group(1), float(m.group(2))))
+            hz = float(m.group(3)) if m.group(3) and float(m.group(3)) > 0 else DEFAULT_PHONE_HZ
+            flips.append((m.group(1), float(m.group(2)), hz))
         m = re.search(r"click written_ms=([\d.]+)", line)
         if m:
             beeps.append(float(m.group(1)))
@@ -102,8 +103,10 @@ def main():
     print(f"phone: {len(flips)} flips, {len(beeps)} beeps | receiver: {len(video)} video marks, {len(audio)} beeps")
 
     to_decode, glass = [], []
-    for colour, frame_ms in flips:
-        shown_on_phone = frame_ms + TABLET_VSYNC_MS + offset
+    rates = sorted({hz for _, _, hz in flips})
+    print(f"phone display refresh during the run: {', '.join(f'{r:.0f} Hz' for r in rates)}")
+    for colour, frame_ms, hz in flips:
+        shown_on_phone = frame_ms + 1000 / hz + offset
         hit = first_after(shown_on_phone, [v for v in video if v[0] == colour], key=lambda v: v[1])
         if hit:
             to_decode.append(hit[1] - shown_on_phone)
