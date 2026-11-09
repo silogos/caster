@@ -377,10 +377,12 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         let followup = match renderer.drop_if_hidden() {
             Some(followup) => followup,
             None => {
+                // Read before the conversion: the decoder's own buffer states it.
+                let range = crate::video::range_of_frame(frame.buffer.as_ref());
                 let i420 = frame.buffer.to_i420();
                 let (y, u, v) = i420.data();
                 let (sy, su, sv) = i420.strides();
-                let followup = renderer.render_i420(w, h, y, u, v, sy, su, sv);
+                let followup = renderer.render_i420(w, h, range, y, u, v, sy, su, sv);
                 render_cost += started.elapsed();
                 rendered += 1;
                 followup

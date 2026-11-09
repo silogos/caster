@@ -37,10 +37,66 @@ use std::time::{Duration, Instant};
 
 type Id = *mut AnyObject;
 
-/// Biplanar 4:2:0 **video range** ('420v'): libwebrtc's I420 is limited
-/// range (16–235). The first version declared full range ('420f') and the
-/// window showed grey blacks and washed-out colours.
-const PIXEL_FORMAT: u32 = objc2_core_video::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+/// The YCbCr range of the decoded frames, followed per stream. The display
+/// layer takes the range from the pool's pixel format, so a wrong guess is
+/// visible: full-range data read as video range crushes dark tones to black
+/// and clips highlights (an app's `#161b22` background showed as near
+/// black); video-range data read as full range greys the blacks. Neither
+/// side can be assumed — VideoToolbox's H.264 decoder writes its own
+/// format, libwebrtc's software decoders the stream's nominal one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoRange {
+    /// 16–235 luma ('420v').
+    Limited,
+    /// 0–255 luma ('420f').
+    Full,
+}
+
+impl VideoRange {
+    fn pixel_format(self) -> u32 {
+        match self {
+            Self::Limited => objc2_core_video::kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            Self::Full => objc2_core_video::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+        }
+    }
+
+    fn fourcc(self) -> &'static str {
+        match self {
+            Self::Limited => "420v",
+            Self::Full => "420f",
+        }
+    }
+}
+
+/// The range a decoder's own CVPixelBuffer format states. Copying its planes
+/// into I420 keeps the values, so the copy has the same range.
+pub fn range_of_decoder_format(format: u32) -> VideoRange {
+    use objc2_core_video::*;
+    const FULL_RANGE_FORMATS: [u32; 6] = [
+        kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_420YpCbCr8PlanarFullRange,
+        kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+        kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+    ];
+    if FULL_RANGE_FORMATS.contains(&format) { VideoRange::Full } else { VideoRange::Limited }
+}
+
+/// The range of one decoded frame. A VideoToolbox frame states it in its
+/// pixel format; a software decoder's I420 carries no tag the Rust API
+/// exposes, and libwebrtc's software decoders (libvpx, FFmpeg) emit the
+/// stream's nominal video range.
+pub fn range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
+    let Some(native) = buffer.as_native() else { return VideoRange::Limited };
+    let pixel_buffer = native.get_cv_pixel_buffer() as *const CVPixelBuffer;
+    if pixel_buffer.is_null() {
+        return VideoRange::Limited;
+    }
+    // Not retained: the frame keeps it alive for this call.
+    range_of_decoder_format(objc2_core_video::CVPixelBufferGetPixelFormatType(unsafe { &*pixel_buffer }))
+}
+
 /// Pool buffers alive at once (the layer's short queue + one in flight).
 /// Past it, allocation fails and the frame is dropped — the real bound
 /// (the first version passed a non-existent "MaximumBufferCount" key).
@@ -356,11 +412,12 @@ pub enum Followup {
 /// Per-stream render state, owned by the frame thread (a new cast starts a
 /// new stream, so every counter and cache starts fresh).
 pub struct Renderer {
-    /// CMFormatDescription per (width, height) — the quality ladder and
-    /// rotation change dimensions mid-cast; the old one is released.
-    format: Option<((u32, u32), CFRetained<CMFormatDescription>)>,
-    /// One pool for the current dimensions (a size change replaces it).
-    pool: Option<((u32, u32), CFRetained<CVPixelBufferPool>)>,
+    /// CMFormatDescription per (width, height, range) — the quality ladder
+    /// and rotation change dimensions mid-cast, a decoder switch can change
+    /// the range; the old one is released.
+    format: Option<((u32, u32, VideoRange), CFRetained<CMFormatDescription>)>,
+    /// One pool for the current dimensions and range (a change replaces it).
+    pool: Option<((u32, u32, VideoRange), CFRetained<CVPixelBufferPool>)>,
     /// `{AllocationThreshold: N}` — built once, passed per allocation.
     pool_aux: Option<CFRetained<CFDictionary>>,
     started: Instant,
@@ -410,7 +467,7 @@ impl Renderer {
 
     /// Copies one I420 frame into a pooled NV12 buffer and enqueues it.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_i420(&mut self, width: u32, height: u32, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
+    pub fn render_i420(&mut self, width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
         let Some(vw) = VIDEO_WINDOW.get() else { return Followup::None };
         if width == 0 || height == 0 {
             return Followup::None;
@@ -418,12 +475,12 @@ impl Renderer {
         if !WINDOW_VISIBLE.load(Ordering::Relaxed) {
             return self.drop_hidden(vw);
         }
-        let Some(pixel_buffer) = self.pixel_buffer(width, height) else {
+        let Some(pixel_buffer) = self.pixel_buffer(width, height, range) else {
             self.dropped_pool_full += 1;
             return Followup::None;
         };
         copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
-        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height)) else { return Followup::None };
+        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range)) else { return Followup::None };
         self.enqueue(vw, &sample);
         Followup::None
     }
@@ -449,9 +506,9 @@ impl Renderer {
         Followup::None
     }
 
-    fn pixel_buffer(&mut self, width: u32, height: u32) -> Option<CFRetained<CVPixelBuffer>> {
-        if self.pool.as_ref().map(|(dims, _)| *dims) != Some((width, height)) {
-            self.pool = Some(((width, height), create_pool(width, height)?));
+    fn pixel_buffer(&mut self, width: u32, height: u32, range: VideoRange) -> Option<CFRetained<CVPixelBuffer>> {
+        if self.pool.as_ref().map(|(key, _)| *key) != Some((width, height, range)) {
+            self.pool = Some(((width, height, range), create_pool(width, height, range)?));
         }
         let (_, pool) = self.pool.as_ref()?;
         let mut out: *mut CVPixelBuffer = std::ptr::null_mut();
@@ -467,7 +524,7 @@ impl Renderer {
         NonNull::new(out).map(|p| unsafe { CFRetained::from_raw(p) })
     }
 
-    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, dims: (u32, u32)) -> Option<CFRetained<CMSampleBuffer>> {
+    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, dims: (u32, u32, VideoRange)) -> Option<CFRetained<CMSampleBuffer>> {
         if self.format.as_ref().map(|(d, _)| *d) != Some(dims) {
             let mut desc: *const CMFormatDescription = std::ptr::null();
             let status = unsafe {
@@ -480,7 +537,7 @@ impl Renderer {
             };
             // Replacing the Option releases the previous description.
             self.format = Some((dims, unsafe { CFRetained::from_raw(desc) }));
-            log::info!(target: "video", "format description created for {}x{}", dims.0, dims.1);
+            log::info!(target: "video", "format description created for {}x{} ({:?} range)", dims.0, dims.1, dims.2);
         }
         let (_, format) = self.format.as_ref()?;
         // Host-clock pts — the layer's own timeline (an epoch value overflowed
@@ -629,10 +686,10 @@ fn copy_i420_to_nv12(pb: &CVPixelBuffer, width: u32, height: u32, y: &[u8], u: &
     }
 }
 
-fn create_pool(width: u32, height: u32) -> Option<CFRetained<CVPixelBufferPool>> {
+fn create_pool(width: u32, height: u32, range: VideoRange) -> Option<CFRetained<CVPixelBufferPool>> {
     use objc2_core_video::{kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey};
     let key = |k: &'static CFString| k as *const CFString as *const c_void;
-    let (format, w, h) = (cf_num(i64::from(PIXEL_FORMAT)), cf_num(i64::from(width)), cf_num(i64::from(height)));
+    let (format, w, h) = (cf_num(i64::from(range.pixel_format())), cf_num(i64::from(width)), cf_num(i64::from(height)));
     let iosurface = cf_dict(&[])?;
     let attrs = unsafe {
         cf_dict(&[
@@ -647,7 +704,7 @@ fn create_pool(width: u32, height: u32) -> Option<CFRetained<CVPixelBufferPool>>
     let status = unsafe { CVPixelBufferPool::create(None, None, Some(&attrs), NonNull::from(&mut pool)) };
     match NonNull::new(pool).filter(|_| status == 0) {
         Some(pool) => {
-            log::info!(target: "video", "pixel buffer pool for {width}x{height} ('420v', ≤{POOL_ALLOCATION_THRESHOLD} buffers)");
+            log::info!(target: "video", "pixel buffer pool for {width}x{height} ('{}' — {range:?} range, ≤{POOL_ALLOCATION_THRESHOLD} buffers)", range.fourcc());
             Some(unsafe { CFRetained::from_raw(pool) })
         }
         None => {
@@ -727,6 +784,30 @@ mod bench {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FourCC as CoreVideo spells it ('420f' = 0x34323066).
+    fn fourcc(code: &[u8; 4]) -> u32 {
+        u32::from_be_bytes(*code)
+    }
+
+    #[test]
+    fn a_full_range_decoder_buffer_is_shown_as_full_range() {
+        assert_eq!(range_of_decoder_format(fourcc(b"420f")), VideoRange::Full);
+        assert_eq!(range_of_decoder_format(fourcc(b"xf20")), VideoRange::Full, "10-bit full range");
+    }
+
+    #[test]
+    fn a_video_range_or_unknown_decoder_buffer_stays_limited() {
+        assert_eq!(range_of_decoder_format(fourcc(b"420v")), VideoRange::Limited);
+        assert_eq!(range_of_decoder_format(fourcc(b"x420")), VideoRange::Limited, "10-bit video range");
+        assert_eq!(range_of_decoder_format(fourcc(b"BGRA")), VideoRange::Limited);
+    }
+
+    #[test]
+    fn the_pool_format_matches_the_range() {
+        assert_eq!(VideoRange::Full.pixel_format(), fourcc(b"420f"));
+        assert_eq!(VideoRange::Limited.pixel_format(), fourcc(b"420v"));
+    }
 
     #[test]
     fn a_closed_pc_retires_the_running_frame_loop() {
