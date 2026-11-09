@@ -43,3 +43,6 @@ Thumbs.db
 
 # signing secrets — never in the repo
 apps/mobile/keystore/
+
+# Python bytecode (tools/design scripts)
+__pycache__/

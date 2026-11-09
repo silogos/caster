@@ -1,11 +1,25 @@
 # Design files from the shipped UI
 
-`designs/mobile-app.figcraft` is the mobile app **as it ships** (the amber broadcast console), measured from the real Compose UI rather than redrawn. Regenerate it after a UI change, so the design and the app never drift apart.
+`designs/mobile-app.figcraft` is the mobile app **as it ships** (the amber broadcast console), measured from the real Compose UI rather than redrawn, and built the way a designer builds in Figma: **nested auto-layout frames**, not absolutely placed layers. Regenerate it after a UI change, so the design and the app never drift apart.
+
+**Compose → auto layout:**
+
+| Compose | FigCraft |
+|---|---|
+| `Column` / `Row` | Vertical / horizontal auto layout. The gap is the arrangement's spacing; main alignment comes from the arrangement and cross alignment from the alignment. |
+| `Box` with one child | Auto layout aligned like the Box. |
+| `Box` with several children (overlays) | A plain frame. |
+| `padding` modifiers | Frame padding: the node's outer box minus its inner box. |
+| `fillMax*` / `weight` | `fill`. A child a Surface stretches is also `fill`. |
+| `size` / `width` / `height` | `fixed`. Anything else is `hug`, with min sizes where the measurement honored them. |
+| `RowScope`/`ColumnScope.align` | A wrapper spanning the cross axis. |
+| `offset` (e.g. a Switch thumb) | An absolute layer where it is drawn. |
+| Background / border / clip on the node's own box | The frame's fill, stroke and radius. Other drawings (hairlines, rings, dots) become absolute layers.
 
 ## Pipeline
 
 1. **Measure.** `DesignExportTest` (apps/mobile, Robolectric with native text metrics) composes every screen state at a 412dp phone width. For each state it writes a JSON file and a PNG of the real render:
-   - **JSON:** the layout tree, which covers boxes (background, corner radii, border, `clip` shapes), text (string, size, weight, color, alignment), icons (the vector drawables' own path data, arcs converted to cubics) and every `drawBehind` drawing (recorded through a canvas).
+   - **JSON:** the **layout tree**. Each node has its outer and inner box, its measure policy (Row/Column/Box with arrangement and alignment), its size modifiers, and what it draws: backgrounds, borders, `clip` shapes, text, icons (the vector drawables' own path data) and `drawBehind` drawings (recorded through a canvas).
    - **PNG:** the real render, to compare against.
 
    It is opt-in, so CI skips it:
@@ -22,13 +36,21 @@
 
    This produces two pages:
    - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Settings · Advanced plus Scan: camera permission, pairing, and failed.
-   - **Group F · UX & a11y:** the accessibility spec, copied in. It comes from `build_group_f_spec.py`, which writes `designs/mobile-ux-a11y.figcraft`.
+   - **Group F · UX & a11y:** the accessibility spec, copied in. It comes from `build_group_f_spec.py`, which writes `designs/mobile-ux-a11y.figcraft`. Its layers are auto layout too, placed by `autolayout.solve()`, so nothing is hand-placed; only the annotations (badges, 48dp outlines) are absolute.
 
-3. **Check.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect`). Compare the frames with the exported PNGs.
+3. **Check.**
+   - **Auto layout.** FigCraft keeps stored positions until something is edited, so opening the file does not prove the auto layout is right. `check_auto_layout.py` re-runs the layout from the parameters alone (`autolayout.py`, Figma's rules) and fails on any layer that lands more than 1.5dp from where Compose measured it:
+
+     ```bash
+     python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft            # page 1
+     python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 1   # group F
+     ```
+
+   - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`).
+   - **Visual.** Compare the frames with the exported PNGs.
 
 ## Known simplifications
 
 - **Text font.** Text uses **Roboto**, the Android default; FigCraft falls back if Roboto isn't installed. Monospace becomes Liberation Mono. A single measured line is set to no-wrap, so a slightly wider fallback font can't break it.
 - **Debug-only affordances are dropped.** The test-tone row is removed and its gap closed. The Scan screen's debug "paste the QR payload" field stays and is labeled debug in the app itself.
-- **Clipping.** Horizontally scrolling chip rows show every chip; the app clips them at the card edge.
 - **Not shown.** The camera preview (CameraX doesn't run on the JVM) and animations, which are captured at a single frame.

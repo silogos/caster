@@ -79,10 +79,11 @@ import java.io.File
 /**
  * Measures the shipped UI for the design file (designs/mobile-app.figcraft):
  * every screen state is composed at a 412dp phone width with native text
- * metrics, then its layout tree is exported as JSON — boxes (background,
- * corner radii, border), text (string, font, color), icons (the vector
- * paths themselves) and custom drawings (recorded from each drawBehind) —
- * plus a PNG of the real render to compare against. Not a test of
+ * metrics, then its layout tree is exported as JSON — every layout node
+ * with its outer/inner box, Row/Column/Box policy (arrangement, alignment),
+ * size modifiers, and what it draws (backgrounds, borders, clip shapes,
+ * text, icon paths, drawBehind drawings) — which tools/design/ rebuilds as
+ * nested auto-layout frames; plus a PNG of the real render to compare. Not a test of
  * behavior: it runs only when DESIGN_EXPORT_DIR is set
  * (tools/design/README.md), so CI skips it.
  */
@@ -252,24 +253,36 @@ class DesignExportTest {
 
     // ---- the layout-tree walk ----
 
-    private val items = JSONArray()
+    /** Where the modifier handlers below put what they find: the node being walked. */
+    private var items = JSONArray()
     private var maxBottom = 0f
 
     private fun exportTree(name: String): JSONObject {
-        items.clear()
         maxBottom = 0f
-        walk(compose.onRoot().fetchSemanticsNode().layoutInfo)
+        val root = walk(compose.onRoot().fetchSemanticsNode().layoutInfo, parentPolicy = "box")
         return JSONObject()
             .put("name", name)
             .put("width", WIDTH_DP)
             .put("height", (maxBottom + BOTTOM_MARGIN_DP).toInt())
-            .put("items", items)
+            .put("root", root)
     }
 
-    private fun JSONArray.clear() { while (length() > 0) remove(0) }
-
-    private fun walk(node: LayoutInfo) {
-        if (!node.isPlaced) return
+    /**
+     * One layout node → one JSON node: its outer box (before its own
+     * padding) and inner box (where children are placed), how it lays out
+     * its children (Row/Column arrangement + alignment, Box alignment), how
+     * it is sized (fill / fixed / hug, min sizes), what it draws (items) and
+     * its children — the tree the design file rebuilds as auto layout.
+     */
+    private fun walk(node: LayoutInfo, parentPolicy: String): JSONObject? {
+        if (!node.isPlaced) return null
+        val outer = bounds(coordinator(node, "getOuterCoordinator"))
+        val inner = bounds(coordinator(node, "getInnerCoordinator"))
+        val json = JSONObject().put("outer", rectJson(outer)).put("inner", rectJson(inner))
+        describePolicy(node, json)
+        json.put("sizing", sizing(node, parentPolicy, json))
+        val own = JSONArray()
+        items = own
         // Modifier.clip(shape) is a clipping graphicsLayer: a following plain
         // background (LedDot, icon wells) takes the clip's shape.
         var clip: Shape? = null
@@ -294,7 +307,94 @@ class DesignExportTest {
                 modifier.javaClass.simpleName == "DrawBehindElement" -> drawing(bounds, modifier)
             }
         }
-        for (child in children(node)) walk(child)
+        json.put("items", own)
+        maxBottom = maxOf(maxBottom, outer.bottom)
+        val kids = JSONArray()
+        val policy = json.optString("policy")
+        for (child in children(node)) walk(child, policy)?.let { kids.put(it) }
+        json.put("children", kids)
+        return json
+    }
+
+    private fun coordinator(node: LayoutInfo, prefix: String): LayoutCoordinates =
+        node.javaClass.methods.first { it.name.startsWith(prefix) && it.parameterCount == 0 }.invoke(node) as LayoutCoordinates
+
+    private fun rectJson(r: Rect) = JSONArray().put(r.left).put(r.top).put(r.width).put(r.height)
+
+    /** Row / Column / Box / Spacer / Text from the node's measure policy, with its arrangement and alignment. */
+    private fun describePolicy(node: LayoutInfo, json: JSONObject) {
+        val policy = node.javaClass.methods.first { it.name == "getMeasurePolicy" }.invoke(node)
+        val name = policy.javaClass.simpleName
+        fun bias(value: Any?): Float? = Regex("bias=(-?[0-9.]+)").find(value.toString())?.groupValues?.get(1)?.toFloat()
+        fun align(b: Float?) = when { b == null -> "start"; b < -0.5f -> "start"; b > 0.5f -> "end"; else -> "center" }
+        fun arrangement(value: Any?): JSONObject {
+            val text = value.toString()
+            val spacing = Regex("spacedAligned\\(([0-9.]+)\\.dp").find(text)?.groupValues?.get(1)?.toFloat() ?: 0f
+            val kind = when {
+                text.contains("SpaceBetween") -> "spaceBetween"
+                text.contains("SpaceAround") -> "spaceAround"
+                text.contains("SpaceEvenly") -> "spaceEvenly"
+                text.contains("spacedAligned") -> if (text.contains("Center")) "center" else if (text.contains("End") || text.contains("Bottom")) "end" else "start"
+                text.contains("Center") -> "center"
+                text.contains("End") || text.contains("Bottom") -> "end"
+                else -> "start"
+            }
+            return JSONObject().put("kind", kind).put("spacing", spacing)
+        }
+        when {
+            name == "RowMeasurePolicy" -> json.put("policy", "row")
+                .put("arrangement", arrangement(field(policy, "horizontalArrangement")))
+                .put("cross", align(bias(field(policy, "verticalAlignment"))))
+            name == "ColumnMeasurePolicy" -> json.put("policy", "column")
+                .put("arrangement", arrangement(field(policy, "verticalArrangement")))
+                .put("cross", align(bias(field(policy, "horizontalAlignment"))))
+            name == "SpacerMeasurePolicy" -> json.put("policy", "spacer")
+            name == "EmptyMeasurePolicy" && policy.javaClass.name.contains("text") -> json.put("policy", "text")
+            name == "BoxMeasurePolicy" -> {
+                val a = field(policy, "alignment").toString()
+                fun b(key: String) = Regex("$key=(-?[0-9.]+)").find(a)?.groupValues?.get(1)?.toFloat()
+                json.put("policy", "box").put("boxH", align(b("horizontalBias"))).put("boxV", align(b("verticalBias")))
+                    .put("stretch", field(policy, "propagateMinConstraints") == true)
+            }
+            name.contains("EmptyBoxMeasurePolicy") || name == "RootMeasurePolicy" -> json.put("policy", "box")
+            else -> json.put("policy", "other").put("policyClass", name)
+        }
+    }
+
+    /**
+     * fill / fixed / hug per axis, from the node's size modifiers:
+     * fillMax* (and weight on the parent's main axis) → fill; size / width /
+     * height → fixed; anything else hugs its content. Min sizes ride along.
+     */
+    private fun sizing(node: LayoutInfo, parentPolicy: String, json: JSONObject): JSONObject {
+        var h = "hug"
+        var v = "hug"
+        var minW: Float? = null
+        var minH: Float? = null
+        var selfAlign: Float? = null
+        for (info in node.getModifierInfo()) {
+            val inspect = info.modifier as? InspectableValue ?: continue
+            val e = inspect.inspectableElements.associate { it.name to it.value }
+            fun dp(key: String) = (e[key] as? Dp)?.value?.takeIf { !it.isNaN() }
+            when (inspect.nameFallback) {
+                "fillMaxWidth" -> if (h == "hug") h = "fill"
+                "fillMaxHeight" -> if (v == "hug") v = "fill"
+                "fillMaxSize" -> { if (h == "hug") h = "fill"; if (v == "hug") v = "fill" }
+                "weight" -> if (parentPolicy == "row") h = "fill" else if (parentPolicy == "column") v = "fill"
+                "size", "requiredSize" -> { h = "fixed"; v = "fixed" }
+                "width", "requiredWidth" -> h = "fixed"
+                "height", "requiredHeight" -> v = "fixed"
+                "heightIn" -> minH = dp("min") ?: minH
+                "widthIn" -> minW = dp("min") ?: minW
+                "defaultMinSize" -> { minW = dp("minWidth") ?: minW; minH = dp("minHeight") ?: minH }
+                // RowScope/ColumnScope.align: this child's own cross alignment.
+                "align" -> selfAlign = Regex("bias=(-?[0-9.]+)").find((inspect.valueOverride ?: e.values.firstOrNull()).toString())?.groupValues?.get(1)?.toFloat()
+            }
+        }
+        if (json.optString("policy") == "spacer") { h = "fixed"; v = "fixed" }
+        val align = selfAlign?.let { if (it < -0.5f) "start" else if (it > 0.5f) "end" else "center" }
+        return JSONObject().put("h", h).put("v", v).put("minW", minW ?: JSONObject.NULL).put("minH", minH ?: JSONObject.NULL)
+            .put("selfAlign", align ?: JSONObject.NULL)
     }
 
     /** LayoutNode's children (internal API — the exporter is a dev tool, not app code). */
