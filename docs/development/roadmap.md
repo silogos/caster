@@ -202,7 +202,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
-## Refactor 2026-11p — Shared peer negotiator (mobile review finding #23) ✅ implemented — awaiting on-device check
+## Refactor 2026-11p — Shared peer negotiator (mobile review finding #23) ✅ implemented — verified on-device
 *(Not a numbered phase: the group E item deferred until group G's negotiation tests.)*
 **Scope:**
 - **`PeerNegotiator` + `PeerPort`:** the offer/answer/candidate/ICE-restart sequencing `MediaCastSession` and `MicCastSession` duplicated (~150 lines each) is one pure, JVM-tested class. `LibWebRtcPeer` adapts libwebrtc, and `SignalingPeerObserver` is the shared observer (local candidates, end-of-candidates, connection state).
@@ -212,7 +212,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
   - The pc is `dispose()`d instead of only `close()`d, the same leak fix group D gave the media pc.
 - **Unchanged:** the media SDP munging, the ICE-restart ladder and the mic reconnect ladder stay in their sessions.
 
-**Accept:** `testDebugUnitTest` 384/384 (+`PeerNegotiatorTest` ×8), `assembleDebug` clean. **On-device pending:** a cast with game audio; an ICE restart (Wi-Fi blip); mic on/off once (the mic pc's threading changed).
+**Accept:** `testDebugUnitTest` 384/384 (+`PeerNegotiatorTest` ×8), `assembleDebug` clean. **On-device (product owner):** a cast with game audio; an ICE restart (Wi-Fi blip); mic on/off once.
 
 ---
 
