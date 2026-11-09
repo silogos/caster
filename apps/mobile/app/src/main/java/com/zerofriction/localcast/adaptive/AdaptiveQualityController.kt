@@ -175,21 +175,18 @@ class AdaptiveQualityController(
     }
 
     /**
-     * One rung down **the ladder order** (the preset enum order *is* the rung
-     * order — cool → balanced → performance → sharp); null at the floor. The
-     * ladder order, not a per-dimension comparison, is what makes descents and
-     * ascents symmetric: rungs like performance (60 fps) and sharp (1080p30)
-     * are not comparable dimension-wise, but they are ordered rungs.
+     * One rung down: the heaviest preset *below* the current one in ladder
+     * order (cool → balanced → performance → sharp) that is no heavier on
+     * **any** dimension; null at the floor. Ladder order alone is not enough:
+     * sharp (1080p30) → performance (720p60) would *double* the frame rate
+     * on a step meant to shed load (mobile review, group B) — the encoder
+     * and thermal cost scale with fps, so sharp descends to balanced. A
+     * custom ceiling (not a rung) descends by the same rule.
      */
     private fun stepDownTarget(): QualityLevel? {
         val idx = ladder.indexOf(current)
-        return when {
-            idx > 0 -> ladder[idx - 1]
-            idx == 0 -> null
-            // current is the user's custom ceiling (not a rung): descend to the
-            // heaviest preset that is genuinely lighter on every dimension.
-            else -> ladder.filter { it.isNoHeavierThan(current) && it != current }.maxByOrNull { ladder.indexOf(it) }
-        }
+        val below = if (idx >= 0) ladder.subList(0, idx) else ladder
+        return below.filter { it.isNoHeavierThan(current) && it != current }.maxByOrNull { ladder.indexOf(it) }
     }
 
     /**

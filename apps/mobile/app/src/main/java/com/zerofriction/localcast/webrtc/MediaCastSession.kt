@@ -57,7 +57,10 @@ import org.webrtc.VideoTrack
  *
  * Threading: libwebrtc demands every PC call from one thread, so all work runs
  * on a private HandlerThread; signaling events arrive on transport threads and
- * are posted over. The signaling listener is registered here and removed on
+ * are posted over, and so are libwebrtc's own callbacks (connection state,
+ * set-description results, stats), which fire on its internal signaling
+ * thread — the candidate queue, the restart ladder and the stats deltas are
+ * only ever touched on the session thread. The signaling listener is registered here and removed on
  * teardown — the session never outlives its socket's usefulness by itself.
  */
 class MediaCastSession(
@@ -576,7 +579,11 @@ class MediaCastSession(
         Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(negotiated.description) ?: "none"}")
         currentPc.setRemoteDescription(
             object : SdpObserver {
-                override fun onSetSuccess() {
+                // SdpObserver callbacks arrive on libwebrtc's signaling
+                // thread — hop to the session thread, which owns the
+                // candidate queue and the restart ladder (mobile review B).
+                override fun onSetSuccess() = post {
+                    if (!active || pc !== currentPc) return@post // a newer pc owns the queue
                     remoteDescriptionSet = true
                     applySenderParameters(currentPc)
                     val queued = pendingCandidates.toList()
@@ -584,8 +591,13 @@ class MediaCastSession(
                     for (candidate in queued) currentPc.addIceCandidate(candidate)
                 }
 
-                override fun onSetFailure(error: String?) {
+                override fun onSetFailure(error: String?) = post {
                     Log.e(TAG, "setRemoteDescription failed: $error")
+                    if (!active || pc !== currentPc) return@post
+                    // The offer in flight cannot connect — conclude it now
+                    // instead of waiting out its deadline.
+                    restarts.onFailed(System.currentTimeMillis())
+                    scheduleRecoveryWatchdog()
                 }
 
                 override fun onCreateSuccess(description: SessionDescription) = Unit
@@ -753,7 +765,14 @@ class MediaCastSession(
             }
         }
 
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+        // Observer callbacks arrive on libwebrtc's signaling thread; the
+        // ladder, watchdog and stats state belong to the session thread.
+        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) = post {
+            if (!active) return@post
+            onConnectionStateOnThread(newState)
+        }
+
+        private fun onConnectionStateOnThread(newState: PeerConnection.PeerConnectionState) {
             Log.i(TAG, "connection state: $newState")
             when (newState) {
                 PeerConnection.PeerConnectionState.CONNECTED -> {
@@ -802,7 +821,13 @@ class MediaCastSession(
         override fun run() {
             val currentPc = pc
             if (currentPc === null || !active) return
-            currentPc.getStats { report ->
+            currentPc.getStats { report -> post { if (active) onStatsReport(report) } }
+            if (active) handler?.postDelayed(this, statsIntervalMs)
+        }
+
+        /** Session thread: the stats deltas below are only touched here. */
+        private fun onStatsReport(report: org.webrtc.RTCStatsReport) {
+            run {
                 // RTCStats exposes `type` as a getter on the object, not a key in
                 // `members` (verified against the pinned 1.3.8 prebuilt on-device,
                 // Phase15 — every entry's members["type"] was null) — merge it in
@@ -816,11 +841,7 @@ class MediaCastSession(
                 val sample = SenderStats.sampleVideoSend(entries)
                 if (sample !== null) {
                     val nowMs = System.currentTimeMillis()
-                    val bitrateBps = if (lastStatsAtMs > 0) {
-                        ((sample.bytesSent - lastBytesSent) * 8000) / (nowMs - lastStatsAtMs).coerceAtLeast(1)
-                    } else {
-                        0
-                    }
+                    val bitrateBps = sendBitrateBps(lastBytesSent, sample.bytesSent, lastStatsAtMs, nowMs)
                     // Per-frame encode cost from the cumulative encode-time delta
                     // — null until two samples exist, or the prebuilt reports no
                     // `totalEncodeTime` at all (defensive, Phase16).
@@ -849,9 +870,6 @@ class MediaCastSession(
                     val types = report.statsMap.values.map { it.members["type"] }.groupBy { it }.mapValues { it.value.size }
                     Log.w(TAG, "stats: no video outbound-rtp sample — report has ${report.statsMap.size} entries, types $types")
                 }
-            }
-            if (active) {
-                handler?.postDelayed(this, statsIntervalMs)
             }
         }
     }

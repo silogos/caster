@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -145,8 +146,8 @@ internal fun decodeSavedDesktop(document: String): SavedDesktop? {
         if (port !in 1..65535) return null
         val key = root["key"]?.jsonPrimitive?.content ?: return null
         if (key.isEmpty()) return null
-        val savedAt = root["savedAt"]?.jsonPrimitive?.intOrNull?.toLong() ?: return null
-        val lastConnectedAt = root["lastConnectedAt"]?.jsonPrimitive?.intOrNull?.toLong() ?: return null
+        val savedAt = root["savedAt"]?.jsonPrimitive?.longOrNull ?: return null
+        val lastConnectedAt = root["lastConnectedAt"]?.jsonPrimitive?.longOrNull ?: return null
         SavedDesktop(desktopId, name, hosts, port, key, savedAt, lastConnectedAt)
     } catch (_: Exception) {
         null

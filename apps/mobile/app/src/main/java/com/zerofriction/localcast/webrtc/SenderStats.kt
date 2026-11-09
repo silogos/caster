@@ -106,3 +106,19 @@ object SenderStats {
         )
     }
 }
+
+/**
+ * Send bitrate between two cumulative `bytesSent` samples, bps. 0 for the
+ * first sample, and 0 when the counter went *backwards*: a rebuilt pc (the
+ * re-auth path) restarts `bytesSent` at 0, and the plain delta reported a
+ * large negative bitrate into the stats log and the `onVideoStats` consumer (mobile review, group B).
+ */
+fun sendBitrateBps(previousBytes: Long, bytes: Long, previousAtMs: Long, nowMs: Long): Long =
+    if (previousAtMs <= 0 || bytes < previousBytes) {
+        0L
+    } else {
+        (bytes - previousBytes) * MS_PER_SECOND * BITS_PER_BYTE / (nowMs - previousAtMs).coerceAtLeast(1)
+    }
+
+private const val MS_PER_SECOND = 1_000L
+private const val BITS_PER_BYTE = 8L

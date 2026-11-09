@@ -218,14 +218,16 @@ class AdaptiveQualityControllerTest {
     }
 
     @Test
-    fun `a ceiling-bound step covers rungs no preset sits between`() {
-        // sharp (1080p30) and performance (720p60) are ordered rungs but not
-        // comparable dimension-wise: recovery from performance goes to the
-        // ceiling itself, in one announced step.
+    fun `sharp steps down to balanced, never up to 60 fps - and recovers to sharp in one step`() {
+        // sharp (1080p30) and performance (720p60) are not comparable: a step
+        // meant to shed load must not double the frame rate, so sharp skips
+        // performance. Recovery goes to the ceiling itself, in one step.
         val h = Harness(sharp)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30) // down: sharp → performance
-        for (second in 121..420) h.tick(second * 1_000L) // up: performance → sharp at 420 s
-        assertEquals(listOf(performance, sharp), h.changes.map { it.to })
+        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30) // down: sharp → balanced
+        assertEquals(listOf(balanced), h.changes.map { it.to })
+        assertTrue(h.changes.single().to.fps <= sharp.fps)
+        for (second in 121..420) h.tick(second * 1_000L) // up: balanced → sharp at 420 s
+        assertEquals(listOf(balanced, sharp), h.changes.map { it.to })
         assertEquals(sharp, h.controller.current)
     }
 

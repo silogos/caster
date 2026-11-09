@@ -158,6 +158,8 @@ private class FakeTransport(private val failOnOpen: Boolean = false) : Signaling
     override fun close(code: Int, reason: String) {
         listener?.onTransportClosed(code, reason)
     }
+
+    override fun abort() = Unit
 }
 
 /** Never fires scheduled work — reconnect timers stay dormant in these tests. */
