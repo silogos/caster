@@ -61,6 +61,7 @@ import com.zerofriction.localcast.signaling.Envelope
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.home.HomeContent
+import com.zerofriction.localcast.ui.home.MicPermission
 import com.zerofriction.localcast.ui.pairing.ScanContent
 import com.zerofriction.localcast.ui.settings.CastSettingsContent
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
@@ -173,7 +174,7 @@ class DesignExportTest {
                     CastState.Casting("Gaming PC", castingSince),
                     gameAudio = GameAudioState.Active,
                     mic = MicState.NeedsPermission,
-                    micBlocked = true,
+                    micPermission = MicPermission.Blocked,
                     live = balanced,
                     settings = CastSettings.default().copy(mic = true),
                 )
@@ -225,7 +226,7 @@ class DesignExportTest {
         pairing: PairingClient.State = PairingClient.State.Idle,
         gameAudio: GameAudioState = GameAudioState.Off,
         mic: MicState = MicState.Off,
-        micBlocked: Boolean = false,
+        micPermission: MicPermission = MicPermission.Granted,
         micRouting: MicRoutingUiState? = null,
         thermal: ThermalState = ThermalState(),
         adaptive: AdaptiveUiState = AdaptiveUiState(),
@@ -240,7 +241,7 @@ class DesignExportTest {
         pairingState = pairing,
         gameAudioState = gameAudio,
         micState = mic,
-        micPermissionBlocked = micBlocked,
+        micPermission = micPermission,
         thermalState = thermal,
         adaptiveState = adaptive,
         micRouting = micRouting,

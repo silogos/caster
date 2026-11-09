@@ -1,12 +1,11 @@
 package com.zerofriction.localcast.ui.home
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,7 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +56,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -176,24 +174,24 @@ fun HomeScreen(
         )
         if (!started) ConnectedDesktop.takeBack(signaling)
     }
-    // "Don't ask again" (review group F): Android answers a repeat request
-    // with an instant denial and no dialog — the switch used to do nothing.
-    // After a denial with no rationale left, the row offers Android settings.
-    var micPermissionBlocked by rememberSaveable { mutableStateOf(false) }
+    // The mic row follows RECORD_AUDIO itself, casting or not (review group
+    // F): once Android stops asking, a repeat request is an instant denial
+    // with no dialog — the switch used to do nothing — so the row offers
+    // Android settings instead (MicPermission.kt).
+    var micPermission by remember { mutableStateOf(MicPermissionAsks.current(context)) }
     val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) {
-            micPermissionBlocked = false
-            CastService.requestToggleMic(context)
-        } else {
-            val activity = context as? Activity
-            micPermissionBlocked = activity != null &&
-                !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
-        }
+        micPermission = MicPermissionAsks.current(context)
+        Log.i(TAG, "mic permission request answered: $micPermission")
+        if (granted && CastService.micState.value == MicState.NeedsPermission) CastService.requestToggleMic(context)
     }
-    // Back from Android settings with the grant: the row is ordinary again.
+    // Back from Android settings: re-read, and a cast waiting on the grant
+    // picks the mic up without another tap.
     LifecycleResumeEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            micPermissionBlocked = false
+        micPermission = MicPermissionAsks.current(context)
+        if (micPermission == MicPermission.Granted && settings.mic &&
+            CastService.micState.value == MicState.NeedsPermission
+        ) {
+            CastService.requestToggleMic(context)
         }
         onPauseOrDispose {}
     }
@@ -222,7 +220,7 @@ fun HomeScreen(
         pairingState = pairingState,
         gameAudioState = gameAudioState,
         micState = micState,
-        micPermissionBlocked = micPermissionBlocked,
+        micPermission = micPermission,
         onOpenMicSettings = openMicSettings,
         thermalState = thermalState,
         adaptiveState = adaptiveState,
@@ -237,14 +235,15 @@ fun HomeScreen(
         },
         onSetMic = { on ->
             settingsViewModel.setMic(on)
-            if (castState is CastState.Casting) {
-                when {
-                    on && micState == MicState.NeedsPermission && micPermissionBlocked -> openMicSettings()
-                    on && micState == MicState.NeedsPermission ->
-                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-
-                    on != (micState != MicState.Off) -> CastService.requestToggleMic(context)
+            val recording = micState != MicState.Off && micState != MicState.NeedsPermission
+            when {
+                on && micPermission == MicPermission.Blocked -> openMicSettings()
+                on && micPermission == MicPermission.Askable -> {
+                    MicPermissionAsks.markAsked(context)
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
+                castState is CastState.Casting && on != recording &&
+                    !(!on && micState == MicState.NeedsPermission) -> CastService.requestToggleMic(context)
             }
         },
         onSetMicDevice = { source ->
@@ -292,8 +291,8 @@ fun HomeContent(
     pairingState: PairingClient.State = PairingClient.State.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
-    /** RECORD_AUDIO was denied with "don't ask again" — only Android settings can grant it now. */
-    micPermissionBlocked: Boolean = false,
+    /** RECORD_AUDIO's standing; Blocked = Android won't ask again, only its settings can grant it. */
+    micPermission: MicPermission = MicPermission.Granted,
     onOpenMicSettings: () -> Unit = {},
     thermalState: ThermalState = ThermalState(),
     adaptiveState: AdaptiveUiState = AdaptiveUiState(),
@@ -581,17 +580,20 @@ fun HomeContent(
             )
             // The routing fact line: off → the freeing hint; on → which mic
             // records (live while casting — the reroute updates it instantly).
-            // NeedsPermission is OFF on screen (it used to count as on — the
-            // switch lied while nothing recorded); the row says why and,
-            // once Android stops asking, offers the way to settings.
-            val needsPermission = casting && micState == MicState.NeedsPermission
-            val micOn = if (casting) micState != MicState.Off && !needsPermission else settings.mic
+            // A mic waiting on RECORD_AUDIO is OFF on screen (it used to count
+            // as on — the switch lied while nothing recorded), casting or not;
+            // the row says why and, once Android stops asking, offers the way
+            // to settings.
+            val needsPermission = settings.mic &&
+                (micPermission != MicPermission.Granted || (casting && micState == MicState.NeedsPermission))
+            val micBlocked = needsPermission && micPermission == MicPermission.Blocked
+            val micOn = !needsPermission && if (casting) micState != MicState.Off else settings.mic
             val effectiveDevice = if (casting) (micRouting?.effective ?: settings.micDevice) else settings.micDevice
             IconListRow(
                 iconRes = R.drawable.ic_mic,
                 title = stringResource(R.string.home_microphone),
                 sub = when {
-                    needsPermission && micPermissionBlocked -> stringResource(R.string.mic_blocked)
+                    micBlocked -> stringResource(R.string.mic_blocked)
                     needsPermission -> stringResource(R.string.mic_needs_access)
                     !micOn -> stringResource(R.string.home_mic_hint)
                     casting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
@@ -605,7 +607,7 @@ fun HomeContent(
                 topDivider = true,
                 checked = micOn,
                 onCheckedChange = onSetMic,
-                footer = if (needsPermission && micPermissionBlocked) {
+                footer = if (micBlocked) {
                     { CastTextButton(text = stringResource(R.string.open_settings), onClick = onOpenMicSettings) }
                 } else {
                     null

@@ -58,7 +58,10 @@ internal fun rememberShareScreenFlow(onConsent: (Intent) -> Unit): () -> Unit {
     }
     advance = { after ->
         when (nextShareStep(after, isGranted(context, Manifest.permission.RECORD_AUDIO), notificationsGranted(context))) {
-            ShareStep.RECORD_AUDIO -> recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            ShareStep.RECORD_AUDIO -> {
+                MicPermissionAsks.markAsked(context)
+                recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
             ShareStep.NOTIFICATIONS -> notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             ShareStep.PROJECTION ->
                 projectionLauncher.launch(context.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())

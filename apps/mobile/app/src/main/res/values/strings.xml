@@ -116,7 +116,7 @@
     <string name="mic_records_from">Records from %1$s</string>
     <!-- Mic switched on in the cast but RECORD_AUDIO is missing: off until allowed (review group F). -->
     <string name="mic_needs_access">Needs microphone access. Turn it on to allow it.</string>
-    <!-- RECORD_AUDIO denied with "don't ask again": Android won't show the prompt any more. -->
+    <!-- RECORD_AUDIO denied and Android stopped asking (Android 11+: the second denial). -->
     <string name="mic_blocked">Microphone access is off for this app. Turn it on in Android settings.</string>
     <string name="open_settings">Open settings</string>
     <string name="mic_recording_from">Recording from %1$s</string>

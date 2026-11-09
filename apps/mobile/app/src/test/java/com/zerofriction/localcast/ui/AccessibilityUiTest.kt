@@ -25,6 +25,7 @@ import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.ui.home.HomeContent
+import com.zerofriction.localcast.ui.home.MicPermission
 import com.zerofriction.localcast.ui.settings.CastSettingsContent
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 import org.junit.Assert.assertEquals
@@ -57,7 +58,8 @@ class AccessibilityUiTest {
     private fun showHome(
         castState: CastState = CastState.Casting("Gaming PC", startedAtMillis = 0L),
         micState: MicState = MicState.Off,
-        micPermissionBlocked: Boolean = false,
+        micPermission: MicPermission = MicPermission.Granted,
+        settings: CastSettings = CastSettings.default(),
         fontScale: Float = 1f,
     ) {
         compose.setContent {
@@ -69,10 +71,10 @@ class AccessibilityUiTest {
                         connection = ConnectedDesktop.State.Connected("Gaming PC"),
                         gameAudioState = GameAudioState.Active,
                         micState = micState,
-                        micPermissionBlocked = micPermissionBlocked,
+                        micPermission = micPermission,
                         onOpenMicSettings = { openedMicSettings++ },
                         liveQuality = QualityLevel.PRESETS[1],
-                        settings = CastSettings.default(),
+                        settings = settings,
                     )
                 }
             }
@@ -193,18 +195,39 @@ class AccessibilityUiTest {
 
     // ---- Mic permission ----
 
+    private val micWanted = CastSettings.default().copy(mic = true)
+
     @Test
     fun `a mic waiting for permission is shown off, with the reason`() {
-        showHome(micState = MicState.NeedsPermission)
+        showHome(micState = MicState.NeedsPermission, micPermission = MicPermission.Askable, settings = micWanted)
         compose.onNode(isToggleable() and hasText("Microphone")).assertIsOff()
         compose.onNodeWithText("Needs microphone access", substring = true).assertExists()
+        compose.onNodeWithText("Open settings").assertDoesNotExist()
     }
 
     @Test
     fun `a permanently denied mic offers the way to Android settings`() {
-        showHome(micState = MicState.NeedsPermission, micPermissionBlocked = true)
+        showHome(micState = MicState.NeedsPermission, micPermission = MicPermission.Blocked, settings = micWanted)
         compose.onNode(isToggleable() and hasText("Microphone")).assertIsOff()
         compose.onNodeWithText("Open settings").performScrollTo().performClick()
         assertEquals(1, openedMicSettings)
+    }
+
+    // Found on the device check: before a cast the row ignored the permission
+    // entirely — a blocked mic looked switched on and offered nothing.
+    @Test
+    fun `before a cast a blocked mic is shown off and offers Android settings`() {
+        showHome(castState = CastState.Idle, micPermission = MicPermission.Blocked, settings = micWanted)
+        compose.onNode(isToggleable() and hasText("Microphone")).assertIsOff()
+        compose.onNodeWithText("Microphone access is off", substring = true).assertExists()
+        compose.onNodeWithText("Open settings").performScrollTo().performClick()
+        assertEquals(1, openedMicSettings)
+    }
+
+    @Test
+    fun `a mic switched off says nothing about the permission`() {
+        showHome(castState = CastState.Idle, micPermission = MicPermission.Blocked)
+        compose.onNode(isToggleable() and hasText("Microphone")).assertIsOff()
+        compose.onNodeWithText("Open settings").assertDoesNotExist()
     }
 }
