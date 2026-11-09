@@ -53,6 +53,16 @@ pub struct MediaAnswerer {
     /// The phone's `game-audio` channel — owned here so its message observer
     /// lives as long as the PeerConnection (see `on_data_channel`).
     game_audio_dc: Arc<Mutex<Option<KeptChannel>>>,
+    /// Where this pc's local ICE candidates go — swapped on every answer, so
+    /// a pc kept across a re-offer reaches the phone's current connection.
+    ice_out: Arc<Mutex<Option<IceSender>>>,
+    /// The offer's SDP session id (`o=` line) the current pc answered. A
+    /// re-offer with the same id is the phone renegotiating the SAME pc (an
+    /// ICE restart) and is applied to it; a new id is a new session.
+    remote_session: Mutex<Option<String>>,
+    /// The incoming video track, kept to restart frame consumption after an
+    /// ICE restart (a Failed state ends the frame loop; the track survives).
+    video_track: Arc<Mutex<Option<livekit::webrtc::video_track::RtcVideoTrack>>>,
 }
 
 /// libwebrtc DataChannel handle moved across the callback threads; the
@@ -73,6 +83,9 @@ impl MediaAnswerer {
             factory: FACTORY.get().expect("factory must be initialized first").clone(),
             pc: Arc::new(Mutex::new(None)),
             game_audio_dc: Arc::new(Mutex::new(None)),
+            ice_out: Arc::new(Mutex::new(None)),
+            remote_session: Mutex::new(None),
+            video_track: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,6 +96,36 @@ impl MediaAnswerer {
         // fast without building (and leaking callbacks onto) a new PC.
         let offer = SessionDescription::parse(sdp_text, SdpType::Offer)
             .map_err(|e| format!("offer parse: {e}"))?;
+        let session = sdp_session_id(sdp_text).map(str::to_owned);
+        *self.ice_out.lock().expect("ice lock") = Some(ice.clone());
+
+        // An ICE restart renegotiates the phone's SAME pc: answer it on ours,
+        // so DTLS, SCTP and the game-audio channel survive. A fresh pc here
+        // would need the phone to re-open its channel, which it never does —
+        // game audio fell back to the mono track for the rest of the cast.
+        let same_session = session.is_some() && *self.remote_session.lock().expect("session lock") == session;
+        let existing = if same_session { self.pc.lock().expect("pc lock").clone() } else { None };
+        if let Some(pc) = existing {
+            log::info!(target: "webrtc", "pc={} re-offer on the same session (ice restart) — keeping the pc", self.role.as_str());
+            pc.set_remote_description(offer)
+                .await
+                .map_err(|e| format!("set remote (re-offer): {e}"))?;
+            let answer = pc
+                .create_answer(AnswerOptions::default())
+                .await
+                .map_err(|e| format!("create answer (re-offer): {e}"))?;
+            pc.set_local_description(answer.clone())
+                .await
+                .map_err(|e| format!("set local (re-offer): {e}"))?;
+            // A Failed state on the way ended the frame loop; the track lives on.
+            let track = self.video_track.lock().expect("video track lock").clone();
+            if let Some(video) = track {
+                spawn_video_consumer(self.app.clone(), video, false);
+            }
+            let sdp = answer.to_string();
+            log::info!(target: "webrtc", "answer produced ({} bytes, same pc)", sdp.len());
+            return Ok(sdp);
+        }
 
         let pc = self
             .factory
@@ -154,6 +197,7 @@ impl MediaAnswerer {
         })));
 
         let frame_app = self.app.clone();
+        let kept_video = Arc::clone(&self.video_track);
         pc.on_track(Some(Box::new(move |event: TrackEvent| {
             let receiver = event.receiver;
             let track = event.track;
@@ -164,24 +208,11 @@ impl MediaAnswerer {
                     log::info!(target: "webrtc", "mic track arrived — not played yet (receiver mic output pending)");
                 }
                 MediaStreamTrack::Video(video) => {
-                    log::info!(target: "webrtc", "video track arrived — consuming frames");
                     if crate::latency_probe::enabled() {
                         spawn_receive_stats(receiver);
                     }
-                    let app = frame_app.clone();
-                    // Its own thread (not the shared Tauri runtime): the
-                    // per-frame copy + layer calls must not stall signaling
-                    // or audio tasks. The stream ends when the pc closes.
-                    let spawned = std::thread::Builder::new().name("video-frames".into()).spawn(move || {
-                        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                            Ok(rt) => rt,
-                            Err(e) => return log::error!(target: "webrtc", "video runtime: {e}"),
-                        };
-                        runtime.block_on(consume_video(app, video));
-                    });
-                    if let Err(e) = spawned {
-                        log::error!(target: "webrtc", "video thread: {e}");
-                    }
+                    *kept_video.lock().expect("video track lock") = Some(video.clone());
+                    spawn_video_consumer(frame_app.clone(), video, true);
                 }
                 MediaStreamTrack::Audio(audio) => {
                     log::info!(target: "webrtc", "audio track arrived — feeding the engine (fallback path)");
@@ -202,10 +233,11 @@ impl MediaAnswerer {
             }
         })));
 
-        let candidate_tx = ice.clone();
+        let candidate_tx = Arc::clone(&self.ice_out);
         pc.on_ice_candidate(Some(Box::new(move |candidate| {
             // A send fails only once the signaling connection is gone.
-            let _ = candidate_tx.send(OutboundIce {
+            let Some(tx) = candidate_tx.lock().expect("ice lock").clone() else { return };
+            let _ = tx.send(OutboundIce {
                 pc: role,
                 candidate: Some(Candidate {
                     candidate: candidate.candidate(),
@@ -214,9 +246,11 @@ impl MediaAnswerer {
                 }),
             });
         })));
+        let gathering_tx = Arc::clone(&self.ice_out);
         pc.on_ice_gathering_state_change(Some(Box::new(move |state| {
             if state == IceGatheringState::Complete {
-                let _ = ice.send(OutboundIce { pc: role, candidate: None });
+                let Some(tx) = gathering_tx.lock().expect("ice lock").clone() else { return };
+                let _ = tx.send(OutboundIce { pc: role, candidate: None });
             }
         })));
 
@@ -253,6 +287,7 @@ impl MediaAnswerer {
             .map_err(|e| format!("set local: {e}"))?;
 
         *self.pc.lock().expect("pc lock") = Some(pc);
+        *self.remote_session.lock().expect("session lock") = session;
 
         let sdp = answer.to_string();
         log::info!(target: "webrtc", "answer produced ({} bytes)", sdp.len());
@@ -307,6 +342,8 @@ impl MediaAnswerer {
             announce_input(&self.app, false);
         }
         *self.game_audio_dc.lock().expect("dc keep lock") = None;
+        *self.remote_session.lock().expect("session lock") = None;
+        *self.video_track.lock().expect("video track lock") = None;
         if let Some(pc) = self.pc.lock().expect("pc lock").take() {
             pc.close();
             log::info!(target: "webrtc", "pc={} closed", self.role.as_str());
@@ -325,6 +362,30 @@ fn announce_input(app: &tauri::AppHandle, live: bool) {
     if crate::video::set_live(live) {
         let _ = app.emit("cast:state", json!({ "live": live }));
         let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+    }
+}
+
+/// The SDP session id — the second field of the `o=` line. It stays fixed
+/// for one PeerConnection across renegotiations (JSEP), so equal ids on two
+/// offers mean the same remote pc.
+pub fn sdp_session_id(sdp: &str) -> Option<&str> {
+    sdp.lines().find_map(|line| line.strip_prefix("o=")).and_then(|origin| origin.split_whitespace().nth(1))
+}
+
+/// Starts the frame loop for `video` on its own thread (not the shared Tauri
+/// runtime: the per-frame copy + layer calls must not stall signaling or
+/// audio tasks). A newer loop retires an older one (`begin_stream`).
+fn spawn_video_consumer(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack, first: bool) {
+    log::info!(target: "webrtc", "video track {} — consuming frames", if first { "arrived" } else { "kept across the re-offer" });
+    let spawned = std::thread::Builder::new().name("video-frames".into()).spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => return log::error!(target: "webrtc", "video runtime: {e}"),
+        };
+        runtime.block_on(consume_video(app, video));
+    });
+    if let Err(e) = spawned {
+        log::error!(target: "webrtc", "video thread: {e}");
     }
 }
 
@@ -485,5 +546,30 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     log::info!(target: "webrtc", "video frame loop ended after {frames} frames");
     if crate::video::is_current_stream(generation) {
         announce_input(&app, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sdp_session_id;
+
+    const OFFER: &str = "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
+
+    #[test]
+    fn the_session_id_is_the_origin_lines_second_field() {
+        assert_eq!(sdp_session_id(OFFER), Some("4611731400430051336"));
+    }
+
+    #[test]
+    fn a_renegotiation_of_the_same_pc_keeps_the_id_and_a_new_pc_changes_it() {
+        let reoffer = OFFER.replace(" 2 IN IP4", " 3 IN IP4"); // session version bumps
+        let new_pc = OFFER.replace("4611731400430051336", "7300219833540919102");
+        assert_eq!(sdp_session_id(&reoffer), sdp_session_id(OFFER));
+        assert_ne!(sdp_session_id(&new_pc), sdp_session_id(OFFER));
+    }
+
+    #[test]
+    fn an_sdp_without_an_origin_line_has_no_session() {
+        assert_eq!(sdp_session_id("v=0\r\ns=-\r\n"), None);
     }
 }

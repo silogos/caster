@@ -31,7 +31,7 @@ Only a sampled luma mean and a peak amplitude are read — no frame or audio con
 4. Read the pattern layer's present lag: `adb shell dumpsys SurfaceFlinger --latency '<the LatencyTestActivity layer>'` — median of (column 2 − column 1) over the rows, in ms.
 5. `python3 -I tools/latency/measure.py --logcat phone.log --receiver rx.log --phone-screen-lag <ms>` while adb is still connected (it aligns the clocks live).
 
-Restarting the receiver mid-cast leaves game audio on the fallback track (see "Reconnect" below), which adds ~60 ms, so start a fresh cast for audio figures.
+Before ADR-019, restarting the receiver mid-cast left game audio on the fallback track (see "Reconnect" below), adding ~60 ms.
 
 ## Baseline (2026-11-10)
 
@@ -112,6 +112,6 @@ The 40 ms ring (the product owner's choice, desktop-native.md) stands: 30 ms sav
 4. The phone kept sending into a channel with no peer (1 536 backpressure drops in one pass).
 5. The Mac played the mono Opus fallback, ~60 ms later than the DataChannel path.
 
-Reproduced on purpose in cast K. A fix touches ADR-009's recovery ladder (rebuild the channel, or the pc, when the desktop is a new instance) and needs a decision.
+Reproduced on purpose in cast K. **Fixed by [ADR-019](../decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md)**, which also covers the more common case it shares a cause with: every ICE restart lost the channel, because the receiver built a new pc per offer.
 
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.

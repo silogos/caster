@@ -267,6 +267,18 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Fix 2026-11u — Game audio survives an ICE restart ✅ verified on-device (2026-11-10)
+*(Not a numbered phase: found during the latency work.)*
+**Scope:** the native receiver built a new pc for every offer, so after an ICE restart the phone's open `game-audio` channel had no peer, and audio fell back to the mono track (~60 ms later) for the rest of the cast. Now a same-session re-offer (same SDP `o=` id) is applied to the receiver's existing pc, with candidates following the current signaling connection and the frame loop restarted on the kept track. An answer from a new receiver session (the desktop restarted) makes the phone rebuild its pc. A debug-only broadcast triggers an ICE restart — [ADR-019](../decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md).
+
+**Accept:** desktop `cargo test` 76 (+3 session id), mobile `testDebugUnitTest` 411 (+5 `SdpSessionTest`). **On-device:**
+- ICE restart to the same receiver: pc kept, video resumed 4 ms after the offer, the channel kept flowing;
+- receiver restarted mid-cast: the phone rebuilt its pc and the channel was back within ~1 s.
+
+Known limitation: after a ~35 s outage the channel resumes only ~60 s later (SCTP backoff).
+
+---
+
 ## Definition of Done (every phase)
 
 ```text
