@@ -103,11 +103,8 @@ class MicCastSession(
      */
     private var publishedState: MicState = MicState.Off
 
-    /** Desktop candidates that arrived before the answer set the remote description. */
-    private val pendingCandidates = mutableListOf<IceCandidate>()
-
-    /** True once the answer's remote description was applied — gates addIceCandidate. */
-    private var remoteDescriptionSet = false
+    /** Queues desktop candidates until the current offer's answer is applied. */
+    private val candidateGate = RemoteCandidateGate<IceCandidate>()
 
     /** Grown once the answer's parameters exist; sampled by the stats poller. */
     private var lastBytesSent = 0L
@@ -331,7 +328,7 @@ class MicCastSession(
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
     private fun negotiate() {
         closePc()
-        pendingCandidates.clear()
+        candidateGate.reset()
         val newFactory = factory ?: return
         val newTrack = audioTrack ?: return
 
@@ -347,7 +344,6 @@ class MicCastSession(
             return
         }
         pc = newPc
-        remoteDescriptionSet = false
         if (newPc.addTrack(newTrack, listOf(STREAM_ID)) === null) {
             micFailed("addTrack returned null — native track wiring failed")
             return
@@ -385,13 +381,11 @@ class MicCastSession(
 
     private fun applyAnswer(sdp: String) {
         val currentPc = pc ?: return
+        val answerGeneration = candidateGate.generation
         currentPc.setRemoteDescription(
             object : SdpObserver {
                 override fun onSetSuccess() {
-                    remoteDescriptionSet = true
-                    val queued = pendingCandidates.toList()
-                    pendingCandidates.clear()
-                    for (candidate in queued) currentPc.addIceCandidate(candidate)
+                    candidateGate.open(answerGeneration) { currentPc.addIceCandidate(it) }
                 }
 
                 override fun onSetFailure(error: String?) {
@@ -416,11 +410,7 @@ class MicCastSession(
             Log.w(TAG, "malformed candidate from desktop — ignoring")
             return
         }
-        if (!remoteDescriptionSet) {
-            pendingCandidates.add(candidate)
-        } else {
-            currentPc.addIceCandidate(candidate)
-        }
+        candidateGate.offer(candidate) { currentPc.addIceCandidate(it) }
     }
 
     private val pcObserver = object : PeerConnection.Observer {

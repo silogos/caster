@@ -129,6 +129,17 @@ class SignalingClient(
     private var hostIndex = 0
     private var sendSeq = 0
 
+    /**
+     * The host the last handshake succeeded on — where a reconnect attempt
+     * starts. Reconnects used to always start (and end) at host 0, so a
+     * desktop reached through its second advertised address could never be
+     * reconnected (mobile review 2026-11-09, group G).
+     */
+    private var authorizedHostIndex = 0
+
+    /** Hosts tried so far in the current reconnect attempt (each attempt cycles them all once). */
+    private var hostsTriedThisAttempt = 0
+
     /** True once any handshake succeeded — distinguishes reconnect attempts from first pairing. */
     private var hasAuthorizedOnce = false
     /** Index into [RECONNECT_BACKOFF_MS] for the pending reconnect attempt. */
@@ -277,8 +288,14 @@ class SignalingClient(
             else -> {
                 Log.i(TAG, "connection lost before auth: $why")
                 if (hasAuthorizedOnce) {
-                    // A reconnect attempt failed — keep the backoff ladder going.
-                    initiateReconnect()
+                    // A reconnect attempt failed on this host: try the other
+                    // advertised hosts first, then keep the backoff ladder going.
+                    if (hostsTriedThisAttempt < hosts.size) {
+                        hostsTriedThisAttempt += 1
+                        connectHost((hostIndex + 1) % hosts.size)
+                    } else {
+                        initiateReconnect()
+                    }
                 } else {
                     tryNextHostOrGiveUp()
                 }
@@ -316,7 +333,8 @@ class SignalingClient(
         emit(Event.Reconnecting(delayMs))
         reconnectHandle = scheduler.postDelayed(delayMs) {
             if (_state.value == State.RECONNECTING) {
-                connectHost(0)
+                hostsTriedThisAttempt = 1
+                connectHost(authorizedHostIndex)
             }
         }
     }
@@ -355,6 +373,7 @@ class SignalingClient(
                 Log.i(TAG, if (resume) "authorized by desktop (resumed session)" else "authorized by desktop")
                 hasAuthorizedOnce = true
                 reconnectAttempt = 0
+                authorizedHostIndex = hostIndex
                 cancelHandshakeTimeout()
                 _state.value = State.AUTHORIZED
                 startHeartbeat()

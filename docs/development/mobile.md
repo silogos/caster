@@ -45,6 +45,7 @@ Previously (Phase 3): real-device QR scan verified — details in [features/pair
 | stream-webrtc-android | 1.3.8 | Prebuilt Google libwebrtc (`org.webrtc` API, no native build step) — the media PC, capture, ICE. [ADR-001](../decisions/ADR-001-tech-stack.md). ~+58 MB APK native libs. |
 | kotlinx-serialization-json | 1.8.0 | QR payload + envelope codec. |
 | JUnit / coroutines-test | 4.13.2 / 1.10.1 | Plain-JVM unit tests. |
+| Robolectric / Compose ui-test | 4.14.1 / BOM | Compose UI tests on the JVM (`@RunWith(RobolectricTestRunner)`), run by `testDebugUnitTest` so CI covers them without a device. Robolectric 4.14 tops out at API 35, so `robolectric.properties` pins `sdk=34` while the app compiles against 36. |
 
 A known "Deprecated Gradle features … incompatible with Gradle 9.0" warning comes from AGP on Gradle 8.13; upgrade AGP+Gradle together when a phase requires it — not before.
 
@@ -94,5 +95,5 @@ Thermal profiles (Phase 11) and adaptive quality (Phase 12). Casting (Phases 5�
 - UI state flows one way: ViewModel → `StateFlow<UiState>` → `collectAsStateWithLifecycle()` in composables.
 - User-visible strings go in `res/values/strings.xml` (status enum labels are the current exception — they map 1:1 to enum values). Error strings follow [pairing.md](../architecture/pairing.md) §Failure modes verbatim — simple and non-technical; codes stay in logs.
 - `pairing/` and `signaling/` know nothing about UI or Android widgets; the UI drives them ([architecture/mobile.md](../architecture/mobile.md)).
-- Tests live in `app/src/test` (unit, plain JVM — `android.util.Log` is a stub, no-op'd via `unitTests.isReturnDefaultValues`). Instrumented tests are added when there is real device behavior to assert.
+- Tests live in `app/src/test` (unit, plain JVM — `android.util.Log` is a stub, no-op'd via `unitTests.isReturnDefaultValues`). Compose screens are tested on Robolectric in the same source set (`*UiTest`; resources via `unitTests.isIncludeAndroidResources`). Instrumented tests are added when there is real device behavior to assert — capture, hardware codecs and libwebrtc natives stay manual device checks.
 - Debug-only UI affordances (manual payload input) are gated on `BuildConfig.DEBUG` and must never ship in release builds.

@@ -34,13 +34,13 @@ class SignalingClientTest {
         scheduler.advance(ms)
     }
 
-    private fun setUp() {
+    private fun setUp(hosts: List<String> = listOf("192.168.1.42")) {
         fake = FakeTransport()
         scheduler = FakeScheduler()
         events.clear()
         clockMs = 0
         client = SignalingClient(
-            hosts = listOf("192.168.1.42"),
+            hosts = hosts,
             port = 52341,
             sessionId = VECTOR_SID,
             secret = Handshake.decodeSecret(VECTOR_SECRET),
@@ -143,6 +143,37 @@ class SignalingClientTest {
 
         fake.listener?.onTransportClosed(1000, "simulated drop")
         assertEquals(1000L, scheduler.nextDelayMs())
+    }
+
+    @Test
+    fun `a reconnect starts at the host that worked and falls through the others before backing off`() {
+        // The desktop advertised two addresses; only the second is reachable
+        // from the phone (e.g. its Ethernet address first, its Wi-Fi second).
+        setUp(hosts = listOf("192.168.1.42", "10.0.0.9"))
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        authorize() // first pairing found the second host
+        assertEquals("ws://10.0.0.9:52341/zfc/v1", fake.openedUrls.last())
+
+        fake.listener?.onTransportClosed(1000, "wi-fi blip")
+        advance(scheduler.nextDelayMs()!!)
+        // The attempt goes back to the host that authorized — not host 0.
+        assertEquals("ws://10.0.0.9:52341/zfc/v1", fake.openedUrls.last())
+
+        // That host is down now (DHCP moved the desktop): the same attempt
+        // tries the other advertised address before the ladder backs off.
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        assertEquals("ws://192.168.1.42:52341/zfc/v1", fake.openedUrls.last())
+        assertEquals(SignalingClient.State.CONNECTING, client.state.value)
+
+        // Every host failed this attempt → one backoff step, then the cycle repeats.
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertEquals(2000L, scheduler.nextDelayMs())
+        val opened = fake.openedUrls.size
+        advance(2000)
+        assertEquals(opened + 1, fake.openedUrls.size)
+        authorize()
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
     }
 
     @Test

@@ -144,11 +144,8 @@ class MediaCastSession(
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
 
-    /** Desktop candidates that arrived before the answer set the remote description. */
-    private val pendingCandidates = mutableListOf<IceCandidate>()
-
-    /** True once the answer's remote description was applied — gates addIceCandidate. */
-    private var remoteDescriptionSet = false
+    /** Queues desktop candidates until the current offer's answer is applied. */
+    private val candidateGate = RemoteCandidateGate<IceCandidate>()
 
     /** The current pc reported CONNECTED and nothing worse since — session thread only. */
     private var pcConnected = false
@@ -455,7 +452,7 @@ class MediaCastSession(
         // encoder threads spinning on the dead pc.
         releaseGameAudioPipeline()
         closePc()
-        pendingCandidates.clear()
+        candidateGate.reset()
         val newFactory = factory ?: return
         val newTrack = videoTrack ?: return
 
@@ -471,7 +468,6 @@ class MediaCastSession(
             return
         }
         pc = newPc
-        remoteDescriptionSet = false
         val trackSender = newPc.addTrack(newTrack, listOf(STREAM_ID))
         if (trackSender === null) {
             fatal(Failure.Error("addTrack returned null — native track wiring failed"))
@@ -531,8 +527,7 @@ class MediaCastSession(
         Log.i(TAG, "ice restart #$attempt — fresh offer with new ice credentials")
         // Candidates from here on belong to the restarted ICE — queue them
         // until the new answer's remote description lands (mirrors negotiate).
-        remoteDescriptionSet = false
-        pendingCandidates.clear()
+        candidateGate.reset()
         currentPc.restartIce()
         createAndSendOffer(currentPc)
     }
@@ -590,6 +585,7 @@ class MediaCastSession(
         Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
         val negotiated = SessionDescription(SessionDescription.Type.ANSWER, SdpOpusFmtp.preferStereo(sdp))
         Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(negotiated.description) ?: "none"}")
+        val answerGeneration = candidateGate.generation
         currentPc.setRemoteDescription(
             object : SdpObserver {
                 // SdpObserver callbacks arrive on libwebrtc's signaling
@@ -597,11 +593,10 @@ class MediaCastSession(
                 // candidate queue and the restart ladder (mobile review B).
                 override fun onSetSuccess() = post {
                     if (!active || pc !== currentPc) return@post // a newer pc owns the queue
-                    remoteDescriptionSet = true
                     applySenderParameters(currentPc)
-                    val queued = pendingCandidates.toList()
-                    pendingCandidates.clear()
-                    for (candidate in queued) currentPc.addIceCandidate(candidate)
+                    if (!candidateGate.open(answerGeneration) { currentPc.addIceCandidate(it) }) {
+                        Log.i(TAG, "remote description applied for a superseded offer — gate stays closed")
+                    }
                 }
 
                 override fun onSetFailure(error: String?) = post {
@@ -758,11 +753,7 @@ class MediaCastSession(
             Log.w(TAG, "malformed candidate from desktop — ignoring")
             return
         }
-        if (!remoteDescriptionSet) {
-            pendingCandidates.add(candidate)
-        } else {
-            currentPc.addIceCandidate(candidate)
-        }
+        candidateGate.offer(candidate) { currentPc.addIceCandidate(it) }
     }
 
     private val pcObserver = object : PeerConnection.Observer {
