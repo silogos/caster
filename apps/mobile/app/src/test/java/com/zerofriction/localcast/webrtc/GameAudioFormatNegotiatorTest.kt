@@ -146,4 +146,78 @@ class GameAudioFormatNegotiatorTest {
         n.onChannelOpen()
         assertTrue(n.pollAnnounce() != null)
     }
+
+    // ---- encoder lifecycle hooks (the sender stops encoding for PCM-only desktops) ----
+
+    private fun GameAudioFormatNegotiator.runOutTheWindow() {
+        onChannelOpen()
+        while (pollAnnounce() != null) nowMs += GameAudioFormatNegotiator.ANNOUNCE_RETRY_MS
+        nowMs += GameAudioFormatNegotiator.ANNOUNCE_WINDOW_MS
+        pollAnnounce()
+    }
+
+    @Test
+    fun `a window that closes without an ack settles pcm exactly once`() {
+        val n = negotiator()
+        var settled = 0
+        n.onPcmSettled = { settled++ }
+        n.runOutTheWindow()
+        assertEquals(1, settled)
+        repeat(3) { nowMs += 1_000; n.pollAnnounce() }
+        assertEquals("later polls do not fire it again", 1, settled)
+        assertFalse(n.sendsAac)
+    }
+
+    @Test
+    fun `an ack inside the window never settles pcm`() {
+        val n = negotiator()
+        var settled = 0
+        n.onPcmSettled = { settled++ }
+        n.onChannelOpen()
+        n.announceNow()
+        n.onAck(GameAudioFormatNegotiator.FORMAT_AAC)
+        nowMs += GameAudioFormatNegotiator.ANNOUNCE_WINDOW_MS * 2
+        n.pollAnnounce()
+        assertEquals(0, settled)
+        assertTrue(n.sendsAac)
+    }
+
+    @Test
+    fun `the encoder hook runs before the wire switches to aac`() {
+        val n = negotiator()
+        var modeSeenByHook: GameAudioFormatNegotiator.Mode? = null
+        n.onAacAccepted = { modeSeenByHook = n.mode }
+        n.onChannelOpen()
+        n.onAck(GameAudioFormatNegotiator.FORMAT_AAC)
+        assertEquals("ADTS must not be expected before the encoder runs", GameAudioFormatNegotiator.Mode.PCM, modeSeenByHook)
+        assertTrue(n.sendsAac)
+    }
+
+    @Test
+    fun `a late ack after pcm settled still switches, and a failed restart keeps pcm`() {
+        val n = negotiator()
+        n.runOutTheWindow()
+        var restarts = 0
+        n.onAacAccepted = { restarts++ }
+        n.onAck(GameAudioFormatNegotiator.FORMAT_AAC)
+        assertEquals(1, restarts)
+        assertTrue("a desktop that acked understands AAC whenever it answered", n.sendsAac)
+
+        val failing = negotiator()
+        failing.onAacAccepted = { failing.onEncoderFailed() } // the restart blew up
+        failing.onChannelOpen()
+        failing.onAck(GameAudioFormatNegotiator.FORMAT_AAC)
+        assertFalse(failing.sendsAac)
+        assertEquals(GameAudioFormatNegotiator.Mode.PCM, failing.mode)
+    }
+
+    @Test
+    fun `a pcm ack does not start the encoder`() {
+        val n = negotiator()
+        var restarts = 0
+        n.onAacAccepted = { restarts++ }
+        n.onChannelOpen()
+        n.onAck(GameAudioFormatNegotiator.FORMAT_PCM)
+        assertEquals(0, restarts)
+    }
 }

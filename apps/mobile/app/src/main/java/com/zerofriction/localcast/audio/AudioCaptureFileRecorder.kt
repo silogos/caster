@@ -13,7 +13,9 @@ import java.io.FileOutputStream
  * Aggregate probes cannot distinguish real stereo from interleaving
  * artifacts where both per-channel means are alive; a playable file can.
  *
- * Bounded ([MAX_SECONDS]) and opt-in per cast — the capture path enables it
+ * Bounded per file ([MAX_SECONDS]) and in total ([MAX_KEPT_DUMPS] files —
+ * a long session rolls into successive files, and with no total cap the
+ * dev tablet had accumulated 2.8 GB, found 2026-11-09), and opt-in per cast — the capture path enables it
  * only when the `localcast_capture_dump` global setting is 1 (set via adb on
  * a development device), so no release cast ever writes audio to disk.
  * Never logs the samples — only the file path (logging rules).
@@ -73,6 +75,26 @@ internal class AudioCaptureFileRecorder private constructor(
 
         /** ~2 minutes of 48 kHz stereo PCM16 ≈ 23 MiB — bounded by design. */
         const val MAX_SECONDS = 120
+
+        /** Dumps kept on disk (the newest) — ~230 MB, ~20 min of evidence. */
+        const val MAX_KEPT_DUMPS = 10
+
+        private const val DUMP_PREFIX = "capture-dump-"
+        private const val DUMP_SUFFIX = ".wav"
+
+        /**
+         * Deletes all but the newest [keep] dumps in [dir] (by the creation
+         * millis in the name). Only files named like our dumps are touched.
+         */
+        internal fun pruneOldDumps(dir: File, keep: Int) {
+            val dumps = dir.listFiles { f -> f.isFile && f.name.startsWith(DUMP_PREFIX) && f.name.endsWith(DUMP_SUFFIX) }
+                ?: return
+            dumps.sortedByDescending { it.name.removePrefix(DUMP_PREFIX).substringBefore('-').toLongOrNull() ?: 0L }
+                .drop(keep)
+                .forEach { stale ->
+                    if (stale.delete()) Log.i(TAG, "capture dump pruned: ${stale.name}")
+                }
+        }
         private const val BYTES_PER_SECOND_PER_CHANNEL = 2
 
         /** Minimal RIFF/WAVE header for 16-bit PCM (internal for tests). */
@@ -111,8 +133,10 @@ internal class AudioCaptureFileRecorder private constructor(
         fun start(dir: File, sampleRate: Int, channelCount: Int): AudioCaptureFileRecorder? {
             return try {
                 dir.mkdirs()
-                val name = "capture-dump-${System.currentTimeMillis()}-" +
-                    "${sampleRate}Hz-${channelCount}ch.wav"
+                // Room for the new file within the total cap.
+                pruneOldDumps(dir, keep = MAX_KEPT_DUMPS - 1)
+                val name = "$DUMP_PREFIX${System.currentTimeMillis()}-" +
+                    "${sampleRate}Hz-${channelCount}ch$DUMP_SUFFIX"
                 val bytesPerSecond = sampleRate * channelCount * BYTES_PER_SECOND_PER_CHANNEL
                 val recorder = AudioCaptureFileRecorder(
                     File(dir, name),

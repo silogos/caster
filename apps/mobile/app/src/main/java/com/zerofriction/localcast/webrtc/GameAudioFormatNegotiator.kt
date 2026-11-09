@@ -32,6 +32,19 @@ class GameAudioFormatNegotiator(
     var mode: Mode = Mode.PCM
         private set
 
+    /**
+     * Fired once when the announce window closes without an ack: PCM is
+     * settled for this cast (an old desktop, or the native receiver, which
+     * never acks) — the sender stops feeding an encoder nobody will hear.
+     */
+    @Volatile var onPcmSettled: (() -> Unit)? = null
+
+    /**
+     * Fired on an AAC ack BEFORE the wire switches, so the sender can have
+     * the encoder running by the time ADTS frames are expected.
+     */
+    @Volatile var onAacAccepted: (() -> Unit)? = null
+
     private var announcing = false
     private var hasAnnounced = false
     private var lastAnnounceMs = 0L
@@ -55,6 +68,7 @@ class GameAudioFormatNegotiator(
         if (hasAnnounced) {
             if (now >= windowEndMs) {
                 announcing = false
+                if (mode == Mode.PCM) onPcmSettled?.invoke()
                 return null
             }
             if (now - lastAnnounceMs < ANNOUNCE_RETRY_MS) return null
@@ -70,7 +84,10 @@ class GameAudioFormatNegotiator(
      */
     fun onAck(format: String) {
         announcing = false
-        mode = if (format == FORMAT_AAC && selfSupportsAac) Mode.AAC else Mode.PCM
+        val aac = format == FORMAT_AAC && selfSupportsAac
+        if (aac) onAacAccepted?.invoke()
+        // Re-read: starting the encoder may have failed (onEncoderFailed).
+        mode = if (aac && selfSupportsAac) Mode.AAC else Mode.PCM
     }
 
     /** The encoder died mid-cast — revert to PCM and tell the desktop why. */

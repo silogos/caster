@@ -8,8 +8,12 @@ import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
  * ADR-013: the game-audio send pipeline between the capture source and the
  * DataChannel. Two consumers of every ADM chunk:
  *
- * - the AAC encoder always — so it stays warm and the AAC switch needs no
- *   priming when the desktop acks;
+ * - the AAC encoder while AAC is still possible — warm through the announce
+ *   window so the switch needs no priming when the desktop acks, and
+ *   released once the window closes without an ack (PCM is settled: an old
+ *   desktop, or the native receiver, which never acks — it used to encode
+ *   the whole cast for nobody). A late ack starts it again before ADTS
+ *   takes the wire;
  * - the channel itself only while PCM is the wire format (pre-ack, old
  *   desktop, encoder failure) — raw chunks, byte-identical to ADR-012, so
  *   *every* desktop hears audio from the first second.
@@ -32,9 +36,26 @@ class GameAudioSender(
     private val sampleRateHz: Int,
     private val channels: Int,
 ) {
+    /** Guards [encoder]: swapped on the channel threads, fed on the ADM thread. */
+    private val lock = Any()
     private var encoder: GameAacEncoder? = null
 
     fun start() {
+        negotiator.onPcmSettled = {
+            if (stopEncoder()) Log.i(TAG, "no aac ack — encoder released, raw pcm for this cast")
+        }
+        negotiator.onAacAccepted = {
+            synchronized(lock) {
+                if (encoder == null) {
+                    Log.i(TAG, "late aac ack — restarting the encoder")
+                    encoder = newEncoder()
+                }
+            }
+        }
+        synchronized(lock) { encoder = newEncoder() }
+    }
+
+    private fun newEncoder(): GameAacEncoder {
         val newEncoder = GameAacEncoder(
             sampleRateHz = sampleRateHz,
             channels = channels,
@@ -51,7 +72,17 @@ class GameAudioSender(
             },
         )
         newEncoder.start()
-        encoder = newEncoder
+        return newEncoder
+    }
+
+    /**
+     * Takes the encoder out under the lock and releases it outside, so the
+     * ADM thread never waits on MediaCodec's teardown. True if one ran.
+     */
+    private fun stopEncoder(): Boolean {
+        val stale = synchronized(lock) { encoder.also { encoder = null } } ?: return false
+        stale.release()
+        return true
     }
 
     /**
@@ -59,13 +90,14 @@ class GameAudioSender(
      * feeds this on the ADM's recording thread — enqueue only, never block).
      */
     fun onSamples(samples: ByteArray) {
-        encoder?.queuePcm(samples)
+        synchronized(lock) { encoder?.queuePcm(samples) }
         if (!negotiator.sendsAac) channel.onEncoderInputSamples(samples)
     }
 
     fun release() {
-        encoder?.release()
-        encoder = null
+        negotiator.onPcmSettled = null
+        negotiator.onAacAccepted = null
+        stopEncoder()
     }
 
     companion object {
