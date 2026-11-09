@@ -44,6 +44,8 @@ android {
     testOptions {
         // android.util.Log is a stub in JVM unit tests; pairing/signaling log via it.
         unitTests.isReturnDefaultValues = true
+        // Robolectric Compose tests resolve strings/themes from the merged resources.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -80,4 +82,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

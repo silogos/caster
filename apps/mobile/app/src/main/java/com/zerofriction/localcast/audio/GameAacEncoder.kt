@@ -4,8 +4,6 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.util.Log
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -33,8 +31,8 @@ class GameAacEncoder(
     private val onFrame: (ByteArray) -> Unit,
     /** Called once, on the encoder thread, when the codec dies. */
     private val onError: () -> Unit,
-) {
-    private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_CHUNKS)
+) : PcmEncoder {
+    private val queue = DropOldestQueue<ByteArray>(QUEUE_CHUNKS)
     private val accumulator = PcmUnitAccumulator(
         unitFrames = AAC_FRAMES_PER_UNIT,
         bytesPerFrame = channels * PCM16_BYTES_PER_SAMPLE,
@@ -44,13 +42,12 @@ class GameAacEncoder(
 
     @Volatile private var codec: MediaCodec? = null
     private var framesEncoded = 0L
-    private var droppedByOverflow = 0L
     private var droppedInputs = 0L
     /** Sample-clock PTS for queueInputBuffer (monotonic; the wire carries none). */
     private var totalFramesQueued = 0L
 
     /** Configures and starts the codec; all lifecycle runs on the encoder thread. */
-    fun start() {
+    override fun start() {
         val newThread = Thread { runEncoder() }.apply {
             name = "game-audio-aac"
             start()
@@ -59,18 +56,13 @@ class GameAacEncoder(
     }
 
     /** Called on the ADM's recording thread — enqueue only, never block. */
-    fun queuePcm(chunk: ByteArray) {
+    override fun queuePcm(chunk: ByteArray) {
         if (closed.get()) return
-        val copy = chunk.copyOf() // the producer's buffer is reused downstream
-        if (!queue.offer(copy)) {
-            queue.poll()
-            if (!queue.offer(copy)) return
-            droppedByOverflow++
-        }
+        queue.offer(chunk.copyOf()) // the producer's buffer is reused downstream
     }
 
     /** Stops the thread and releases the codec; safe to call from teardown. */
-    fun release() {
+    override fun release() {
         if (!closed.compareAndSet(false, true)) return
         thread?.interrupt()
         thread?.join(JOIN_TIMEOUT_MS)
@@ -78,7 +70,7 @@ class GameAacEncoder(
         Log.i(
             TAG,
             "aac encoder released — frames=$framesEncoded dropped=" +
-                "$droppedByOverflow (queue overflow) / $droppedInputs (no input buffer)",
+                "${queue.droppedCount} (queue overflow) / $droppedInputs (no input buffer)",
         )
     }
 
@@ -99,7 +91,7 @@ class GameAacEncoder(
             Log.i(TAG, "aac encoder up — AAC-LC $bitrateBps bps CBR, ${sampleRateHz} Hz x$channels")
             while (!closed.get()) {
                 val chunk = try {
-                    queue.poll(POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: continue
+                    queue.poll(POLL_TIMEOUT_MS) ?: continue
                 } catch (_: InterruptedException) {
                     return
                 }

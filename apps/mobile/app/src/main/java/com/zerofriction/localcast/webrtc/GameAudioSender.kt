@@ -2,6 +2,7 @@ package com.zerofriction.localcast.webrtc
 
 import android.util.Log
 import com.zerofriction.localcast.audio.GameAacEncoder
+import com.zerofriction.localcast.audio.PcmEncoder
 import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 
 /**
@@ -32,13 +33,27 @@ import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
  */
 class GameAudioSender(
     private val negotiator: GameAudioFormatNegotiator,
-    private val channel: GameAudioDataChannel,
-    private val sampleRateHz: Int,
-    private val channels: Int,
+    /** The DataChannel's send queue ([GameAudioDataChannel.onEncoderInputSamples]): PCM chunks or ADTS frames. */
+    private val wire: (ByteArray) -> Unit,
+    /** Builds a started-on-[PcmEncoder.start] encoder; the AAC MediaCodec one in production. */
+    private val encoderFactory: (onFrame: (ByteArray) -> Unit, onError: () -> Unit) -> PcmEncoder,
 ) {
+    constructor(
+        negotiator: GameAudioFormatNegotiator,
+        channel: GameAudioDataChannel,
+        sampleRateHz: Int,
+        channels: Int,
+    ) : this(
+        negotiator = negotiator,
+        wire = channel::onEncoderInputSamples,
+        encoderFactory = { onFrame, onError ->
+            GameAacEncoder(sampleRateHz, channels, GameAacEncoder.BITRATE_BPS, onFrame, onError)
+        },
+    )
+
     /** Guards [encoder]: swapped on the channel threads, fed on the ADM thread. */
     private val lock = Any()
-    private var encoder: GameAacEncoder? = null
+    private var encoder: PcmEncoder? = null
 
     fun start() {
         negotiator.onPcmSettled = {
@@ -55,18 +70,15 @@ class GameAudioSender(
         synchronized(lock) { encoder = newEncoder() }
     }
 
-    private fun newEncoder(): GameAacEncoder {
-        val newEncoder = GameAacEncoder(
-            sampleRateHz = sampleRateHz,
-            channels = channels,
-            bitrateBps = GameAacEncoder.BITRATE_BPS,
-            onFrame = { adts ->
+    private fun newEncoder(): PcmEncoder {
+        val newEncoder = encoderFactory(
+            { adts ->
                 // Called on the encoder thread; the gate re-reads volatile
                 // state per frame, so an encoder failure mid-cast stops the
                 // AAC feed without any cross-thread handoff.
-                if (negotiator.sendsAac) channel.onEncoderInputSamples(adts)
+                if (negotiator.sendsAac) wire(adts)
             },
-            onError = {
+            {
                 negotiator.onEncoderFailed()
                 Log.w(TAG, "aac encoder failed — falling back to raw pcm (ADR-013)")
             },
@@ -91,7 +103,7 @@ class GameAudioSender(
      */
     fun onSamples(samples: ByteArray) {
         synchronized(lock) { encoder?.queuePcm(samples) }
-        if (!negotiator.sendsAac) channel.onEncoderInputSamples(samples)
+        if (!negotiator.sendsAac) wire(samples)
     }
 
     fun release() {
