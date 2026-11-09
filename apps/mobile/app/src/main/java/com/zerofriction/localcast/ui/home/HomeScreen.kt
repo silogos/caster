@@ -193,7 +193,7 @@ fun HomeScreen(
                 val (width, height) = DisplaySize.physicalPx(context)
                 // "Changes take effect on the next cast": read the store fresh.
                 val castSettings = CastSettingsStore(context).load()
-                CastService.start(
+                val started = CastService.start(
                     context,
                     CastService.StartArgs(
                         signaling = signaling,
@@ -205,6 +205,7 @@ fun HomeScreen(
                             ?: "",
                     ),
                 )
+                if (!started) ConnectedDesktop.takeBack(signaling)
             }
         }
     }

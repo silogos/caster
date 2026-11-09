@@ -1,6 +1,5 @@
 package com.zerofriction.localcast.audio
 
-import com.zerofriction.localcast.audio.MonoTapRecovery.Companion.HARD_RESET_MARKER
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
@@ -11,8 +10,8 @@ import org.junit.Test
  * The self-heal's trigger semantics (audio.md): a dead channel counts only
  * while the window is loud, both-channels-alive resets, quiet pauses, the
  * whole thing is bounded, rebuilds are spaced out by a cooldown (the fold
- * recurs at every playback track re-registration — issue #101), and the hard
- * reset lands on every third rebuild.
+ * recurs at every playback track re-registration — issue #101), and the L=R
+ * flavor is bounded by outcome.
  */
 class MonoTapRecoveryTest {
     private var now = 1_000_000L
@@ -130,17 +129,6 @@ class MonoTapRecoveryTest {
     }
 
     @Test
-    fun `every third rebuild is the hard reset`() {
-        val recovery = recovery(consecutiveWindows = 1, maxRebuilds = 12, rebuildIntervalMs = 0)
-        val first = recovery.onReport(report(5000, 0))!!
-        val second = recovery.onReport(report(5000, 0))!!
-        val third = recovery.onReport(report(5000, 0))!!
-        assertFalse(first.contains(HARD_RESET_MARKER))
-        assertFalse(second.contains(HARD_RESET_MARKER))
-        assertTrue("third rebuild must carry the marker", third.contains(HARD_RESET_MARKER))
-    }
-
-    @Test
     fun `the budget outlasts a session of track-change re-folds`() {
         // A YouTube-style session: a re-fold every ~40 s, each clearing after
         // one rebuild (5 dead windows then stereo again).
@@ -189,19 +177,6 @@ class MonoTapRecoveryTest {
             advanceSeconds(12)
         }
         assertTrue("centre is content, not a fold: $reasons", reasons.none { it.contains("L=R") })
-    }
-
-    @Test
-    fun `dual-mono rebuilds never hard-reset`() {
-        val recovery = recovery()
-        repeat(6) {
-            advanceSeconds(30)
-            assertNull(recovery.onReport(stereo())) // re-arm the unhealed bound
-            repeat(3) { recovery.onReport(dualMono()) }
-            val reason = recovery.onReport(dualMono())
-            assertNotNull(reason)
-            assertFalse("no 1.5 s silence for a possibly-centred passage", reason!!.contains(HARD_RESET_MARKER))
-        }
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.zerofriction.localcast.hotspot
 
 import com.zerofriction.localcast.pairing.PairingError
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -139,5 +140,21 @@ class HotspotMachineTest {
         for (error in PairingError.entries - PairingError.CONNECT_UNREACHABLE) {
             assertEquals("no hint for $error", false, hotspotHintFor(error))
         }
+    }
+
+    @Test
+    fun `a reservation granted after Stop is refused so the caller closes it`() {
+        val machine = HotspotMachine()
+        machine.startRequested(hasPermission = true)
+        machine.stopRequested() // the user changed their mind while it was starting
+        assertFalse("the late reservation must be closed, not kept", machine.started("DIRECT-x", "pw"))
+        assertEquals(HotspotMachine.State.Idle, machine.state.value)
+    }
+
+    @Test
+    fun `a reservation granted while Starting is accepted`() {
+        val machine = HotspotMachine()
+        machine.startRequested(hasPermission = true)
+        assertTrue(machine.started("DIRECT-x", "pw"))
     }
 }

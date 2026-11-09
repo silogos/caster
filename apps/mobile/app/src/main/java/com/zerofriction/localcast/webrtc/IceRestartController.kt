@@ -102,9 +102,16 @@ class IceRestartController(
      * socket reconnect) — it carries new ICE credentials too, so it joins the
      * deadline watch; the restart budget is untouched (the socket's own
      * ladder bounds that path).
+     *
+     * A pc that has not connected yet is not healthy: the offer opens a bad
+     * stretch if none is active, so [busy] turns true and the session's
+     * watchdog ticks. Without this an answer that never arrives (or a
+     * `setRemoteDescription` that fails) left the cast in NEGOTIATING
+     * forever — no deadline, no give-up (mobile review, group A).
      */
     fun onNegotiating(nowMs: Long) {
         if (gaveUp) return
+        badSinceMs = badSinceMs ?: nowMs
         lastOfferAtMs = nowMs
         nextRestartAtMs = null
     }

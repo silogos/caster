@@ -61,9 +61,6 @@ internal class MonoTapRecovery(
     private var unhealedDualMono = 0
     private var totalRebuilds = 0
 
-    /** Dead-channel rebuilds only — the hard-reset cadence counts these. */
-    private var deadChannelRebuilds = 0
-
     /** Rebuilds where the dead side stayed the same — the content-panning budget. */
     private var sameSideRebuilds = 0
     private var lastRebuildSide: DeadSide? = null
@@ -102,7 +99,6 @@ internal class MonoTapRecovery(
         val now = clock()
         if (hasRebuilt && now - lastRebuildAt < rebuildIntervalMs) return null
         totalRebuilds++
-        deadChannelRebuilds++
         if (!shuffled) sameSideRebuilds++
         lastRebuildSide = side
         hasRebuilt = true
@@ -110,7 +106,7 @@ internal class MonoTapRecovery(
         deadStreak = 0
         val counted = if (shuffled) " (side shuffled — uncounted)" else "/$maxRebuilds"
         return "one channel dead for $consecutiveWindows s " +
-            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild $totalRebuilds$counted${hardMarker()}"
+            "(mean|L|=${report.meanAbsLeft}, mean|R|=${report.meanAbsRight}) — rebuild $totalRebuilds$counted"
     }
 
     private fun onDualMonoWindow(report: StereoContentProbe.Report): String? {
@@ -126,17 +122,6 @@ internal class MonoTapRecovery(
         return "L=R for $dualMonoWindows s (mean|L|=${report.meanAbsLeft}, mean|L-R|=${report.meanAbsDiff}) " +
             "— rebuild $totalRebuilds (dual-mono $unhealedDualMono/$maxUnhealedDualMono unhealed)"
     }
-
-    /**
-     * Every [HARD_RESET_EVERY]th dead-channel rebuild goes nuclear
-     * ([HARD_RESET_MARKER]): the tap's HAL thread may be stuck in a broken
-     * config only a full teardown recreates (issue #101) — see
-     * PlaybackCaptureAudioSource. Dual-mono rebuilds never do: L=R may be
-     * genuine centred content (found live 2026-11-09 on a L/R/centre test
-     * clip), and a hard reset costs ~1.5 s of silence.
-     */
-    private fun hardMarker(): String =
-        if (deadChannelRebuilds % HARD_RESET_EVERY == 0) " $HARD_RESET_MARKER" else ""
 
     companion object {
         /** Below this mean amplitude a window says nothing about channels. */
@@ -170,11 +155,5 @@ internal class MonoTapRecovery(
 
         /** Minimum gap between rebuilds, so content flips cannot churn the app. */
         const val REBUILD_INTERVAL_MS = 8_000L
-
-        /** Every Nth rebuild releases all records and idles the input thread out. */
-        const val HARD_RESET_EVERY = 3
-
-        /** Marks a rebuild that must idle out the input thread (full teardown). */
-        const val HARD_RESET_MARKER = "[hard-reset]"
     }
 }

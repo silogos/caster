@@ -67,7 +67,7 @@ fun QrCamera(
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
         var frameCounter = 0
-        var delivered = false
+        val gate = ScanDeliveryGate()
         analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
             analyzeFrame(imageProxy, scanner) { detected ->
                 frameCounter += 1
@@ -79,10 +79,9 @@ fun QrCamera(
                             "rot=${imageProxy.imageInfo.rotationDegrees} qr=${detected != null}",
                     )
                 }
-                // Deliver once: a second detection while the UI transitions to
-                // Connecting would retrigger the whole flow at frame rate.
-                if (detected != null && !delivered) {
-                    delivered = true
+                // Not at frame rate, but not just once either: a wrong code
+                // must not block the right one (ScanDeliveryGate).
+                if (detected != null && gate.shouldDeliver(detected)) {
                     Log.i(TAG, "QR payload detected after $frameCounter frames (${detected.length} chars)")
                     onQrText(detected)
                 }

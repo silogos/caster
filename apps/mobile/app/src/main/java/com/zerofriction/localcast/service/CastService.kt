@@ -271,27 +271,39 @@ class CastService : Service() {
             )
         }
 
-        fun start(context: Context, args: StartArgs) {
-            if (pendingStart !== null) return // one cast at a time (v1 non-goal: multi-desktop)
-            // The handover must carry a *live* pairing (found live, 2026-09-20:
-            // a cast started with an already-closed client hangs in Starting
-            // forever — no Authorized/Failed event ever arrives on a dead
-            // socket, so nothing would end it). AUTHORIZED is the normal case;
-            // RECONNECTING is allowed — the session negotiates when re-auth
-            // succeeds, and expiry surfaces as a Failed event (→ ConnectionLost).
-            when (args.signaling.state.value) {
-                SignalingClient.State.AUTHORIZED,
-                SignalingClient.State.RECONNECTING,
-                -> Unit
-                else -> {
+        /**
+         * Starts a cast with the handed-over pairing. Returns false when the
+         * start is refused — the caller still owns [StartArgs.signaling] and
+         * must hand it back ([ConnectedDesktop.takeBack]); a refused start
+         * used to leave the live socket with no listener at all (review
+         * 2026-11-09).
+         */
+        fun start(context: Context, args: StartArgs): Boolean {
+            when (val refusal = startRefusal(pendingStart !== null, _state.value, args.signaling.state.value)) {
+                null -> Unit
+                StartRefusal.BUSY -> {
+                    Log.w(TAG, "refusing to start: a cast is already starting or running")
+                    return false
+                }
+                StartRefusal.DEAD_PAIRING -> {
                     Log.w(TAG, "refusing to start: signaling is ${args.signaling.state.value}")
                     _state.value = CastState.Failed(context.getString(R.string.cast_failed_generic))
-                    return
+                    return false
                 }
             }
             pendingStart = args
             _state.value = CastState.Starting(args.desktopName)
-            ContextCompat.startForegroundService(context, Intent(context, CastService::class.java))
+            return try {
+                ContextCompat.startForegroundService(context, Intent(context, CastService::class.java))
+                true
+            } catch (e: RuntimeException) {
+                // A start the OS refuses (e.g. a background FGS start) must not
+                // leave pendingStart set — it would block every later cast.
+                Log.w(TAG, "cast service start refused by the OS: ${e.message}")
+                pendingStart = null
+                _state.value = CastState.Failed(context.getString(R.string.cast_failed_generic))
+                false
+            }
         }
 
         /**
@@ -1179,4 +1191,29 @@ private fun MediaCastSession.Failure.logDetail(): String = when (this) {
     MediaCastSession.Failure.DesktopEnded -> "desktop ended the session (bye)"
     MediaCastSession.Failure.ConnectionLost -> "connection to the desktop lost (ice/signaling)"
     is MediaCastSession.Failure.Error -> detail
+}
+
+/** Why [CastService.start] refuses a start. */
+internal enum class StartRefusal {
+    /** One cast at a time (v1 non-goal: multi-desktop) — one is starting or running. */
+    BUSY,
+
+    /**
+     * The handover must carry a *live* pairing (found live, 2026-09-20: a cast
+     * started with an already-closed client hangs in Starting forever — no
+     * Authorized/Failed event ever arrives on a dead socket). AUTHORIZED is the
+     * normal case; RECONNECTING is allowed — the session negotiates when
+     * re-auth succeeds, and expiry surfaces as a Failed event.
+     */
+    DEAD_PAIRING,
+}
+
+internal fun startRefusal(
+    pending: Boolean,
+    castState: CastState,
+    signaling: SignalingClient.State,
+): StartRefusal? = when {
+    pending || castState is CastState.Starting || castState is CastState.Casting -> StartRefusal.BUSY
+    signaling != SignalingClient.State.AUTHORIZED && signaling != SignalingClient.State.RECONNECTING -> StartRefusal.DEAD_PAIRING
+    else -> null
 }

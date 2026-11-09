@@ -79,14 +79,6 @@ class PlaybackCaptureAudioSource(
     private var pendingRebuildReason: String? = null
 
     /**
-     * True while a hard reset idles with no record — the ADM's read loop then
-     * fails benignly on the released record; those errors must not surface as
-     * a capture failure ([GameAudioState.Failed]) because the cast continues.
-     */
-    @Volatile
-    private var hardResetInProgress = false
-
-    /**
      * The capture record opened by [preOpenCapture] — BEFORE the ADM's
      * microphone record exists — consumed by the initial substitution and
      * released there or by [release] if the cast never reaches record start.
@@ -169,15 +161,7 @@ class PlaybackCaptureAudioSource(
                 errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
                 errorMessage: String,
             ) = captureFailed("record start ($errorCode): $errorMessage")
-            override fun onWebRtcAudioRecordError(errorMessage: String) {
-                // During a hard reset the read loop hits a released record by
-                // design — not a capture failure, the cast continues.
-                if (hardResetInProgress) {
-                    Log.i(TAG, "record error during hard reset (expected): $errorMessage")
-                    return
-                }
-                captureFailed("record error: $errorMessage")
-            }
+            override fun onWebRtcAudioRecordError(errorMessage: String) = captureFailed("record error: $errorMessage")
         })
         .createAudioDeviceModule()
 
@@ -522,32 +506,16 @@ class PlaybackCaptureAudioSource(
      * never breaks. The old record is stopped only after the swap. Best-effort
      * by design: a failed rebuild keeps the current record streaming and logs.
      *
-     * A **hard** rebuild (reason carrying the marker) first releases every
-     * record and idles [HARD_RESET_IDLE_MS]: the ROM's submix input thread
-     * keeps the HAL config of whichever client created it (found live: ours
-     * ran through a 16 kHz HAL while TikTok's cast ran 48 kHz — the fold's
-     * mechanism, issue #101); letting the thread die so our 48 kHz stereo
-     * record becomes its first client is the only way to re-create it clean.
-     * The idle gap reaches the encoder as ~1.5 s of silence — the same frame
-     * clock as a user mute.
+     * (A "hard" variant that released every record and slept 3 s on this —
+     * the ADM's recording — thread was removed 2026-11-09: it was built on the
+     * "stuck HAL thread" theory the session-ordering finding replaced, it
+     * never held, it cost ~3 s of silence, and a failed rebuild after it left
+     * game audio dead for the cast.)
      */
     private fun rebuildCaptureRecord(reason: String) {
-        val hard = reason.contains(HARD_RESET_MARKER)
         val context = swapContext ?: return
         val liveProjection = projection() ?: return
         val recordField = RECORD_FIELD ?: return
-        if (hard) {
-            try {
-                hardResetInProgress = true
-                (recordField.get(context.audioInput) as? AudioRecord)?.let { stopAndRelease(it) }
-                Log.i(TAG, "capture hard reset: records released, idling for input-thread teardown")
-                Thread.sleep(HARD_RESET_IDLE_MS)
-            } catch (t: Throwable) {
-                Log.w(TAG, "capture hard reset idle failed: ${t.message}")
-            } finally {
-                hardResetInProgress = false
-            }
-        }
         try {
             val fresh = try {
                 // Submix first (the adapter pattern), playback capture as fallback.
@@ -810,8 +778,6 @@ class PlaybackCaptureAudioSource(
         private const val REMOTE_SUBMIX_AUDIO_SOURCE = 8
 
         /** See [rebuildCaptureRecord] — how long all records stay released so the input thread dies. */
-        private const val HARD_RESET_MARKER = MonoTapRecovery.HARD_RESET_MARKER
-        private const val HARD_RESET_IDLE_MS = 3_000L
 
         /**
          * Lazy lookups, never class-init: a library update that renames the

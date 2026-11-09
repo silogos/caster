@@ -114,6 +114,18 @@ object ConnectedDesktop {
     }
 
     /**
+     * A refused cast start gives the connection back: this holder listens to
+     * the socket again, so a `bye` or failure is still heard and Home's
+     * Connected state stays true. No-op unless [client] is the one released.
+     */
+    fun takeBack(client: SignalingClient) {
+        if (signaling !== client || ownsSocket) return
+        client.addListener(listener)
+        ownsSocket = true
+        Log.i(TAG, "cast start refused — connection taken back")
+    }
+
+    /**
      * "Disconnect" (ADR-006, refined 2026-10-30): close the *connection* only
      * — `bye user-ended` on whichever socket this side still owns, the trust
      * store untouched. The desktop stays on its no-input stage and this side

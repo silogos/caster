@@ -240,4 +240,33 @@ class IceRestartControllerTest {
         h.controller.onFailed(11_000) // exhausted
         assertEquals(listOf("3 ice restarts exhausted"), h.giveUps)
     }
+
+    // Mobile review, group A: an answer that never arrives (or a failed
+    // setRemoteDescription) used to leave the cast in NEGOTIATING forever —
+    // the offer did not open a bad stretch, so nothing ever ticked.
+    @Test
+    fun `a cast-start offer with no answer is watched - restarts then gives up honestly`() {
+        val h = Harness()
+        h.controller.onNegotiating(0) // cast start, healthy before
+        assertTrue(h.controller.busy) // the session's watchdog runs now
+        var t = 0L
+        while (h.giveUps.isEmpty() && t <= IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS) {
+            t += 500
+            h.tick(t)
+        }
+        assertEquals(listOf(1, 2, 3), h.restarts) // recovery attempts first
+        assertEquals(1, h.giveUps.size) // then an honest, bounded failure
+        assertTrue(t <= IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS)
+    }
+
+    @Test
+    fun `a cast-start offer that connects leaves nothing running`() {
+        val h = Harness()
+        h.controller.onNegotiating(0)
+        h.controller.onConnected(1_200)
+        assertFalse(h.controller.busy)
+        h.tick(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS * 2)
+        assertTrue(h.restarts.isEmpty())
+        assertTrue(h.giveUps.isEmpty())
+    }
 }
