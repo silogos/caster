@@ -166,6 +166,15 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Not shipped — item 18 (pause the Opus fallback track while the channel flows):** tried and disproven on-device, [ADR-016](../decisions/ADR-016-pause-fallback-opus-track.md) (rejected): both pausing (`active = false`) and muting (`setEnabled(false)`) the track stop libwebrtc's ADM recording, which is the channel's own source, and produced a ~0.7 s gap every ~2 s.
 **Accept:** `testDebugUnitTest` 336/336, `assembleDebug` clean; on-device (TB321FU, 2026-11-09) a ~2.7 min cast with 0 mid-cast `stopRecording`, the channel steady at 100 chunks/s, and 0 underruns. Same session: the Opus fallback track was measured **dual-mono** despite the stereo fmtp (features/game-audio.md). **On-device pending:** the re-auth keep path (needs a socket-only drop).
 
+## Fix 2026-11m — Mobile review, group C: security and privacy ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group C of A–G.)*
+**Scope:**
+- **LAN-only hosts:** the QR's `h`, `auth-ok.hosts` and saved hosts are limited to IPv4 literals in private/link-local ranges or on the phone's own subnet (`LanHosts`; pairing.md). A QR with none fails as `connect-unreachable`. Ports above 65535 are rejected.
+- **No `REMOTE_SUBMIX`:** the capture never tries `AUDIO_SOURCE_REMOTE_SUBMIX`, which on a permissive ROM records the whole mix past other apps' opt-outs (audio.md).
+- **Backup:** cloud backup and device transfer exclude the install deviceId and the Keystore-sealed saved desktop.
+
+**Accept:** `testDebugUnitTest` 346/346 (`LanHostsTest`, QR parser LAN cases), `assembleDebug` clean. **On-device pending:** pairing by QR with the real desktop, a reconnect to the saved desktop, and a cast with game audio.
+
 ---
 
 ## Definition of Done (every phase)

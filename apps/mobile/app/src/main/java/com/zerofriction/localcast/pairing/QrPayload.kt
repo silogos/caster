@@ -37,4 +37,7 @@ enum class QrPayloadError {
 
     /** Unknown payload version `v` — apps are incompatible. */
     UNSUPPORTED_VERSION,
+
+    /** No host in `h` is on the local network ([LanHosts]) — LAN only. */
+    NO_LAN_HOST,
 }

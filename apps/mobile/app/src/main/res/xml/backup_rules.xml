@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 10–11 auto-backup: the same exclusions as data_extraction_rules.xml
+  (the install identity and the Keystore-sealed saved desktop stay on this
+  phone). Keep the two files in sync.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="zfc_device.xml" />
+    <exclude domain="sharedpref" path="zfc.saved-desktop.xml" />
+</full-backup-content>

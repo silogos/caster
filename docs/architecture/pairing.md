@@ -37,6 +37,8 @@ Compact JSON encoded as QR (type 2/byte, error correction M). Field names are de
 
 Wire endpoint: `ws://<host>:<port>/zfc/v1`.
 
+**LAN-only host check (phone side, 2026-11-09, mobile review group C):** the phone connects only to `h` entries that are IPv4 literals in a private or link-local range (RFC 1918, RFC 3927), or inside a subnet the phone is on right now (a LAN that hands out public addresses is still the same LAN). Anything else (internet addresses, names, loopback, CGNAT/VPN ranges) is dropped, and a QR left with no host fails as `connect-unreachable`. The same rule filters `auth-ok.hosts` before they are saved, and the saved hosts when reconnecting. No protocol change: `v` stays 1. (`pairing/LanHosts.kt`)
+
 Approximate encoded size: 130–170 bytes → comfortably scannable QR.
 
 ## Session lifecycle (desktop side)
@@ -87,7 +89,7 @@ trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "zfc-trust-v1", L = 32)
 No protocol message carries it; a passive sniffer sees only HMAC outputs and cannot compute the key (the same property that protects the handshake itself, ADR-002). A **re-pair rotates the key** (fresh `k` per QR session) — regenerating the QR and re-pairing evicts any trust derived from a photographed older code.
 
 - **Desktop** persists `{deviceId, name, trustKey, createdAt, lastConnectedAt}` (single entry — the last phone that paired while nothing was trusted) in `trust.json` under the Electron userData dir, plus its own persistent `desktopId` UUID.
-- **Phone** persists `{desktopId, name, hosts, port, trustKey}` (single entry) in SharedPreferences, the key sealed with an Android Keystore AES-GCM vault (`pairing/TrustVault`) — the app allows OS backups, and the sealed document alone cannot yield the key.
+- **Phone** persists `{desktopId, name, hosts, port, trustKey}` (single entry) in SharedPreferences, the key sealed with an Android Keystore AES-GCM vault (`pairing/TrustVault`) — the app allows OS backups, but **this entry and the install deviceId (`zfc_device`) are excluded** from cloud backup and device-to-device transfer (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`; mobile review 2026-11-09, group C). A restored deviceId would make two phones share one identity, and a restored entry could never unseal its key on another phone anyway.
 - Both stores degrade to empty on anything unreadable (logged) — the honest fallback is one QR re-scan, never a session on guessed values.
 
 ### Resume handshake
