@@ -16,6 +16,7 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `webrtc.rs` | One `MediaAnswerer` **per pc** (`media`, `mic`): answer, ICE both ways, the `game-audio` DataChannel, the fallback track, the video frame loop. | `audio`, `video` |
 | `audio.rs` | The game-audio ear path: source selection, ring, CPAL playout. | CoreAudio |
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
+| `pacing.rs` | When each frame shows: a schedule with a bounded 50 ms delay that evens out Wi-Fi delivery jitter (ADR-017). Pure — no I/O. | — |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
 | `settings.rs` | The receiver's own persisted controls (game volume, mute) — `native-receiver.json` beside the trust store. | filesystem |
 | `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |
@@ -62,7 +63,9 @@ The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-v
 
 ## Video
 
-`NativeVideoStream` → `to_i420()` → CPU copy into a pooled NV12 `'420v'` or `'420f'` (the decoded range, below) CVPixelBuffer → `CMSampleBuffer` (host-clock pts) → `AVSampleBufferDisplayLayer` (`resizeAspect`) in its own NSWindow.
+`NativeVideoStream` → `to_i420()` → CPU copy into a pooled NV12 `'420v'` or `'420f'` (the decoded range, below) CVPixelBuffer → `CMSampleBuffer` (pts = the pacer's due time on the host clock) → `AVSampleBufferDisplayLayer` (`resizeAspect`, on a host-clock timebase) in its own NSWindow.
+
+**Frame pacing (2026-11-09, [ADR-017](../decisions/ADR-017-receiver-frame-pacing.md)).** libwebrtc runs with zero playout delay (ADR-015), so frames leave the decoder as unevenly as Wi-Fi delivered them. During PUBG at 60 fps that meant bursts 2–5 ms apart, then 50–160 ms gaps, while the phone sent evenly. Shown on arrival, that was the stutter. `pacing.rs` gives each frame a slot one estimated frame interval after the previous one: never before the frame arrives, never more than 50 ms after it. The schedule drains 0.5 % faster than the stream, so it returns to the live edge when Wi-Fi is calm. The layer's timebase is the host clock, so the pts is the moment of display. libwebrtc's own jitter buffer was smoother, but its delay was felt; our cap keeps the delay at ~30 ms on average. Gaps longer than 50 ms still show. The `video:` log line reports `pacing delay avg/max`, `late` and `capped`.
 
 **Colour range, per stream (2026-11-09).** The display layer takes the YCbCr range from the pool's pixel format, and a wrong guess is visible. Full-range data read as video range crushes dark tones to black and clips highlights: the phone app's `#161b22` background showed as near black, with a measured luma of 27 where video range would be 39. Video-range data read as full range turns blacks grey. Neither range can be assumed:
 - VideoToolbox's H.264 decoder writes its own CVPixelBuffer format. On the TB321FU stream that format is full range.
@@ -71,7 +74,7 @@ The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-v
 So `range_of_frame` reads the decoder buffer's pixel format before the I420 copy (`'420f'` and the other full-range formats → full), and the pool and format description are keyed by range. Limitation: a software-decoded frame carries no range the Rust API exposes, so it is taken as video range.
 
 - **Why the copy:** webrtc-sys's zero-copy `get_cv_pixel_buffer` leaks an ObjC wrapper + a native ref per call (every decoded IOSurface pinned — 9 GB in 2 min).
-- **Bounded memory:** the pool allocation threshold (8 buffers) drops a frame rather than grow; a layer not ready drops at the live edge (enqueueing anyway reached 20 GB); a hidden window (not composited — each queued sample pins a surface, 8.8 GB in 7 min) drops frames and flushes.
+- **Bounded memory:** the pool allocation threshold (10 buffers — paced samples wait in the layer) drops a frame rather than grow; a layer not ready drops at the live edge (enqueueing anyway reached 20 GB); a hidden window (not composited — each queued sample pins a surface, 8.8 GB in 7 min) drops frames and flushes.
 - **Visibility** is read on the main thread every 250 ms and published through an atomic; a window that has never shown a frame is raised once.
 - Every layer call runs inside one `objc2::exception::catch`: an exception drops a frame, never the process.
 - **Frameless** (the Electron receiver's frameless spec): no title bar, no traffic lights, square corners — a pure video surface for OBS. Drag the video to move it, drag an edge to resize; it is closed from the deck's *Close video*.
