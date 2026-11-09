@@ -39,40 +39,30 @@
     <string name="reconnecting">Reconnecting to the desktop…</string>
     <string name="session_ended">The desktop ended the session. Scan again to connect.</string>
     <string name="disconnect">Disconnect</string>
-    <string name="scan_again">Scan again</string>
     <string name="manual_payload_label">Debug: paste the QR payload JSON</string>
     <string name="manual_payload_connect">Connect from payload</string>
 
     <!-- Cast controls (Phase 5), shown once paired. -->
     <string name="starting_cast">Starting the cast…</string>
     <string name="casting_to">Casting to %1$s</string>
-    <string name="stop_casting">Stop casting</string>
     <string name="cast_failed_generic">Couldn\'t start the cast. Please try again.</string>
     <string name="cast_stopped_projection_revoked">The screen cast was stopped.</string>
     <!-- Phase6: mid-cast loss of the desktop (ice failure, or the signaling
          ladder ran out after the desktop closed / the QR session expired). -->
     <string name="cast_failed_connection_lost">The connection to the desktop was lost. Scan the QR code to reconnect.</string>
     <string name="cast_notification_channel">Screen cast</string>
-    <string name="cast_notification_title">Casting your screen</string>
     <string name="cast_notification_text">Your screen is being shared with the desktop.</string>
     <string name="cast_notification_stop">Stop</string>
-    <string name="casting_background_hint">You can leave the app and use your phone normally — the cast keeps running until you stop it.</string>
 
     <!-- Game audio (Phase 7) — simple, non-technical (AGENTS.md); the raw
          capture/permission detail stays in the service logs. -->
-    <string name="mute_game_audio">Mute game audio</string>
-    <string name="unmute_game_audio">Unmute game audio</string>
     <string name="game_audio_off">Game audio is off for this cast.</string>
     <string name="game_audio_cannot_capture">This app\'s audio can\'t be captured.</string>
     <string name="game_audio_unavailable">Game audio isn\'t available for this cast.</string>
 
     <!-- Microphone (Phase 8) — simple, non-technical (AGENTS.md). -->
-    <string name="mic_off">Microphone is off for this cast.</string>
-    <string name="mic_needs_permission">Microphone needs permission to join the cast.</string>
     <string name="mic_unavailable">Microphone isn\'t available for this cast.</string>
     <string name="mic_silenced">Another app on this phone is using the microphone, so it isn\'t reaching the desktop. It recovers by itself when that app stops recording.</string>
-    <string name="turn_on_mic">Turn on microphone</string>
-    <string name="turn_off_mic">Turn off microphone</string>
     <string name="mic_headphones_hint">Tip: use headphones — otherwise the mic picks up the game audio playing from this phone.</string>
 
     <!-- Debug-only tone for verifying capture (Phase7, features/game-audio.md). -->
@@ -99,9 +89,6 @@
     <string name="settings_fps">Frame rate</string>
     <string name="settings_fps_value">%1$d fps</string>
     <string name="settings_audio">Audio</string>
-    <string name="settings_game_audio">Include game audio</string>
-    <string name="settings_mic">Start with microphone on</string>
-    <string name="settings_mic_hint">You can also turn the microphone on and off during a cast.</string>
 
     <!-- Auto quality (Phase12, thermal.md) — a policy like any other, first
              block of the Advanced card: conservative step-downs with
