@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the latency test pattern (docs/development/latency-measurement.md).
+     Exported so `adb shell am start` can open it; release builds do not contain it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".debug.LatencyTestActivity"
+            android:exported="true"
+            android:screenOrientation="unspecified" />
+    </application>
+</manifest>

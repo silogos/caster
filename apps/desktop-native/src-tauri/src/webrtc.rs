@@ -339,6 +339,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     // Per-frame cost of convert + copy + enqueue (rendered frames only).
     let mut render_cost = std::time::Duration::ZERO;
     let mut rendered: u32 = 0;
+    let mut marker = crate::latency_probe::LumaMarker::default();
     loop {
         if !crate::video::is_current_stream(generation) {
             log::info!(target: "webrtc", "video stream replaced or closed — frame loop exits");
@@ -383,6 +384,17 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
                 let (y, u, v) = i420.data();
                 let (sy, su, sv) = i420.strides();
                 let followup = renderer.render_i420(w, h, range, y, u, v, sy, su, sv);
+                if crate::latency_probe::enabled() {
+                    let decoded_ms = crate::latency_probe::wall_ms();
+                    if let Some(white) = marker.observe(crate::latency_probe::mean_luma(y, sy, w, h)) {
+                        log::info!(
+                            target: "latency",
+                            "video {} decoded_ms={decoded_ms:.1} hold_ms={:.1}",
+                            if white { "white" } else { "black" },
+                            renderer.last_hold_ms()
+                        );
+                    }
+                }
                 render_cost += started.elapsed();
                 rendered += 1;
                 followup

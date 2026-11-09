@@ -233,6 +233,9 @@ fn admit(p: &mut Producer, source: Source, now: Instant) -> Admit {
 
 fn feed(source: Source, chunk: &[u8]) {
     let e = engine();
+    if crate::latency_probe::enabled() {
+        probe_onset(chunk);
+    }
     {
         let mut p = e.producer.lock().expect("audio producer");
         match admit(&mut p, source, Instant::now()) {
@@ -247,6 +250,17 @@ fn feed(source: Source, chunk: &[u8]) {
         }
     }
     ensure_output();
+}
+
+/// Latency probe: logs a test beep's arrival with the ring depth ahead of it
+/// (that much plays before the beep does).
+fn probe_onset(chunk: &[u8]) {
+    static MARKER: Mutex<crate::latency_probe::OnsetMarker> = Mutex::new(crate::latency_probe::OnsetMarker::new());
+    let now = crate::latency_probe::wall_ms();
+    let onset = MARKER.lock().map(|mut m| m.observe(crate::latency_probe::peak_pcm16(chunk), now / 1000.0)).unwrap_or(false);
+    if onset {
+        log::info!(target: "latency", "audio beep arrived_ms={now:.1} ring_ms={}", stats().depth_ms);
+    }
 }
 
 fn meter_stereo(chunk: &[u8]) {

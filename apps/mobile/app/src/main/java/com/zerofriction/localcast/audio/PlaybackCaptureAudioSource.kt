@@ -7,6 +7,8 @@ import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.util.Log
+import com.zerofriction.localcast.BuildConfig
+import com.zerofriction.localcast.debug.LatencyClickProbe
 import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
 
@@ -118,6 +120,7 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
+            if (BuildConfig.DEBUG) LatencyClickProbe.onSamples(samples.data)
             onEncoderInputSamples?.invoke(samples.data)
             // A capped dump steps aside so the next dump starts — a long
             // session gets successive bounded files instead of just the first.

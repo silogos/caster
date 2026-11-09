@@ -476,6 +476,8 @@ pub struct Renderer {
     dropped_not_ready: u64,
     dropped_pool_full: u64,
     pacer: crate::pacing::Pacer,
+    /// How long the last rendered frame was held for its slot (seconds).
+    last_hold: f64,
 }
 
 impl Renderer {
@@ -497,6 +499,7 @@ impl Renderer {
             dropped_not_ready: 0,
             dropped_pool_full: 0,
             pacer: crate::pacing::Pacer::new(),
+            last_hold: 0.0,
         }
     }
 
@@ -510,6 +513,11 @@ impl Renderer {
             return None;
         }
         Some(self.drop_hidden(vw))
+    }
+
+    /// How long the last rendered frame waited for its slot, in ms.
+    pub fn last_hold_ms(&self) -> f64 {
+        self.last_hold * 1000.0
     }
 
     /// The pacing figures since the last call (the ~1 Hz video line).
@@ -528,7 +536,9 @@ impl Renderer {
         if !WINDOW_VISIBLE.load(Ordering::Relaxed) {
             return self.drop_hidden(vw);
         }
-        let due = self.pacer.due(host_now());
+        let arrival = host_now();
+        let due = self.pacer.due(arrival);
+        self.last_hold = due - arrival;
         let Some(pixel_buffer) = self.pixel_buffer(width, height, range) else {
             self.dropped_pool_full += 1;
             return Followup::None;

@@ -249,6 +249,16 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Tool 2026-11s — Glass-to-glass latency measurement ✅ measured on-device (2026-11-10)
+*(Not a numbered phase: the baseline before low-latency work, after comparing caster with scrcpy, Moonlight, Parsec and Steam Remote Play.)*
+**Scope:** a debug-only test pattern on the phone (flips + clicks), a receiver probe behind `ZFC_LATENCY_PROBE=1`, a phone-side click probe in the ADM samples callback (debug builds), and `tools/latency/measure.py`, which aligns the clocks over adb and pairs the marks — [latency-measurement.md](latency-measurement.md).
+
+**Accept:** desktop `cargo test` 73 (+4 probe), mobile `testDebugUnitTest` 400, debug and release builds. **On-device (three casts):**
+- video phone screen → Mac screen 63 / 67 / 117 ms (median per cast);
+- audio click → Mac playout ~250 ms, of which ~218 ms is inside the phone's playback-capture path (a drain experiment ruled out a start-up backlog).
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

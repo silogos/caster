@@ -11,7 +11,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 use std::io::Write;
 
 /// The app's own log scopes (the `target:` of every call site).
-const APP_SCOPES: &[&str] = &["signaling", "webrtc", "audio", "video", "pairing", "power", "settings", "tray"];
+const APP_SCOPES: &[&str] = &["signaling", "webrtc", "audio", "video", "pairing", "power", "settings", "tray", "latency"];
 const LEVEL_ENV: &str = "ZFC_LOG";
 
 struct Logger {
