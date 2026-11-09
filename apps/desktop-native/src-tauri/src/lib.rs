@@ -1,5 +1,6 @@
 mod audio;
 mod logging;
+mod pacing;
 mod pairing;
 mod power;
 mod protocol;

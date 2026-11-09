@@ -238,6 +238,17 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Fix 2026-11r — Receiver frame pacing ✅ verified on-device (2026-11-09)
+*(Not a numbered phase: the user reported the video "masih putus-putus" during PUBG.)*
+**Scope:**
+- **Diagnosis:** the phone sent steadily (0 dropped, RTT 5–9 ms), and the Mac received every frame. With zero playout delay ([ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)), the receiver showed frames on arrival. Wi-Fi delivered them in bursts with 50–160 ms gaps, which was the stutter. The phone's 97 → 30 fps decimation added a coarse cadence, and the Performance preset (60 fps) makes it finer.
+- **Fix:** `pacing.rs` schedules each frame one estimated interval after the previous one, never before it arrives, never more than 50 ms after. The display layer runs on a host-clock timebase, so the pts is the display time. libwebrtc's adaptive jitter buffer was tried first: it was smoother, but its delay was felt. Decision: [ADR-017](../decisions/ADR-017-receiver-frame-pacing.md).
+- **Diagnostics:** the `video:` line now carries `pacing delay avg/max`, `late` and `capped`.
+
+**Accept:** `cargo test` 69 (+7 `pacing`). **On-device (product owner, Lenovo TB321FU, PUBG, Performance preset):** paced delay avg ~30 ms / max 50 ms, 1–6 late frames/s; verdict "Mulus, delay oke". Not done: the AWDL test (the user declined to change the Mac's Wi-Fi).
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

@@ -18,6 +18,10 @@
 //! pinned — 9 GB in 2 min, measured), so the I420 planes are CPU-copied
 //! (~0.3 ms/frame) into OUR pooled NV12 buffers, bounded by the pool's
 //! allocation threshold.
+//!
+//! Timing: the layer runs on a host-clock timebase and each sample carries
+//! the time [`crate::pacing::Pacer`] gives it — shown on time, a few ms
+//! after arrival when Wi-Fi bunched it (ADR-017), never on raw arrival.
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -26,7 +30,7 @@ use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber, CFNumberType,
     CFRetained, CFString,
 };
-use objc2_core_media::{kCMTimeInvalid, CMFormatDescription, CMSampleBuffer, CMSampleTimingInfo};
+use objc2_core_media::{kCMTimeInvalid, CMClock, CMFormatDescription, CMSampleBuffer, CMSampleTimingInfo, CMTime, CMTimebase};
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferPool};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::ffi::c_void;
@@ -101,8 +105,11 @@ pub fn range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) ->
 /// Past it, allocation fails and the frame is dropped — the real bound
 /// (the first version passed a non-existent "MaximumBufferCount" key).
 /// 6 dropped ~1 % of frames live (82 of 7 200) while the layer still held
-/// queued samples; 8 leaves that headroom and stays bounded.
-const POOL_ALLOCATION_THRESHOLD: i64 = 8;
+/// queued samples; 8 left that headroom. Paced samples wait in the layer up
+/// to `pacing::MAX_DELAY` (three more frames at 60 fps), hence 10.
+const POOL_ALLOCATION_THRESHOLD: i64 = 10;
+/// Sample times in nanoseconds (the host clock's own timescale).
+const PTS_TIMESCALE: i32 = 1_000_000_000;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
 const WINDOW_TITLE: &str = "Zero-Friction Cast";
 /// Frameless (product choice, 2026-11-09 — the Electron receiver's
@@ -167,6 +174,43 @@ struct CGColorRef(*const c_void);
 unsafe impl objc2::encode::Encode for CGColorRef {
     const ENCODING: objc2::encode::Encoding =
         objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColor", &[]));
+}
+
+/// `CMTimebaseRef` with its Objective-C type encoding, for
+/// `-setControlTimebase:`.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct CMTimebaseRef(*const c_void);
+unsafe impl objc2::encode::Encode for CMTimebaseRef {
+    const ENCODING: objc2::encode::Encoding =
+        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("OpaqueCMTimebase", &[]));
+}
+
+// objc2-core-media leaves this one unbound (a TODO in its generated code).
+extern "C" {
+    fn CMTimebaseCreateWithSourceClock(allocator: *const c_void, source_clock: &CMClock, timebase_out: *mut *mut CMTimebase) -> i32;
+}
+
+/// The host clock now, in seconds — the pacer's and the layer's time line.
+fn host_now() -> f64 {
+    unsafe { CMClock::host_time_clock().time().seconds() }
+}
+
+/// Puts the layer on a timebase that IS the host clock (rate 1, set to host
+/// time), so a sample's host-clock pts is the moment it is shown. Without
+/// it the layer shows every sample on arrival. The layer retains it.
+unsafe fn attach_host_timebase(layer: Id) {
+    let clock = CMClock::host_time_clock();
+    let mut timebase: *mut CMTimebase = std::ptr::null_mut();
+    let status = CMTimebaseCreateWithSourceClock(std::ptr::null(), &clock, &mut timebase);
+    let Some(timebase) = NonNull::new(timebase).filter(|_| status == 0) else {
+        log::warn!(target: "video", "timebase failed status={status} — frames show on arrival");
+        return;
+    };
+    let timebase: CFRetained<CMTimebase> = CFRetained::from_raw(timebase);
+    timebase.set_time(clock.time());
+    timebase.set_rate(1.0);
+    let _: () = msg_send![layer, setControlTimebase: CMTimebaseRef(&*timebase as *const CMTimebase as *const c_void)];
 }
 
 /// Signal Deck colors for the card (designs/desktop-signal-deck.figcraft).
@@ -330,6 +374,7 @@ fn create_video_window() {
             let layer: Id = msg_send![class!(AVSampleBufferDisplayLayer), new];
             let gravity = NSString::from_str("AVLayerVideoGravityResizeAspect");
             let _: () = msg_send![layer, setVideoGravity: &*gravity];
+            attach_host_timebase(layer);
             let window: Id = msg_send![class!(NSWindow), alloc];
             let window: Id = msg_send![
                 window,
@@ -430,6 +475,7 @@ pub struct Renderer {
     dropped_hidden: u64,
     dropped_not_ready: u64,
     dropped_pool_full: u64,
+    pacer: crate::pacing::Pacer,
 }
 
 impl Renderer {
@@ -450,6 +496,7 @@ impl Renderer {
             dropped_hidden: 0,
             dropped_not_ready: 0,
             dropped_pool_full: 0,
+            pacer: crate::pacing::Pacer::new(),
         }
     }
 
@@ -465,7 +512,13 @@ impl Renderer {
         Some(self.drop_hidden(vw))
     }
 
-    /// Copies one I420 frame into a pooled NV12 buffer and enqueues it.
+    /// The pacing figures since the last call (the ~1 Hz video line).
+    pub fn take_pacing_window(&mut self) -> crate::pacing::Window {
+        self.pacer.take_window()
+    }
+
+    /// Copies one I420 frame into a pooled NV12 buffer and enqueues it, due
+    /// when the pacer says.
     #[allow(clippy::too_many_arguments)]
     pub fn render_i420(&mut self, width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
         let Some(vw) = VIDEO_WINDOW.get() else { return Followup::None };
@@ -475,12 +528,13 @@ impl Renderer {
         if !WINDOW_VISIBLE.load(Ordering::Relaxed) {
             return self.drop_hidden(vw);
         }
+        let due = self.pacer.due(host_now());
         let Some(pixel_buffer) = self.pixel_buffer(width, height, range) else {
             self.dropped_pool_full += 1;
             return Followup::None;
         };
         copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
-        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range)) else { return Followup::None };
+        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) else { return Followup::None };
         self.enqueue(vw, &sample);
         Followup::None
     }
@@ -524,7 +578,7 @@ impl Renderer {
         NonNull::new(out).map(|p| unsafe { CFRetained::from_raw(p) })
     }
 
-    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, dims: (u32, u32, VideoRange)) -> Option<CFRetained<CMSampleBuffer>> {
+    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, dims: (u32, u32, VideoRange), due: f64) -> Option<CFRetained<CMSampleBuffer>> {
         if self.format.as_ref().map(|(d, _)| *d) != Some(dims) {
             let mut desc: *const CMFormatDescription = std::ptr::null();
             let status = unsafe {
@@ -540,11 +594,12 @@ impl Renderer {
             log::info!(target: "video", "format description created for {}x{} ({:?} range)", dims.0, dims.1, dims.2);
         }
         let (_, format) = self.format.as_ref()?;
-        // Host-clock pts — the layer's own timeline (an epoch value overflowed
-        // CMTime and raised; a zero-based counter grew the decoder pool).
+        // Host-clock pts — the layer's timebase is the host clock (an epoch
+        // value overflowed CMTime and raised; a zero-based counter grew the
+        // decoder pool).
         let timing = CMSampleTimingInfo {
             duration: unsafe { kCMTimeInvalid },
-            presentationTimeStamp: unsafe { objc2_core_media::CMClock::host_time_clock().time() },
+            presentationTimeStamp: unsafe { CMTime::with_seconds(due, PTS_TIMESCALE) },
             decodeTimeStamp: unsafe { kCMTimeInvalid },
         };
         let mut sample: *mut CMSampleBuffer = std::ptr::null_mut();

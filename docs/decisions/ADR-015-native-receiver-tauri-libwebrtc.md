@@ -17,7 +17,7 @@ The work went ahead as one native app instead of an Electron sidecar, and two of
 
 | Concern | Choice | Module |
 |---|---|---|
-| Transport | `livekit::webrtc` (libwebrtc via FFI, prebuilt), factory with zero playout delay | `webrtc.rs` |
+| Transport | `livekit::webrtc` (libwebrtc via FFI, prebuilt), factory with zero playout delay (display timing: the receiver's own bounded pacer, [ADR-017](ADR-017-receiver-frame-pacing.md)) | `webrtc.rs` |
 | Video | decoded I420 → CPU copy (~0.3 ms/frame) into pooled NV12 CVPixelBuffers, `'420v'`/`'420f'` per the decoded range (architecture/desktop-native.md) → `AVSampleBufferDisplayLayer` in its own `NSWindow` (OBS window-captures it) | `video.rs` |
 | Game audio | the ADR-014 engine embedded: lock-free ring → CPAL, 40 ms rate-controlled playout | `audio.rs` |
 | Signaling | the documented protocol (pairing.md, webrtc.md), one task per connection | `signaling.rs`, `protocol.rs`, `pairing.rs` |

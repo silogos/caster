@@ -394,7 +394,21 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         frames += 1;
         if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
             let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
-            log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
+            let pacing = renderer.take_pacing_window();
+            if pacing.frames > 0 {
+                // Delay = how long frames waited for their slot (ADR-017);
+                // late = shown on arrival after a delivery gap (a hitch).
+                log::info!(
+                    target: "webrtc",
+                    "video: {frames} frames, {fps:.0} fps, {w}x{h} | pacing delay avg {:.0} max {:.0} ms, late {}, capped {}",
+                    pacing.delay_sum / pacing.frames as f64 * 1000.0,
+                    pacing.delay_max * 1000.0,
+                    pacing.late,
+                    pacing.capped
+                );
+            } else {
+                log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
+            }
             if rendered > 0 {
                 log::debug!(target: "video", "render cost {:?}/frame over {rendered} frames", render_cost / rendered);
             }
