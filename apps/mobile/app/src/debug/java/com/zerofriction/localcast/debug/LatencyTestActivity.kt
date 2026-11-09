@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
@@ -20,7 +21,10 @@ import android.view.WindowManager
  *
  * The screen flips black ↔ white every [FLIP_PERIOD_MS] and clicks on each
  * white flip. Each flip is logged with the wall-clock time of the vsync it
- * was drawn for (it shows one vsync later), so the receiver's matching marks
+ * was drawn for and (Android 13+) the time Android expects to put it on the
+ * phone's own screen — apps queue 2–4 frames ahead of the display, a delay
+ * the phone's screen has too and which is not the cast's (measured with
+ * atrace, 2026-11-10). The receiver's matching marks
  * (`ZFC_LATENCY_PROBE=1`) give the cast's latency once the two clocks are
  * aligned (`tools/latency/measure.py`). Cast this screen like any other.
  *
@@ -52,14 +56,47 @@ class LatencyTestActivity : Activity() {
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            frameCount += 1
-            strip.setBackgroundColor(if (frameCount % 2 == 0) Color.RED else Color.BLUE)
-            if (frameTimeNanos - lastFlipNanos >= FLIP_PERIOD_MS * 1_000_000L) {
-                lastFlipNanos = frameTimeNanos
-                flip(frameTimeNanos)
-            }
+            onFrame(frameTimeNanos, expectedPresentNanos = null)
             Choreographer.getInstance().postFrameCallback(this)
         }
+    }
+
+    /** Android 13+: the frame data carries when this frame is expected on screen. */
+    private val vsyncCallback: Any? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        object : Choreographer.VsyncCallback {
+            override fun onVsync(data: Choreographer.FrameData) {
+                onFrame(data.frameTimeNanos, data.preferredFrameTimeline.expectedPresentationTimeNanos)
+                Choreographer.getInstance().postVsyncCallback(this)
+            }
+        }
+    } else {
+        null
+    }
+
+    private fun onFrame(frameTimeNanos: Long, expectedPresentNanos: Long?) {
+        frameCount += 1
+        strip.setBackgroundColor(if (frameCount % 2 == 0) Color.RED else Color.BLUE)
+        if (frameTimeNanos - lastFlipNanos >= FLIP_PERIOD_MS * 1_000_000L) {
+            lastFlipNanos = frameTimeNanos
+            flip(frameTimeNanos, expectedPresentNanos)
+        }
+    }
+
+    private fun startFrames() {
+        val callback = vsyncCallback
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && callback is Choreographer.VsyncCallback) {
+            Choreographer.getInstance().postVsyncCallback(callback)
+        } else {
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        }
+    }
+
+    private fun stopFrames() {
+        val callback = vsyncCallback
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && callback is Choreographer.VsyncCallback) {
+            Choreographer.getInstance().removeVsyncCallback(callback)
+        }
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,12 +120,12 @@ class LatencyTestActivity : Activity() {
             hide(WindowInsets.Type.systemBars())
             systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-        Choreographer.getInstance().postFrameCallback(frameCallback)
+        startFrames()
         startAudio()
     }
 
     override fun onPause() {
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        stopFrames()
         running = false
         audioThread?.join(AUDIO_JOIN_MS)
         audioThread = null
@@ -125,13 +162,27 @@ class LatencyTestActivity : Activity() {
             }
             track.play()
             var clickLeft = 0
+            var framesWritten = 0L
+            val stamp = android.media.AudioTimestamp()
             while (running) {
                 if (clickPending) {
                     clickPending = false
                     clickLeft = CLICK_CHUNKS
-                    Log.i(TAG, "click written_ms=${"%.1f".format(System.currentTimeMillis().toDouble())}")
+                    // How long until the frame about to be written leaves this
+                    // track for the mixer: queued frames ahead of it, by the
+                    // track's own presentation timestamp. Part of the click's
+                    // path a game's audio has too; reported separately.
+                    val ahead = if (track.getTimestamp(stamp)) {
+                        val queuedMs = (framesWritten - stamp.framePosition) * 1000.0 / SAMPLE_RATE
+                        val sinceStampMs = (System.nanoTime() - stamp.nanoTime) / 1_000_000.0
+                        " track_ms=${"%.1f".format(queuedMs - sinceStampMs)}"
+                    } else {
+                        ""
+                    }
+                    Log.i(TAG, "click written_ms=${"%.1f".format(System.currentTimeMillis().toDouble())}$ahead")
                 }
                 track.write(if (clickLeft > 0) click else silence, 0, silence.size)
+                framesWritten += chunkFrames
                 if (clickLeft > 0) clickLeft -= 1
             }
             track.stop()
@@ -139,17 +190,16 @@ class LatencyTestActivity : Activity() {
         }, "latency-click").apply { start() }
     }
 
-    private fun flip(frameTimeNanos: Long) {
+    private fun flip(frameTimeNanos: Long, expectedPresentNanos: Long?) {
         white = !white
         view.setBackgroundColor(if (white) Color.WHITE else Color.BLACK)
-        // The vsync this frame was drawn for, on the wall clock.
-        val frameMs = System.currentTimeMillis() - (System.nanoTime() - frameTimeNanos) / 1_000_000.0
-        if (white) {
-            clickPending = true
-            Log.i(TAG, "flip white frame_ms=${"%.1f".format(frameMs)} refresh_hz=${refreshHz()}")
-        } else {
-            Log.i(TAG, "flip black frame_ms=${"%.1f".format(frameMs)} refresh_hz=${refreshHz()}")
-        }
+        // Monotonic → wall clock: the vsync this frame was drawn for, and when
+        // Android expects it on the phone's screen.
+        val wallOffsetMs = System.currentTimeMillis() - System.nanoTime() / 1_000_000.0
+        val frameMs = wallOffsetMs + frameTimeNanos / 1_000_000.0
+        val present = expectedPresentNanos?.let { " present_ms=${"%.1f".format(wallOffsetMs + it / 1_000_000.0)}" } ?: ""
+        if (white) clickPending = true
+        Log.i(TAG, "flip ${if (white) "white" else "black"} frame_ms=${"%.1f".format(frameMs)}$present refresh_hz=${refreshHz()}")
     }
 
     private fun refreshHz(): String = "%.0f".format(display?.refreshRate ?: 0f)

@@ -51,10 +51,14 @@ def clock_offset(seconds):
 def phone_marks(path):
     flips, beeps = [], []
     for line in open(path, errors="replace"):
-        m = re.search(r"flip (white|black) frame_ms=([\d.]+)(?: refresh_hz=(\d+))?", line)
+        m = re.search(r"flip (white|black) frame_ms=([\d.]+)(?: present_ms=([\d.]+))?(?: refresh_hz=(\d+))?", line)
         if m:
-            hz = float(m.group(3)) if m.group(3) and float(m.group(3)) > 0 else DEFAULT_PHONE_HZ
-            flips.append((m.group(1), float(m.group(2)), hz))
+            hz = float(m.group(4)) if m.group(4) and float(m.group(4)) > 0 else DEFAULT_PHONE_HZ
+            frame_ms = float(m.group(2))
+            # On the phone's screen: Android's expected presentation when the
+            # pattern logged it (Android 13+), else one vsync after the frame.
+            shown = float(m.group(3)) if m.group(3) else frame_ms + 1000 / hz
+            flips.append((m.group(1), frame_ms, hz, shown))
         m = re.search(r"click written_ms=([\d.]+)", line)
         if m:
             beeps.append(float(m.group(1)))
@@ -94,6 +98,9 @@ def main():
     ap.add_argument("--logcat", required=True)
     ap.add_argument("--receiver", required=True)
     ap.add_argument("--sync-seconds", type=float, default=8)
+    ap.add_argument("--phone-screen-lag", type=float, default=None,
+                    help="SurfaceFlinger's actual − desired present for the pattern layer (ms): "
+                         "how much later the phone's own screen showed frames than Android expected")
     args = ap.parse_args()
 
     offset, jitter, n = clock_offset(args.sync_seconds)
@@ -103,16 +110,22 @@ def main():
     print(f"phone: {len(flips)} flips, {len(beeps)} beeps | receiver: {len(video)} video marks, {len(audio)} beeps")
 
     to_decode, glass = [], []
-    rates = sorted({hz for _, _, hz in flips})
+    rates = sorted({hz for _, _, hz, _ in flips})
     print(f"phone display refresh during the run: {', '.join(f'{r:.0f} Hz' for r in rates)}")
-    for colour, frame_ms, hz in flips:
-        shown_on_phone = frame_ms + 1000 / hz + offset
+    ahead = [shown - frame_ms for _, frame_ms, _, shown in flips]
+    if ahead:
+        print(f"phone pipeline (frame drawn → on the phone's screen): median {statistics.median(ahead):.1f} ms")
+    for colour, frame_ms, hz, shown in flips:
+        shown_on_phone = shown + offset
         hit = first_after(shown_on_phone, [v for v in video if v[0] == colour], key=lambda v: v[1])
         if hit:
             to_decode.append(hit[1] - shown_on_phone)
             glass.append(hit[1] - shown_on_phone + hit[2] + MAC_VSYNC_MS)
     summary("video  phone screen → Mac decoded       ", to_decode)
     summary("video  phone screen → Mac screen (est.) ", glass)
+    if args.phone_screen_lag is not None:
+        summary(f"video  vs the phone's ACTUAL screen (−{args.phone_screen_lag:.0f} ms)",
+                [g - args.phone_screen_lag for g in glass])
 
     ear = []
     for beep_ms in beeps:
@@ -120,6 +133,13 @@ def main():
         if hit:
             ear.append(hit[0] + hit[1] - (beep_ms + offset))
     summary("audio  click into phone track → Mac playout", ear)
+
+    track = []
+    for line in open(args.logcat, errors="replace"):
+        m = re.search(r"click written_ms=[\d.]+ track_ms=(-?[\d.]+)", line)
+        if m:
+            track.append(float(m.group(1)))
+    summary("audio    of which: inside the click's own track", track)
 
     captured = []
     for line in open(args.logcat, errors="replace"):
