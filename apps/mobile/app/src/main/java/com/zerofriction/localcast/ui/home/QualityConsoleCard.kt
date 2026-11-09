@@ -168,7 +168,11 @@ fun QualityConsoleCard(
                 Slider(
                     value = (shownMaxBps / BPS_PER_MBPS).toFloat(),
                     onValueChange = { mbps -> dragMaxBps = mbps * BPS_PER_MBPS },
-                    onValueChangeFinished = {
+                    onValueChangeFinished = finished@{
+                        // The live readout can change mid-drag (auto quality
+                        // steps), which re-keys `remember` and resets the drag
+                        // to NaN — NaN.roundToInt() threw (review 2026-11-09).
+                        if (dragMaxBps.isNaN()) return@finished
                         val bps = dragMaxBps.roundToInt()
                         dragMaxBps = Float.NaN
                         if (casting) {

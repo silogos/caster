@@ -150,6 +150,11 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Scope:** the main window restyled with the Signal Deck tokens — QR hero, then the deck (source, STANDBY/ON AIR/RECONNECTING, timecode + the phone's readout, audio chips, game-audio switch + volume, two-step Disconnect). **Open video / Close video** drives the native window; video and sound play only while it is open (the phone keeps sending; closed = no conversion, gain 0); the window's own close button is detected; with no live stream the video window shows a capture-card-style *NO INPUT* card instead of a frozen frame. The webview JPEG preview is removed (the deck replaces the receiving stage). Phone names now parse like Electron's (`TB321FU`, not `Android 16; TB321FU`).
 **Accept:** `cargo test --lib` 57/57; the deck exercised in a browser against a mocked Tauri API (states, timecode, open/close, a user-closed window, reconnecting). **On-device pending:** open/close with a live cast — picture and sound start/stop together.
 
+## Fix 2026-11j — Mobile review, group A: crash and stuck-state fixes ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group A of A–G.)*
+**Scope:** the QR parser rejects session ids/secrets of the wrong decoded size (16/32 bytes) instead of failing later at HMAC time; the bitrate slider's release ignores a cleared drag (`NaN`); the QR camera re-delivers the same code after 2 s and a different code at once (a rejected scan no longer latches the scanner); a hotspot start that lands after a cancel releases its reservation; `CastService.start` refuses a double start and a dead pairing, survives a refused foreground start, and hands the socket back to `ConnectedDesktop` when it refuses; the hard-reset recovery path is removed (audio.md); every full offer is watched by the ICE ladder, so a missing answer can no longer leave the cast in NEGOTIATING forever (webrtc.md). Mic is out of scope (product owner: the mic currently rides the laptop's headset).
+**Accept:** `testDebugUnitTest` 333/333, `assembleDebug` clean. **On-device pending:** rescan after a wrong QR, the bitrate slider during a live cast, a normal cast start → CONNECTED.
+
 ---
 
 ## Definition of Done (every phase)

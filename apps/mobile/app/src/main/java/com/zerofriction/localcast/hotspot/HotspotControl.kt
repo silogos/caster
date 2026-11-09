@@ -119,7 +119,10 @@ object HotspotControl {
                 machine.startFailed(HotspotMachine.Reason.UNKNOWN)
                 return
             }
-            machine.started(credentials.first, credentials.second)
+            if (!machine.started(credentials.first, credentials.second)) {
+                Log.i(TAG, "hotspot granted after it was stopped — closing the reservation")
+                closeReservation()
+            }
         }
 
         override fun onFailed(reason: Int) {

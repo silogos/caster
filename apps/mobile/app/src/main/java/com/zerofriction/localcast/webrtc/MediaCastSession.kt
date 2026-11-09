@@ -497,6 +497,9 @@ class MediaCastSession(
         }
         onState(State.NEGOTIATING)
         restarts.onNegotiating(System.currentTimeMillis())
+        // The offer's deadline needs the clock running even before any
+        // DISCONNECTED/FAILED — an answer that never comes is otherwise silent.
+        scheduleRecoveryWatchdog()
         createAndSendOffer(newPc)
     }
 
@@ -865,7 +868,8 @@ class MediaCastSession(
      * Ticks the restart policy while a bad stretch is active. The stats
      * poller can't be this clock (it only starts after a first CONNECTED, and
      * getStats dries up on a dead pc), so recovery carries its own timer —
-     * armed on disconnect/failure, self-canceling on recovery.
+     * armed on a fresh full offer and on disconnect/failure, self-canceling
+     * on recovery.
      */
     private val recoveryRunnable = object : Runnable {
         override fun run() {

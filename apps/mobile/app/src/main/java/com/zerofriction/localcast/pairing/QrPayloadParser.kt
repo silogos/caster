@@ -32,8 +32,25 @@ object QrPayloadParser {
         ) {
             return Result.failure(PairingParseException(QrPayloadError.NOT_ZFC_QR))
         }
+        // pairing.md: `s` is 16 random bytes and `k` 32, both base64url. A
+        // malformed value used to reach Handshake.decodeSecret unguarded and
+        // crash the app (review 2026-11-09) — reject it as a foreign QR.
+        if (decodedSize(payload.s) != SESSION_ID_BYTES || decodedSize(payload.k) != SECRET_BYTES) {
+            return Result.failure(PairingParseException(QrPayloadError.NOT_ZFC_QR))
+        }
         return Result.success(payload)
     }
+
+    /** Decoded byte count of a base64url value, or -1 when it is not base64url. */
+    private fun decodedSize(base64Url: String): Int = try {
+        java.util.Base64.getUrlDecoder().decode(base64Url).size
+    } catch (_: IllegalArgumentException) {
+        -1
+    }
+
+    /** pairing.md QR payload v1: `s` = 16 random bytes, `k` = 32 random bytes. */
+    const val SESSION_ID_BYTES = 16
+    const val SECRET_BYTES = 32
 }
 
 class PairingParseException(val error: QrPayloadError) : Exception(error.name)

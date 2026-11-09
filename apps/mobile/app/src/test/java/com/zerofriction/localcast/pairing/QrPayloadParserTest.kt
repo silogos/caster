@@ -54,4 +54,25 @@ class QrPayloadParserTest {
         const val VALID_PAYLOAD =
             """{"v":1,"t":"zfc","h":["192.168.1.42","192.168.137.1"],"p":52341,"s":"Jm1LIOO4mWm0lRSSl2fClw","k":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","e":1758300000}"""
     }
+
+    private fun qr(s: String, k: String) =
+        """{"v":1,"t":"zfc","h":["192.168.1.42"],"p":52341,"s":"$s","k":"$k","e":1758300000}"""
+
+    @Test
+    fun `a secret that is not base64url is a foreign QR, not a crash`() {
+        val result = QrPayloadParser.parse(qr("Jm1LIOO4mWm0lRSSl2fClw", "!!"))
+        assertEquals(QrPayloadError.NOT_ZFC_QR, (result.exceptionOrNull() as PairingParseException).error)
+    }
+
+    @Test
+    fun `wrong-length session or secret is rejected`() {
+        val shortSecret = QrPayloadParser.parse(qr("Jm1LIOO4mWm0lRSSl2fClw", "AAECAwQF"))
+        val shortSession = QrPayloadParser.parse(qr("AAEC", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"))
+        assertTrue(shortSecret.isFailure && shortSession.isFailure)
+    }
+
+    @Test
+    fun `the documented sizes still parse`() {
+        assertTrue(QrPayloadParser.parse(qr("Jm1LIOO4mWm0lRSSl2fClw", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")).isSuccess)
+    }
 }

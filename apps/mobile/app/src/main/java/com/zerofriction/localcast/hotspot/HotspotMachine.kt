@@ -85,11 +85,18 @@ class HotspotMachine {
         _state.value = if (granted) State.Starting else State.Failed(Reason.PERMISSION_DECLINED)
     }
 
-    /** The OS granted the reservation — credentials are only readable while we hold it. */
-    fun started(ssid: String, password: String) {
-        if (_state.value != State.Starting) return
+    /**
+     * The OS granted the reservation — credentials are only readable while we
+     * hold it. Returns false when nobody wants it any more (the user pressed
+     * Stop while it was starting): the caller must close the reservation, or
+     * the hotspot stays up invisibly — and keeps Wi-Fi down on single-radio
+     * phones (review 2026-11-09).
+     */
+    fun started(ssid: String, password: String): Boolean {
+        if (_state.value != State.Starting) return false
         _state.value = State.Active(ssid, password)
         Log.i(TAG, "hotspot active (ssid=$ssid)")
+        return true
     }
 
     fun startFailed(reason: Reason) {
