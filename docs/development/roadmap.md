@@ -189,7 +189,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
-## Test 2026-11o — Mobile review, group G: test coverage ✅ implemented — awaiting on-device check
+## Test 2026-11o — Mobile review, group G: test coverage ✅ implemented — verified on-device
 *(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group G of A–G.)*
 **Scope:**
 - **Negotiation:** the trickle-ICE ordering both pcs shared as copy-pasted fields is one pure `RemoteCandidateGate` (queue before the answer, flush in order, drop on a new offer). Its generation guard closes a real gap: a remote-description success from the offer an ICE restart superseded could open the gate for the new offer.
@@ -198,7 +198,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 - **Compose UI on Robolectric:** Home's transport/annunciator per cast state, and the quality dial — including the mid-drag re-key that crashed on NaN (mutation-checked: removing the guard fails the test).
 - **Already covered before G:** malformed QR, a hotspot stopped while starting (group A). `CastService` itself stays a manual check — it builds libwebrtc natives; its pure parts (`startRefusal`, `LiveQualityCoordinator`) are tested.
 
-**Accept:** `testDebugUnitTest` 376/376, `assembleDebug` clean. **On-device pending:** a cast with game audio (the sender and candidate-gate rewiring) and a reconnect after a Wi-Fi blip.
+**Accept:** `testDebugUnitTest` 376/376, `assembleDebug` clean. **On-device (product owner):** a cast with game audio (the sender and candidate-gate rewiring) and a reconnect after a Wi-Fi blip.
 
 ---
 
