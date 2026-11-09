@@ -74,6 +74,12 @@ Both are signaled over the same WebSocket with the `pc` discriminator; ICE/DTLS 
 
 - **The mobile is always the offerer** (both PCs). This is a deliberate consequence of *mobile controls*: the offer encodes the phone's chosen send parameters (codec order, max bitrate, resolution/fps).
 - The desktop answers, never renegotiates on its own, and applies no inbound constraints beyond decoding/rendering.
+- **One offerer implementation for both pcs** (`PeerNegotiator`, mobile review 2026-11-09, finding #23). Both pcs use it for the same sequence:
+  - createOffer → the session's SDP transform (media: codec order + Opus stereo; mic: none) → setLocalDescription → `sdp-offer`.
+  - The answer, relaxed by the session's transform → setRemoteDescription → queued desktop candidates (`RemoteCandidateGate`).
+  - ICE restart on the same pc.
+
+  libwebrtc's callbacks are hopped onto the session thread, and a replaced pc's late callbacks are dropped. The mic pc gained both properties this way; before, its callbacks ran on libwebrtc's thread with no identity guard. What a session does about failure stays in the session: the media ICE-restart ladder, the mic reconnect ladder. The negotiator is pure over a small `PeerPort` interface and JVM-tested; `LibWebRtcPeer` adapts the real pc, and `dispose()`s it on replacement for both pcs.
 
 ### ICE strategy
 

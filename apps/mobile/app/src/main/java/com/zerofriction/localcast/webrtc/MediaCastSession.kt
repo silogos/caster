@@ -20,8 +20,6 @@ import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.capture.ScreenCapturer
 import com.zerofriction.localcast.capture.StepFormat
 import com.zerofriction.localcast.signaling.SignalingClient
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.DefaultVideoDecoderFactory
@@ -31,9 +29,6 @@ import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpParameters
-import org.webrtc.RtpTransceiver
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
@@ -144,8 +139,40 @@ class MediaCastSession(
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
 
-    /** Queues desktop candidates until the current offer's answer is applied. */
-    private val candidateGate = RemoteCandidateGate<IceCandidate>()
+    /**
+     * The offer/answer/ICE sequencing shared with the mic pc (finding #23):
+     * the offer carries the codec policy (config's preferred video codec
+     * first) and asks Opus for stereo; Chromium answers with its own default
+     * Opus fmtp (found live 2026-11-03), so the answer is relaxed to the same
+     * request before it is applied. Outcomes arrive on the session thread.
+     */
+    private val negotiator = PeerNegotiator(
+        label = PC_ID,
+        post = ::post,
+        sendOffer = { sdp -> signaling.sendSdpOffer(PC_ID, sdp) },
+        decodeCandidate = IceCandidateJson::decode,
+        onOfferFailed = { detail -> fatal(Failure.Error(detail)) },
+        offerTransform = { sdp ->
+            SdpOpusFmtp.preferStereo(
+                SdpCodecOrderer.preferVideoCodecs(sdp, SdpCodecOrderer.preferenceFor(config.preferredCodec)),
+            )
+        },
+        answerTransform = { sdp ->
+            Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
+            SdpOpusFmtp.preferStereo(sdp).also {
+                Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(it) ?: "none"}")
+            }
+        },
+        onAnswerApplied = { if (active) pc?.let { applySenderParameters(it) } },
+        onAnswerFailed = {
+            if (active) {
+                // The offer in flight cannot connect — conclude it now
+                // instead of waiting out its deadline.
+                restarts.onFailed(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
+            }
+        },
+    )
 
     /** The current pc reported CONNECTED and nothing worse since — session thread only. */
     private var pcConnected = false
@@ -246,10 +273,10 @@ class MediaCastSession(
                 }
 
             is SignalingClient.Event.SdpAnswer ->
-                if (event.pc == PC_ID) post { if (active) applyAnswer(event.sdp) }
+                if (event.pc == PC_ID) post { if (active) negotiator.applyAnswer(event.sdp) }
 
             is SignalingClient.Event.IceCandidate ->
-                if (event.pc == PC_ID) post { if (active) applyRemoteCandidate(event.candidate) }
+                if (event.pc == PC_ID) post { if (active) negotiator.applyRemoteCandidate(event.candidate) }
 
             is SignalingClient.Event.SessionEnded -> post { if (active) fatal(Failure.DesktopEnded) }
 
@@ -452,22 +479,16 @@ class MediaCastSession(
         // encoder threads spinning on the dead pc.
         releaseGameAudioPipeline()
         closePc()
-        candidateGate.reset()
         val newFactory = factory ?: return
         val newTrack = videoTrack ?: return
 
-        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            // LAN only (webrtc.md): host candidates, no STUN/TURN.
-            iceTransportsType = PeerConnection.IceTransportsType.ALL
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-        }
-        val newPc = newFactory.createPeerConnection(rtcConfig, pcObserver)
+        val newPc = newFactory.createPeerConnection(LibWebRtcPeer.lanRtcConfiguration(), pcObserver)
         if (newPc === null) {
             fatal(Failure.Error("createPeerConnection returned null"))
             return
         }
         pc = newPc
+        negotiator.attach(LibWebRtcPeer(newPc))
         val trackSender = newPc.addTrack(newTrack, listOf(STREAM_ID))
         if (trackSender === null) {
             fatal(Failure.Error("addTrack returned null — native track wiring failed"))
@@ -512,7 +533,7 @@ class MediaCastSession(
         // The offer's deadline needs the clock running even before any
         // DISCONNECTED/FAILED — an answer that never comes is otherwise silent.
         scheduleRecoveryWatchdog()
-        createAndSendOffer(newPc)
+        negotiator.offer()
     }
 
     /**
@@ -523,96 +544,9 @@ class MediaCastSession(
      * fired by [restarts].
      */
     private fun restartIce(attempt: Int) {
-        val currentPc = pc ?: return
+        if (pc === null) return
         Log.i(TAG, "ice restart #$attempt — fresh offer with new ice credentials")
-        // Candidates from here on belong to the restarted ICE — queue them
-        // until the new answer's remote description lands (mirrors negotiate).
-        candidateGate.reset()
-        currentPc.restartIce()
-        createAndSendOffer(currentPc)
-    }
-
-    /** createOffer → codec order + Opus stereo fmtp → setLocalDescription → offer over signaling. */
-    private fun createAndSendOffer(target: PeerConnection) {
-        target.createOffer(
-            object : SdpObserver {
-                override fun onCreateSuccess(original: SessionDescription) {
-                    // Codec policy lives in the offer (webrtc.md): the
-                    // config's preferred codec first (H.264 by default), and
-                    // game audio as Opus stereo — the negotiated default is
-                    // mono 32 kbps, so the offer asks and the answer is
-                    // relaxed to the same request (SdpOpusFmtp).
-                    val munged = SessionDescription(
-                        original.type,
-                        SdpOpusFmtp.preferStereo(
-                            SdpCodecOrderer.preferVideoCodecs(
-                                original.description,
-                                SdpCodecOrderer.preferenceFor(config.preferredCodec),
-                            ),
-                        ),
-                    )
-                    target.setLocalDescription(
-                        object : SdpObserver {
-                            override fun onSetSuccess() {
-                                signaling.sendSdpOffer(PC_ID, munged.description)
-                                Log.i(TAG, "sdp offer sent (${munged.description.length} bytes)")
-                            }
-
-                            override fun onSetFailure(error: String?) = fatal(Failure.Error("setLocalDescription: $error"))
-
-                            override fun onCreateSuccess(description: SessionDescription) = Unit
-                            override fun onCreateFailure(error: String?) = Unit
-                        },
-                        munged,
-                    )
-                }
-
-                override fun onCreateFailure(error: String?) = fatal(Failure.Error("createOffer: $error"))
-
-                override fun onSetSuccess() = Unit
-                override fun onSetFailure(error: String?) = Unit
-            },
-            MediaConstraints(),
-        )
-    }
-
-    private fun applyAnswer(sdp: String) {
-        val currentPc = pc ?: return
-        // Stereo-path diagnostics: Chromium generates its own default Opus
-        // fmtp instead of mirroring the offer's (found live 2026-11-03 — the
-        // answer carried only minptime/useinbandfec), so the answer is
-        // relaxed to what the offer asked for before it is applied.
-        Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
-        val negotiated = SessionDescription(SessionDescription.Type.ANSWER, SdpOpusFmtp.preferStereo(sdp))
-        Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(negotiated.description) ?: "none"}")
-        val answerGeneration = candidateGate.generation
-        currentPc.setRemoteDescription(
-            object : SdpObserver {
-                // SdpObserver callbacks arrive on libwebrtc's signaling
-                // thread — hop to the session thread, which owns the
-                // candidate queue and the restart ladder (mobile review B).
-                override fun onSetSuccess() = post {
-                    if (!active || pc !== currentPc) return@post // a newer pc owns the queue
-                    applySenderParameters(currentPc)
-                    if (!candidateGate.open(answerGeneration) { currentPc.addIceCandidate(it) }) {
-                        Log.i(TAG, "remote description applied for a superseded offer — gate stays closed")
-                    }
-                }
-
-                override fun onSetFailure(error: String?) = post {
-                    Log.e(TAG, "setRemoteDescription failed: $error")
-                    if (!active || pc !== currentPc) return@post
-                    // The offer in flight cannot connect — conclude it now
-                    // instead of waiting out its deadline.
-                    restarts.onFailed(System.currentTimeMillis())
-                    scheduleRecoveryWatchdog()
-                }
-
-                override fun onCreateSuccess(description: SessionDescription) = Unit
-                override fun onCreateFailure(error: String?) = Unit
-            },
-            negotiated,
-        )
+        negotiator.restartIce()
     }
 
     /**
@@ -742,82 +676,42 @@ class MediaCastSession(
         }
     }
 
-    private fun applyRemoteCandidate(element: JsonElement) {
-        val currentPc = pc ?: return
-        if (element is JsonNull) {
-            Log.d(TAG, "desktop finished ice gathering")
-            return
-        }
-        val candidate = IceCandidateJson.decode(element)
-        if (candidate === null) {
-            Log.w(TAG, "malformed candidate from desktop — ignoring")
-            return
-        }
-        candidateGate.offer(candidate) { currentPc.addIceCandidate(it) }
+    /** Local candidates and gathering go straight to signaling; connection state hops to the session thread. */
+    private val pcObserver = SignalingPeerObserver(PC_ID, signaling) { newState ->
+        post { if (active) onConnectionStateOnThread(newState) }
     }
 
-    private val pcObserver = object : PeerConnection.Observer {
-        override fun onIceCandidate(candidate: IceCandidate) {
-            // Wire format: the candidate object itself, relayed verbatim by
-            // signaling — including mDNS-obfuscated hosts (risk R4).
-            signaling.sendIceCandidate(PC_ID, IceCandidateJson.encode(candidate))
-        }
-
-        override fun onIceGatheringChange(event: PeerConnection.IceGatheringState?) {
-            if (event == PeerConnection.IceGatheringState.COMPLETE) {
-                signaling.sendIceCandidate(PC_ID, null)
+    // The ladder, watchdog and stats state belong to the session thread.
+    private fun onConnectionStateOnThread(newState: PeerConnection.PeerConnectionState) {
+        Log.i(TAG, "connection state: $newState")
+        pcConnected = newState == PeerConnection.PeerConnectionState.CONNECTED
+        when (newState) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                if (restarts.busy) Log.i(TAG, "connection recovered — ice restart ladder reset")
+                restarts.onConnected(System.currentTimeMillis())
+                cancelRecoveryWatchdog()
+                onState(State.STREAMING)
+                // Silence detection only counts while actually connected (audio.md).
+                audio?.setStreaming(true)
+                scheduleStats()
             }
-        }
-
-        // Observer callbacks arrive on libwebrtc's signaling thread; the
-        // ladder, watchdog and stats state belong to the session thread.
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) = post {
-            if (!active) return@post
-            onConnectionStateOnThread(newState)
-        }
-
-        private fun onConnectionStateOnThread(newState: PeerConnection.PeerConnectionState) {
-            Log.i(TAG, "connection state: $newState")
-            pcConnected = newState == PeerConnection.PeerConnectionState.CONNECTED
-            when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED -> {
-                    if (restarts.busy) Log.i(TAG, "connection recovered — ice restart ladder reset")
-                    restarts.onConnected(System.currentTimeMillis())
-                    cancelRecoveryWatchdog()
-                    onState(State.STREAMING)
-                    // Silence detection only counts while actually connected (audio.md).
-                    audio?.setStreaming(true)
-                    scheduleStats()
-                }
-                PeerConnection.PeerConnectionState.DISCONNECTED -> {
-                    // Transient by default (webrtc.md): the grace window and
-                    // the restart ladder own the verdict, not this event.
-                    Log.w(TAG, "ice disconnected — recovery ladder armed")
-                    restarts.onDisconnected(System.currentTimeMillis())
-                    scheduleRecoveryWatchdog()
-                }
-                PeerConnection.PeerConnectionState.FAILED -> {
-                    // Recovery is the offerer's job (ICE restart — webrtc.md;
-                    // the desktop never renegotiates on its own). The ladder
-                    // bounds it; only its exhaustion ends the cast.
-                    Log.w(TAG, "ice failed — attempting recovery")
-                    restarts.onFailed(System.currentTimeMillis())
-                    scheduleRecoveryWatchdog()
-                }
-                else -> Unit
+            PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                // Transient by default (webrtc.md): the grace window and
+                // the restart ladder own the verdict, not this event.
+                Log.w(TAG, "ice disconnected — recovery ladder armed")
+                restarts.onDisconnected(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
             }
+            PeerConnection.PeerConnectionState.FAILED -> {
+                // Recovery is the offerer's job (ICE restart — webrtc.md;
+                // the desktop never renegotiates on its own). The ladder
+                // bounds it; only its exhaustion ends the cast.
+                Log.w(TAG, "ice failed — attempting recovery")
+                restarts.onFailed(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
+            }
+            else -> Unit
         }
-
-        override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
-        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) = Unit
-        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
-        override fun onAddStream(stream: org.webrtc.MediaStream?) = Unit
-        override fun onRemoveStream(stream: org.webrtc.MediaStream?) = Unit
-        override fun onDataChannel(channel: org.webrtc.DataChannel?) = Unit
-        override fun onRenegotiationNeeded() = Unit
-        override fun onAddTrack(receiver: org.webrtc.RtpReceiver?, streams: Array<out org.webrtc.MediaStream>?) = Unit
-        override fun onTrack(transceiver: RtpTransceiver?) = Unit
     }
 
     // ---- getStats logging (webrtc.md: ~1 Hz) ----
@@ -991,7 +885,7 @@ class MediaCastSession(
      */
     private fun closePc() {
         pcConnected = false
-        pc?.dispose()
+        negotiator.detach() // disposes the pc; its late callbacks are dropped
         pc = null
     }
 

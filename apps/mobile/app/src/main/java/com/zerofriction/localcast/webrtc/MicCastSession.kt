@@ -13,16 +13,12 @@ import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.audio.MicSilenceMonitor
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.signaling.SignalingClient
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
 import org.webrtc.audio.JavaAudioDeviceModule
 
 /**
@@ -103,8 +99,18 @@ class MicCastSession(
      */
     private var publishedState: MicState = MicState.Off
 
-    /** Queues desktop candidates until the current offer's answer is applied. */
-    private val candidateGate = RemoteCandidateGate<IceCandidate>()
+    /**
+     * The offer/answer/ICE sequencing shared with the media pc (finding #23).
+     * Audio-only offer: Opus is the only codec listed — no munging (the codec
+     * policy in webrtc.md is per track, and the mic has no fallback).
+     */
+    private val negotiator = PeerNegotiator(
+        label = PC_ID,
+        post = ::post,
+        sendOffer = { sdp -> signaling.sendSdpOffer(PC_ID, sdp) },
+        decodeCandidate = IceCandidateJson::decode,
+        onOfferFailed = { detail -> micFailed(detail) },
+    )
 
     /** Grown once the answer's parameters exist; sampled by the stats poller. */
     private var lastBytesSent = 0L
@@ -119,10 +125,10 @@ class MicCastSession(
                 post { if (active) negotiate() }
 
             is SignalingClient.Event.SdpAnswer ->
-                if (event.pc == PC_ID) post { if (active) applyAnswer(event.sdp) }
+                if (event.pc == PC_ID) post { if (active) negotiator.applyAnswer(event.sdp) }
 
             is SignalingClient.Event.IceCandidate ->
-                if (event.pc == PC_ID) post { if (active) applyRemoteCandidate(event.candidate) }
+                if (event.pc == PC_ID) post { if (active) negotiator.applyRemoteCandidate(event.candidate) }
 
             // The cast as a whole is ending (desktop gone, bye, or terminal
             // signaling failure) — the media session reports it to the user;
@@ -328,131 +334,50 @@ class MicCastSession(
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
     private fun negotiate() {
         closePc()
-        candidateGate.reset()
         val newFactory = factory ?: return
         val newTrack = audioTrack ?: return
 
-        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            // LAN only (webrtc.md): host candidates, no STUN/TURN.
-            iceTransportsType = PeerConnection.IceTransportsType.ALL
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-        }
-        val newPc = newFactory.createPeerConnection(rtcConfig, pcObserver)
+        val newPc = newFactory.createPeerConnection(LibWebRtcPeer.lanRtcConfiguration(), pcObserver)
         if (newPc === null) {
             micFailed("createPeerConnection returned null")
             return
         }
         pc = newPc
+        negotiator.attach(LibWebRtcPeer(newPc))
         if (newPc.addTrack(newTrack, listOf(STREAM_ID)) === null) {
             micFailed("addTrack returned null — native track wiring failed")
             return
         }
-        newPc.createOffer(
-            object : SdpObserver {
-                override fun onCreateSuccess(original: SessionDescription) {
-                    // Audio-only offer: Opus is the only codec listed — no
-                    // munging needed (the codec policy in webrtc.md is per
-                    // track, and mic has no fallback).
-                    newPc.setLocalDescription(
-                        object : SdpObserver {
-                            override fun onSetSuccess() {
-                                signaling.sendSdpOffer(PC_ID, original.description)
-                                Log.i(TAG, "sdp offer sent (${original.description.length} bytes)")
-                            }
-
-                            override fun onSetFailure(error: String?) = micFailed("setLocalDescription: $error")
-
-                            override fun onCreateSuccess(description: SessionDescription) = Unit
-                            override fun onCreateFailure(error: String?) = Unit
-                        },
-                        original,
-                    )
-                }
-
-                override fun onCreateFailure(error: String?) = micFailed("createOffer: $error")
-
-                override fun onSetSuccess() = Unit
-                override fun onSetFailure(error: String?) = Unit
-            },
-            MediaConstraints(),
-        )
+        negotiator.offer()
     }
 
-    private fun applyAnswer(sdp: String) {
-        val currentPc = pc ?: return
-        val answerGeneration = candidateGate.generation
-        currentPc.setRemoteDescription(
-            object : SdpObserver {
-                override fun onSetSuccess() {
-                    candidateGate.open(answerGeneration) { currentPc.addIceCandidate(it) }
-                }
-
-                override fun onSetFailure(error: String?) {
-                    Log.e(TAG, "setRemoteDescription failed: $error")
-                }
-
-                override fun onCreateSuccess(description: SessionDescription) = Unit
-                override fun onCreateFailure(error: String?) = Unit
-            },
-            SessionDescription(SessionDescription.Type.ANSWER, sdp),
-        )
+    /**
+     * Local candidates and gathering go straight to signaling; connection
+     * state hops to the session thread, where the reconnect ladder lives
+     * (it used to run on libwebrtc's signaling thread — group B's fix for
+     * the media pc, now shared).
+     */
+    private val pcObserver = SignalingPeerObserver(PC_ID, signaling) { newState ->
+        post { if (active) onConnectionState(newState) }
     }
 
-    private fun applyRemoteCandidate(element: JsonElement) {
-        val currentPc = pc ?: return
-        if (element is JsonNull) {
-            Log.d(TAG, "desktop finished ice gathering")
-            return
-        }
-        val candidate = IceCandidateJson.decode(element)
-        if (candidate === null) {
-            Log.w(TAG, "malformed candidate from desktop — ignoring")
-            return
-        }
-        candidateGate.offer(candidate) { currentPc.addIceCandidate(it) }
-    }
-
-    private val pcObserver = object : PeerConnection.Observer {
-        override fun onIceCandidate(candidate: IceCandidate) {
-            signaling.sendIceCandidate(PC_ID, IceCandidateJson.encode(candidate))
-        }
-
-        override fun onIceGatheringChange(event: PeerConnection.IceGatheringState?) {
-            if (event == PeerConnection.IceGatheringState.COMPLETE) {
-                signaling.sendIceCandidate(PC_ID, null)
+    private fun onConnectionState(newState: PeerConnection.PeerConnectionState) {
+        Log.i(TAG, "connection state: $newState")
+        when (newState) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                reconnectAttempts = 0
+                scheduleStats()
             }
+
+            // A dead mic pc is not a dead mic (live finding 2026-11-02:
+            // a connection reset kept the cast but parked the mic as
+            // Failed until re-toggled). Ride the reconnect ladder —
+            // same shape as the signaling ladder — and only a spent
+            // budget parks the session. The cast (media pc) is never
+            // touched from here either way.
+            PeerConnection.PeerConnectionState.FAILED -> scheduleReconnectOrPark("ice failed")
+            else -> Unit
         }
-
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-            Log.i(TAG, "connection state: $newState")
-            when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED -> {
-                    reconnectAttempts = 0
-                    scheduleStats()
-                }
-
-                // A dead mic pc is not a dead mic (live finding 2026-11-02:
-                // a connection reset kept the cast but parked the mic as
-                // Failed until re-toggled). Ride the reconnect ladder —
-                // same shape as the signaling ladder — and only a spent
-                // budget parks the session. The cast (media pc) is never
-                // touched from here either way.
-                PeerConnection.PeerConnectionState.FAILED -> scheduleReconnectOrPark("ice failed")
-                else -> Unit
-            }
-        }
-
-        override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
-        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) = Unit
-        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
-        override fun onAddStream(stream: org.webrtc.MediaStream?) = Unit
-        override fun onRemoveStream(stream: org.webrtc.MediaStream?) = Unit
-        override fun onDataChannel(channel: org.webrtc.DataChannel?) = Unit
-        override fun onRenegotiationNeeded() = Unit
-        override fun onAddTrack(receiver: org.webrtc.RtpReceiver?, streams: Array<out org.webrtc.MediaStream>?) = Unit
-        override fun onTrack(transceiver: org.webrtc.RtpTransceiver?) = Unit
     }
 
     // ---- getStats logging (webrtc.md: ~1 Hz; audio bytes prove the mic is flowing) ----
@@ -534,7 +459,7 @@ class MicCastSession(
     }
 
     private fun closePc() {
-        pc?.close()
+        negotiator.detach() // disposes the pc (close alone leaked it); late callbacks are dropped
         pc = null
     }
 
