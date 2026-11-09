@@ -40,6 +40,8 @@ class PairingClient(
      * leaves this machine Context-free and JVM-testable.
      */
     private val onDesktopIdentity: ((desktopName: String, grant: SignalingClient.Event.TrustGrant) -> Unit)? = null,
+    /** The phone's current IPv4 subnets — the "same LAN" half of [LanHosts]. */
+    private val localSubnetsProvider: () -> List<LanHosts.Subnet> = LocalSubnets::current,
 ) {
     sealed interface State {
         data object Idle : State
@@ -99,7 +101,7 @@ class PairingClient(
     /** Entry point for both the camera scan and the debug manual payload input. */
     fun startFromQrText(qrText: String) {
         reset()
-        val payload = QrPayloadParser.parse(qrText).getOrElse { exception ->
+        val payload = QrPayloadParser.parse(qrText, localSubnetsProvider()).getOrElse { exception ->
             val error = (exception as PairingParseException).error
             Log.w(TAG, "QR payload rejected: $error")
             _state.value = State.Failed(PairingError.fromQr(error))
@@ -127,7 +129,7 @@ class PairingClient(
                 SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
                 is SignalingClient.Event.Authorized -> {
                     lastDesktopName = event.desktopName
-                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, grant) }
+                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, lanOnly(grant, payload.h)) }
                     _state.value = State.Connected(event.desktopName)
                 }
                 is SignalingClient.Event.Reconnecting ->
@@ -149,6 +151,15 @@ class PairingClient(
     }
 
     /**
+     * `auth-ok.hosts` is held to the same LAN-only policy as the QR: off-LAN
+     * entries are dropped before they are saved, and a grant left with none
+     * keeps [connectedHosts] — the already-checked hosts this session used —
+     * so the saved entry never ends up empty (an empty list is unusable).
+     */
+    private fun lanOnly(grant: SignalingClient.Event.TrustGrant, connectedHosts: List<String>): SignalingClient.Event.TrustGrant =
+        grant.copy(hosts = LanHosts.filter(grant.hosts, localSubnetsProvider()).ifEmpty { connectedHosts })
+
+    /**
      * Reconnect to the saved desktop without a QR (ADR-006): hello carries
      * `resume: true`, the envelope sid is this install's deviceId and the
      * stored trustKey answers the challenge. No expiry — [SignalingClient]
@@ -162,10 +173,18 @@ class PairingClient(
             _state.value = State.Failed(PairingError.DESKTOP_FORGOT)
             return
         }
+        // A saved entry is re-checked against the network the phone is on now:
+        // a campus address saved on that LAN is not reachable-by-policy here.
+        val savedHosts = LanHosts.filter(saved.hosts, localSubnetsProvider())
+        if (savedHosts.isEmpty()) {
+            Log.w(TAG, "no saved desktop host is on this network — not connecting")
+            _state.value = State.Failed(PairingError.CONNECT_UNREACHABLE)
+            return
+        }
         _state.value = State.Connecting
 
         val client = SignalingClient(
-            hosts = saved.hosts,
+            hosts = savedHosts,
             port = saved.port,
             sessionId = deviceId,
             secret = trustKey,
@@ -182,7 +201,7 @@ class PairingClient(
                 SignalingClient.Event.Authenticating -> _state.value = State.Authenticating
                 is SignalingClient.Event.Authorized -> {
                     lastDesktopName = event.desktopName
-                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, grant) }
+                    event.trust?.let { grant -> onDesktopIdentity?.invoke(event.desktopName, lanOnly(grant, savedHosts)) }
                     _state.value = State.Connected(event.desktopName)
                 }
                 is SignalingClient.Event.Reconnecting ->
@@ -258,6 +277,9 @@ enum class PairingError {
         fun fromQr(error: QrPayloadError): PairingError = when (error) {
             QrPayloadError.NOT_ZFC_QR -> NOT_ZFC_QR
             QrPayloadError.UNSUPPORTED_VERSION -> UNSUPPORTED_VERSION
+            // A QR whose hosts are all off the local network: the same plain
+            // "same Wi-Fi" message as an unreachable desktop.
+            QrPayloadError.NO_LAN_HOST -> CONNECT_UNREACHABLE
         }
 
         fun fromSignaling(error: SignalingError): PairingError = when (error) {

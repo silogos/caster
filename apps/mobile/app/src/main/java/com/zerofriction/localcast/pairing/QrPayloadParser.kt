@@ -13,7 +13,11 @@ object QrPayloadParser {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun parse(qrText: String): Result<QrPayload> {
+    /**
+     * [localSubnets]: the phone's current subnets ([LocalSubnets]) — hosts
+     * outside them and outside the private ranges are dropped ([LanHosts]).
+     */
+    fun parse(qrText: String, localSubnets: List<LanHosts.Subnet> = emptyList()): Result<QrPayload> {
         val payload = try {
             json.decodeFromString<QrPayload>(qrText)
         } catch (_: Exception) {
@@ -38,7 +42,16 @@ object QrPayloadParser {
         if (decodedSize(payload.s) != SESSION_ID_BYTES || decodedSize(payload.k) != SECRET_BYTES) {
             return Result.failure(PairingParseException(QrPayloadError.NOT_ZFC_QR))
         }
-        return Result.success(payload)
+        if (payload.p > MAX_PORT) {
+            return Result.failure(PairingParseException(QrPayloadError.NOT_ZFC_QR))
+        }
+        // LAN only (AGENTS.md): a QR must never point the phone at an internet
+        // host — the screen cast would follow it (review 2026-11-09, group C).
+        val lanHosts = LanHosts.filter(payload.h, localSubnets)
+        if (lanHosts.isEmpty()) {
+            return Result.failure(PairingParseException(QrPayloadError.NO_LAN_HOST))
+        }
+        return Result.success(payload.copy(h = lanHosts))
     }
 
     /** Decoded byte count of a base64url value, or -1 when it is not base64url. */
@@ -51,6 +64,9 @@ object QrPayloadParser {
     /** pairing.md QR payload v1: `s` = 16 random bytes, `k` = 32 random bytes. */
     const val SESSION_ID_BYTES = 16
     const val SECRET_BYTES = 32
+
+    /** The highest TCP port. */
+    private const val MAX_PORT = 65_535
 }
 
 class PairingParseException(val error: QrPayloadError) : Exception(error.name)

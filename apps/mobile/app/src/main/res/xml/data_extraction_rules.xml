@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ backup and device-to-device transfer (mobile review 2026-11-09,
+  group C). Cast settings travel; the install identity and the saved desktop
+  do not:
+  - zfc_device: the install-scoped deviceId (ADR-005). Restored onto a second
+    phone it would make two devices share one identity on the desktop.
+  - zfc.saved-desktop: the trust entry (ADR-006). Its key is sealed by this
+    phone's Keystore and cannot be opened elsewhere, so a restored entry is
+    only a dead "saved desktop" that fails to connect.
+  Keep in sync with backup_rules.xml (Android 10–11).
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="zfc_device.xml" />
+        <exclude domain="sharedpref" path="zfc.saved-desktop.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="zfc_device.xml" />
+        <exclude domain="sharedpref" path="zfc.saved-desktop.xml" />
+    </device-transfer>
+</data-extraction-rules>

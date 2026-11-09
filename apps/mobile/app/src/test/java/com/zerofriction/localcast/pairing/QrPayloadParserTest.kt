@@ -75,4 +75,31 @@ class QrPayloadParserTest {
     fun `the documented sizes still parse`() {
         assertTrue(QrPayloadParser.parse(qr("Jm1LIOO4mWm0lRSSl2fClw", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")).isSuccess)
     }
+
+    private fun errorOf(text: String, subnets: List<LanHosts.Subnet> = emptyList()) =
+        (QrPayloadParser.parse(text, subnets).exceptionOrNull() as PairingParseException).error
+
+    @Test
+    fun `a QR pointing only at internet hosts is refused - LAN only`() {
+        val internet = VALID_PAYLOAD.replace("\"192.168.1.42\",\"192.168.137.1\"", "\"203.0.113.9\",\"evil.example.com\"")
+        assertEquals(QrPayloadError.NO_LAN_HOST, errorOf(internet))
+    }
+
+    @Test
+    fun `off-LAN hosts are dropped and the LAN ones kept in order`() {
+        val mixed = VALID_PAYLOAD.replace("\"192.168.1.42\",\"192.168.137.1\"", "\"100.101.1.2\",\"192.168.1.42\"")
+        assertEquals(listOf("192.168.1.42"), QrPayloadParser.parse(mixed).getOrThrow().h)
+    }
+
+    @Test
+    fun `a public desktop address on the phone's own subnet is accepted`() {
+        val campus = VALID_PAYLOAD.replace("\"192.168.1.42\",\"192.168.137.1\"", "\"130.89.13.7\"")
+        val phoneSubnet = listOf(LanHosts.Subnet(LanHosts.parseIpv4("130.89.12.34")!!, 22))
+        assertEquals(listOf("130.89.13.7"), QrPayloadParser.parse(campus, phoneSubnet).getOrThrow().h)
+    }
+
+    @Test
+    fun `a port beyond 65535 is a foreign QR`() {
+        assertEquals(QrPayloadError.NOT_ZFC_QR, errorOf(VALID_PAYLOAD.replace("52341", "70000")))
+    }
 }
