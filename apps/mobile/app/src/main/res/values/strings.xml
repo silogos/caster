@@ -114,6 +114,11 @@
     <string name="mic_device_usb">USB mic</string>
     <string name="mic_device_bluetooth">Bluetooth mic</string>
     <string name="mic_records_from">Records from %1$s</string>
+    <!-- Mic switched on in the cast but RECORD_AUDIO is missing: off until allowed (review group F). -->
+    <string name="mic_needs_access">Needs microphone access. Turn it on to allow it.</string>
+    <!-- RECORD_AUDIO denied with "don't ask again": Android won't show the prompt any more. -->
+    <string name="mic_blocked">Microphone access is off for this app. Turn it on in Android settings.</string>
+    <string name="open_settings">Open settings</string>
     <string name="mic_recording_from">Recording from %1$s</string>
     <string name="mic_device_fallback_fact">%1$s disconnected — switched to the phone mic.</string>
 
@@ -149,6 +154,8 @@
          console). Encoder-level knobs; defaults reproduce today's cast
          exactly; every value is next-cast. -->
     <string name="advanced_settings_title">Advanced</string>
+    <!-- TalkBack label of the settings screen's back chevron (it used to read the screen title). -->
+    <string name="back">Back</string>
     <string name="settings_encoder">Encoder</string>
     <string name="settings_encoder_hardware">Hardware</string>
     <string name="settings_encoder_software">Software</string>

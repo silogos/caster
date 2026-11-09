@@ -128,7 +128,7 @@ fun CastSettingsContent(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_chevron_left),
-                    contentDescription = stringResource(R.string.advanced_settings_title),
+                    contentDescription = stringResource(R.string.back),
                     modifier = Modifier.size(20.dp),
                 )
             }

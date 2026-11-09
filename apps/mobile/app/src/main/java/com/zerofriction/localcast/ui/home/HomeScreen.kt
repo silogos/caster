@@ -2,9 +2,12 @@ package com.zerofriction.localcast.ui.home
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -36,6 +39,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -52,6 +58,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
@@ -169,8 +176,32 @@ fun HomeScreen(
         )
         if (!started) ConnectedDesktop.takeBack(signaling)
     }
+    // "Don't ask again" (review group F): Android answers a repeat request
+    // with an instant denial and no dialog — the switch used to do nothing.
+    // After a denial with no rationale left, the row offers Android settings.
+    var micPermissionBlocked by rememberSaveable { mutableStateOf(false) }
     val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) CastService.requestToggleMic(context)
+        if (granted) {
+            micPermissionBlocked = false
+            CastService.requestToggleMic(context)
+        } else {
+            val activity = context as? Activity
+            micPermissionBlocked = activity != null &&
+                !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    // Back from Android settings with the grant: the row is ordinary again.
+    LifecycleResumeEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            micPermissionBlocked = false
+        }
+        onPauseOrDispose {}
+    }
+    val openMicSettings: () -> Unit = {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     // Hotspot pairing mode (issue #96, ADR-011): the failure card's escape
@@ -191,6 +222,8 @@ fun HomeScreen(
         pairingState = pairingState,
         gameAudioState = gameAudioState,
         micState = micState,
+        micPermissionBlocked = micPermissionBlocked,
+        onOpenMicSettings = openMicSettings,
         thermalState = thermalState,
         adaptiveState = adaptiveState,
         micRouting = micRouting,
@@ -206,6 +239,7 @@ fun HomeScreen(
             settingsViewModel.setMic(on)
             if (castState is CastState.Casting) {
                 when {
+                    on && micState == MicState.NeedsPermission && micPermissionBlocked -> openMicSettings()
                     on && micState == MicState.NeedsPermission ->
                         micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 
@@ -258,6 +292,9 @@ fun HomeContent(
     pairingState: PairingClient.State = PairingClient.State.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
     micState: MicState = MicState.Off,
+    /** RECORD_AUDIO was denied with "don't ask again" — only Android settings can grant it now. */
+    micPermissionBlocked: Boolean = false,
+    onOpenMicSettings: () -> Unit = {},
     thermalState: ThermalState = ThermalState(),
     adaptiveState: AdaptiveUiState = AdaptiveUiState(),
     micRouting: MicRoutingUiState? = null,
@@ -464,7 +501,8 @@ fun HomeContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 16.dp)
-                        .height(54.dp),
+                        // A minimum: a large system font grows it, never clips the label.
+                        .heightIn(min = 54.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = Color.Transparent,
@@ -480,7 +518,8 @@ fun HomeContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 16.dp)
-                        .height(54.dp),
+                        // A minimum: a large system font grows it, never clips the label.
+                        .heightIn(min = 54.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -532,26 +571,28 @@ fun HomeContent(
                     else -> null
                 },
                 topDivider = true,
-                right = {
-                    CastSwitch(
-                        checked = when {
-                            casting && gameAudioState != GameAudioState.Off ->
-                                gameAudioState != GameAudioState.Muted
+                checked = when {
+                    casting && gameAudioState != GameAudioState.Off ->
+                        gameAudioState != GameAudioState.Muted
 
-                            else -> settings.gameAudio
-                        },
-                        onCheckedChange = onSetGameAudio,
-                    )
+                    else -> settings.gameAudio
                 },
+                onCheckedChange = onSetGameAudio,
             )
             // The routing fact line: off → the freeing hint; on → which mic
             // records (live while casting — the reroute updates it instantly).
-            val micOn = if (casting) micState != MicState.Off else settings.mic
+            // NeedsPermission is OFF on screen (it used to count as on — the
+            // switch lied while nothing recorded); the row says why and,
+            // once Android stops asking, offers the way to settings.
+            val needsPermission = casting && micState == MicState.NeedsPermission
+            val micOn = if (casting) micState != MicState.Off && !needsPermission else settings.mic
             val effectiveDevice = if (casting) (micRouting?.effective ?: settings.micDevice) else settings.micDevice
             IconListRow(
                 iconRes = R.drawable.ic_mic,
                 title = stringResource(R.string.home_microphone),
                 sub = when {
+                    needsPermission && micPermissionBlocked -> stringResource(R.string.mic_blocked)
+                    needsPermission -> stringResource(R.string.mic_needs_access)
                     !micOn -> stringResource(R.string.home_mic_hint)
                     casting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
                     else -> stringResource(R.string.mic_records_from, micSourceName(effectiveDevice))
@@ -562,11 +603,12 @@ fun HomeContent(
                     else -> null
                 },
                 topDivider = true,
-                right = {
-                    CastSwitch(
-                        checked = micOn,
-                        onCheckedChange = onSetMic,
-                    )
+                checked = micOn,
+                onCheckedChange = onSetMic,
+                footer = if (needsPermission && micPermissionBlocked) {
+                    { CastTextButton(text = stringResource(R.string.open_settings), onClick = onOpenMicSettings) }
+                } else {
+                    null
                 },
             )
             if (micOn) {
@@ -629,12 +671,8 @@ fun HomeContent(
                     iconRes = R.drawable.ic_cast,
                     title = stringResource(R.string.home_virtual_camera),
                     sub = stringResource(vcSublineRes(vcState)),
-                    right = {
-                        CastSwitch(
-                            checked = vcState.active,
-                            onCheckedChange = { onToggleVirtualCamera() },
-                        )
-                    },
+                    checked = vcState.active,
+                    onCheckedChange = { onToggleVirtualCamera() },
                 )
             }
         }

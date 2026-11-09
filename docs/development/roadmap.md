@@ -216,6 +216,30 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Fix 2026-11q — Mobile review, group F: UX and accessibility ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group F of A–G — the last group.)*
+**Scope:**
+- **Mic permission:**
+  - `NeedsPermission` is shown off, with "Needs microphone access" (it used to count as on).
+  - After a "don't ask again" denial the switch no longer does nothing: the row says so and offers **Open settings**.
+  - The grant is re-checked on resume.
+- **TalkBack:**
+  - Switch rows are one labeled toggle (they were read as "Switch, on").
+  - Tabs (`Role.Tab`) and chips (`Role.RadioButton`) announce their selected state.
+  - The settings back chevron is "Back" (it read the screen title "Advanced").
+- **Size and font:**
+  - Text buttons get `heightIn(min = 40.dp)` instead of a fixed `height(40.dp)`, which clipped labels at 200% font: a 24dp label instead of the 37dp it needs.
+  - The transport buttons get a minimum height as well, and tabs are now 48dp tall.
+  - **Finding corrected:** the 48dp touch-target claim was mostly already met. Compose pads every clickable's touch area to 48dp; 40dp chips and icon buttons are Material-compliant. A test now guards it.
+- **Design:** `designs/mobile-ux-a11y.figcraft`, in the shipped amber tokens (the Signal Deck file is a draft). It has three frames: F1 mic states, F2 TalkBack announcements, F3 touch targets and 200% font. It was validated by opening it in FigCraft (`document.inspect`: 165 nodes).
+
+**Accept:** `testDebugUnitTest` 392/392 (+`AccessibilityUiTest` ×8, Robolectric with native graphics; the font test was mutation-checked against the old fixed height), `assembleDebug` clean. **On-device pending:**
+- TalkBack on Home and Settings;
+- 200% font;
+- mic denied twice ("don't ask again") → Open settings → grant → back.
+
+---
+
 ## Definition of Done (every phase)
 
 ```text
