@@ -166,14 +166,26 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Not shipped — item 18 (pause the Opus fallback track while the channel flows):** tried and disproven on-device, [ADR-016](../decisions/ADR-016-pause-fallback-opus-track.md) (rejected): both pausing (`active = false`) and muting (`setEnabled(false)`) the track stop libwebrtc's ADM recording, which is the channel's own source, and produced a ~0.7 s gap every ~2 s.
 **Accept:** `testDebugUnitTest` 336/336, `assembleDebug` clean; on-device (TB321FU, 2026-11-09) a ~2.7 min cast with 0 mid-cast `stopRecording`, the channel steady at 100 chunks/s, and 0 underruns. Same session: the Opus fallback track was measured **dual-mono** despite the stereo fmtp (features/game-audio.md). **On-device pending:** the re-auth keep path (needs a socket-only drop).
 
-## Fix 2026-11m — Mobile review, group C: security and privacy ✅ implemented — awaiting on-device check
+## Fix 2026-11m — Mobile review, group C: security and privacy ✅ implemented — verified on-device
 *(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group C of A–G.)*
 **Scope:**
 - **LAN-only hosts:** the QR's `h`, `auth-ok.hosts` and saved hosts are limited to IPv4 literals in private/link-local ranges or on the phone's own subnet (`LanHosts`; pairing.md). A QR with none fails as `connect-unreachable`. Ports above 65535 are rejected.
 - **No `REMOTE_SUBMIX`:** the capture never tries `AUDIO_SOURCE_REMOTE_SUBMIX`, which on a permissive ROM records the whole mix past other apps' opt-outs (audio.md).
 - **Backup:** cloud backup and device transfer exclude the install deviceId and the Keystore-sealed saved desktop.
 
-**Accept:** `testDebugUnitTest` 346/346 (`LanHostsTest`, QR parser LAN cases), `assembleDebug` clean. **On-device pending:** pairing by QR with the real desktop, a reconnect to the saved desktop, and a cast with game audio.
+**Accept:** `testDebugUnitTest` 346/346 (`LanHostsTest`, QR parser LAN cases), `assembleDebug` clean. **On-device (product owner):** a reconnect to the saved desktop + cast, and Disconnect + a fresh QR scan.
+
+---
+
+## Refactor 2026-11n — Mobile review, group E: architecture and dead code ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group E of A–G. No behavior change intended.)*
+**Scope:**
+- **`CastService` split by concern** (was 1,219 lines — the "CastManager" AGENTS.md rules out): a lifecycle shell plus per-cast helpers `MicController`, `LiveQualityCoordinator`, `DesktopControls`, `CastThermalWatch`, `CastWifiLock`, `CastNotifications`; its public API is unchanged (mobile.md).
+- **`HomeScreen` split** (was 1,202 lines) into the screen, `HomeHotspotCard`, `MicDevicePicker`, `HomeStatusRows`, `HomeViewModelFactories`; the share consent ladder, written out three times, is one pure `nextShareStep` + `rememberShareScreenFlow` (`ShareConsent.kt`).
+- **Dead code:** the retired capture-flavor sweep and its mask/usage variants, the sweep-only float probe, the duplicated ADM reflection lookups (now `AdmRecorderInternals`), `AppTypography`, 13 unused strings.
+- **Deferred:** the `MediaCastSession`/`MicCastSession` shared negotiator (finding #23). It rewrites the live media path's offer/answer/ICE handling and is mic-coupled, so it waits for group G's negotiation tests (answer ordering, candidate queue).
+
+**Accept:** `testDebugUnitTest` 354/354 (new `LiveQualityCoordinatorTest`, `ShareConsentTest`), `assembleDebug` clean. **On-device pending:** Share screen (consent ladder) → cast with game audio, a live quality pick, Stop share screen, Disconnect.
 
 ---
 
