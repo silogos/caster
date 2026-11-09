@@ -187,6 +187,9 @@ class MediaCastSession(
      */
     private var lastTotalEncodeTimeSeconds: Double? = null
     private var lastFramesEncoded = 0L
+    /** Previous pacer totals — their deltas give the per-packet pacer wait. */
+    private var lastPacketSendDelaySeconds: Double? = null
+    private var lastPacketsSent: Long? = null
     /** Phase15 probe: first null-sample ticks log the report's shape (bounded — not a 1 Hz firehose). */
     private var nullSampleLogs = 0
     private val statsIntervalMs = statsIntervalMs
@@ -754,12 +757,16 @@ class MediaCastSession(
                     lastTotalEncodeTimeSeconds = sample.totalEncodeTimeSeconds
                     lastFramesEncoded = sample.framesEncoded
                     val encodePart = encodeMsPerFrame?.let { String.format(", encode %.1f ms/f", it) } ?: ""
+                    val pacerMs = perDelta(sample.totalPacketSendDelaySeconds, lastPacketSendDelaySeconds, sample.packetsSent, lastPacketsSent)
+                    lastPacketSendDelaySeconds = sample.totalPacketSendDelaySeconds
+                    lastPacketsSent = sample.packetsSent
+                    val pacerPart = pacerMs?.let { String.format(", pacer %.1f ms/pkt", it) } ?: ""
                     Log.i(
                         TAG,
                         "stats: ${bitrateBps / 1_000} kbps, ${sample.framesEncoded} encoded" +
                             ", ${sample.framesDropped} dropped, ${sample.framesPerSecond} fps" +
                             ", ${sample.frameWidth}x${sample.frameHeight}" +
-                            ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}" + encodePart,
+                            ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}" + encodePart + pacerPart,
                     )
                     lastBytesSent = sample.bytesSent
                     lastStatsAtMs = nowMs

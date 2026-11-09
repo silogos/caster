@@ -57,4 +57,21 @@ Same setup, encoder configured with `latency=1, priority=0` (accepted by the cod
 - **The refresh request is not the variable either:** the faster pass flipped between casts E and F, and the phone reported 60 Hz in every pass.
 - **The real finding is the spread.** Each pass is tight (±10 ms) but passes differ by up to ~60 ms, even within one cast. A fixed offset that is set at some moment and then held suggests a standing queue in the phone's capture → encode path (steps of one or two 60 Hz frames). Finding it is the next latency task.
 
+## Where the spread is not (2026-11-10, casts G–I)
+
+Per-segment probes were added to find the standing queue behind the pass-to-pass spread:
+- **capture age** (phone, debug): now minus the virtual display buffer's timestamp when the capture thread gets the frame;
+- **sender stats:** encode time and libwebrtc's pacer wait (`totalPacketSendDelay`);
+- **DataChannel send-buffer fill** (phone, debug);
+- **receive stats** (receiver, `ZFC_LATENCY_PROBE`): decode time, packet-to-decoded processing delay, jitter buffer.
+
+| Cast | Pass | Video → Mac screen | Capture age | Encode | Pacer | Mac decode / processing | Jitter buffer |
+|---|---|---|---|---|---|---|---|
+| H | highest / 60 Hz | 79 / 47 ms | 0.8 / 0.8 ms | ~16 ms | — | 4.8 / 5.0, 6.8 / 6.9 ms | 0.1 ms |
+| I | highest / 60 Hz | 84 / 50 ms | 0.9 / 0.9 ms | ~16 ms | 0.0 ms | 6.1 / 6.2, 7.0 / 7.1 ms | 0.0 ms |
+
+- **Every measured segment is identical between a fast and a slow pass**: capture handoff under 1 ms, encode ~16 ms, no pacer wait, ~6–7 ms on the Mac, no jitter buffer. The ~30–35 ms difference therefore sits in the one segment not measured: **on the phone, between the pattern drawing a frame and the virtual display composing it** (the buffer timestamp is stamped at composition).
+- It follows the pattern's refresh request more often than not: the pass asking for the display's highest rate was the slower one in 3 of 5 casts (equal in 1, faster in 1). Games ask for high rates too, so this likely applies to gameplay.
+- **Audio send buffer:** in cast H the DataChannel leg took 64 ms instead of ~5 ms for the whole cast, which matches the `MAX_BUFFERED_BYTES` cap (12 000 B ≈ 62 ms of PCM). The buffer probe arrived one cast later, and in cast I the buffer stayed empty. The cap is a plausible standing queue, but it is not proven.
+
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.
