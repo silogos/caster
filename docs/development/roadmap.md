@@ -177,7 +177,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
-## Refactor 2026-11n — Mobile review, group E: architecture and dead code ✅ implemented — awaiting on-device check
+## Refactor 2026-11n — Mobile review, group E: architecture and dead code ✅ implemented — verified on-device
 *(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group E of A–G. No behavior change intended.)*
 **Scope:**
 - **`CastService` split by concern** (was 1,219 lines — the "CastManager" AGENTS.md rules out): a lifecycle shell plus per-cast helpers `MicController`, `LiveQualityCoordinator`, `DesktopControls`, `CastThermalWatch`, `CastWifiLock`, `CastNotifications`; its public API is unchanged (mobile.md).
@@ -185,7 +185,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 - **Dead code:** the retired capture-flavor sweep and its mask/usage variants, the sweep-only float probe, the duplicated ADM reflection lookups (now `AdmRecorderInternals`), `AppTypography`, 13 unused strings.
 - **Deferred:** the `MediaCastSession`/`MicCastSession` shared negotiator (finding #23). It rewrites the live media path's offer/answer/ICE handling and is mic-coupled, so it waits for group G's negotiation tests (answer ordering, candidate queue).
 
-**Accept:** `testDebugUnitTest` 354/354 (new `LiveQualityCoordinatorTest`, `ShareConsentTest`), `assembleDebug` clean. **On-device pending:** Share screen (consent ladder) → cast with game audio, a live quality pick, Stop share screen, Disconnect.
+**Accept:** `testDebugUnitTest` 354/354 (new `LiveQualityCoordinatorTest`, `ShareConsentTest`), `assembleDebug` clean. **On-device (product owner):** Share screen (consent ladder) → cast with game audio, a live quality pick, Stop share screen, Disconnect.
 
 ---
 
