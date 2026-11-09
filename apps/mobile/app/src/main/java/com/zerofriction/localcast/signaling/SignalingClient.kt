@@ -447,8 +447,10 @@ class SignalingClient(
             val silentForMs = nowMs() - lastInboundAtMs
             if (silentForMs > heartbeatTimeoutMs) {
                 Log.w(TAG, "desktop silent for ${silentForMs} ms — dropping the connection")
-                // Closing triggers onConnectionLost → initiateReconnect.
-                transport.close(1000, "heartbeat-timeout")
+                // Abort, not close: a vanished desktop never answers a close
+                // frame, so a polite close only reports the loss ~60 s later.
+                transport.abort()
+                onConnectionLost("heartbeat-timeout")
                 return@postDelayed
             }
             sendEnvelope(Envelope.TYPE_PING, Payloads.ping(nowMs()))
@@ -456,6 +458,12 @@ class SignalingClient(
         }
     }
 
+    /**
+     * Senders run on several threads (OkHttp's reader for pong/auth, the
+     * WebRTC signaling thread for ICE, the main thread for controls): the
+     * lock keeps `seq` unique and in wire order. `send` only enqueues.
+     */
+    @Synchronized
     private fun sendEnvelope(type: String, payload: JsonObject) {
         sendSeq += 1
         transport.send(EnvelopeCodec.encode(type, sendSeq, sessionId, payload))
@@ -491,7 +499,16 @@ class SignalingClient(
         cancelHandshakeTimeout()
         handshakeTimeoutHandle = scheduler.postDelayed(HANDSHAKE_TIMEOUT_MS) {
             handshakeTimeoutHandle = null
-            if (_state.value != State.AUTHORIZED) {
+            if (_state.value == State.AUTHORIZED) return@postDelayed
+            if (hasAuthorizedOnce) {
+                // A reconnect to a slow (or still-restarting) desktop: the
+                // credentials already worked once, so silence is a lost
+                // connection — keep the backoff ladder going, never a
+                // terminal BAD_AUTH that ends the cast.
+                Log.w(TAG, "reconnect handshake did not complete in ${HANDSHAKE_TIMEOUT_MS} ms — retrying")
+                transport.abort()
+                onConnectionLost("handshake-timeout")
+            } else {
                 Log.w(TAG, "handshake did not complete in ${HANDSHAKE_TIMEOUT_MS} ms — giving up")
                 fail(SignalingError.BAD_AUTH)
             }

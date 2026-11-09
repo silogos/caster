@@ -155,6 +155,11 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Scope:** the QR parser rejects session ids/secrets of the wrong decoded size (16/32 bytes) instead of failing later at HMAC time; the bitrate slider's release ignores a cleared drag (`NaN`); the QR camera re-delivers the same code after 2 s and a different code at once (a rejected scan no longer latches the scanner); a hotspot start that lands after a cancel releases its reservation; `CastService.start` refuses a double start and a dead pairing, survives a refused foreground start, and hands the socket back to `ConnectedDesktop` when it refuses; the hard-reset recovery path is removed (audio.md); every full offer is watched by the ICE ladder, so a missing answer can no longer leave the cast in NEGOTIATING forever (webrtc.md). Mic is out of scope (product owner: the mic currently rides the laptop's headset).
 **Accept:** `testDebugUnitTest` 333/333, `assembleDebug` clean. **On-device pending:** rescan after a wrong QR, the bitrate slider during a live cast, a normal cast start → CONNECTED.
 
+## Fix 2026-11k — Mobile review, group B: reliability ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group B of A–G.)*
+**Scope:** libwebrtc's callbacks (connection state, set-remote-description results, stats) hop to the media session thread, which owns the candidate queue, the restart ladder and the stats deltas; a failed `setRemoteDescription` concludes the attempt at once; the AAC encoder's input wait is 10 ms, not 10 µs (`dequeueInputBuffer` takes µs); a silent desktop is dropped with an abort (`cancel()`), so reconnect starts at the heartbeat bound, not ~60 s later; a reconnect handshake timeout retries instead of failing `BAD_AUTH`; auto quality's step down never raises any dimension (sharp → balanced); `seq` is assigned under a lock; the send bitrate is never negative after a pc rebuild; saved-desktop timestamps decode as Long (post-2038). Mic FGS (#13 of the review) deferred with the rest of the mic work.
+**Accept:** `testDebugUnitTest` 336/336, `assembleDebug` clean. **On-device pending:** a normal cast to CONNECTED and live stats; killing the desktop mid-cast → the phone reconnects in ~15–20 s.
+
 ---
 
 ## Definition of Done (every phase)

@@ -27,12 +27,21 @@ interface SignalingTransport {
     fun send(text: String): Boolean
 
     fun close(code: Int, reason: String)
+
+    /**
+     * Drop the socket *now* — no closing handshake, and no further listener
+     * callbacks from it. [close] is polite: it waits for the peer's close
+     * frame, which a vanished desktop never sends (OkHttp then waits ~60 s
+     * before reporting anything). The caller handles the loss itself.
+     */
+    fun abort()
 }
 
 /** Production transport: OkHttp WebSocket (pinned in libs.versions.toml). */
 class OkHttpSignalingTransport : SignalingTransport {
 
     private val client = OkHttpClient()
+    @Volatile
     private var webSocket: WebSocket? = null
 
     override fun open(url: String, listener: SignalingTransport.Listener) {
@@ -40,20 +49,24 @@ class OkHttpSignalingTransport : SignalingTransport {
         webSocket = client.newWebSocket(
             request,
             object : WebSocketListener() {
+                // Only the current socket speaks: an aborted or replaced
+                // socket's late callbacks must not touch the new connection.
+                private fun current(webSocket: WebSocket) = webSocket === this@OkHttpSignalingTransport.webSocket
+
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    listener.onTransportOpen()
+                    if (current(webSocket)) listener.onTransportOpen()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    listener.onTransportText(text)
+                    if (current(webSocket)) listener.onTransportText(text)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    listener.onTransportClosed(code, reason)
+                    if (current(webSocket)) listener.onTransportClosed(code, reason)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    listener.onTransportFailure(t)
+                    if (current(webSocket)) listener.onTransportFailure(t)
                 }
             },
         )
@@ -63,5 +76,11 @@ class OkHttpSignalingTransport : SignalingTransport {
 
     override fun close(code: Int, reason: String) {
         webSocket?.close(code, reason)
+    }
+
+    override fun abort() {
+        val dropped = webSocket ?: return
+        webSocket = null // silences its callbacks before cancel() fires them
+        dropped.cancel()
     }
 }

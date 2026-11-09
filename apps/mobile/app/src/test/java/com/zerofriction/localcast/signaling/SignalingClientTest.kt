@@ -102,7 +102,9 @@ class SignalingClientTest {
         // samples on the ping cadence, so wait past timeout + one interval.
         advance(HEARTBEAT_TIMEOUT + HEARTBEAT_INTERVAL + 1)
 
-        assertTrue(fake.closeCount >= 1) // the client hung up first
+        // Aborted, and the loss handled at once — no waiting on a close
+        // callback a vanished desktop would never trigger.
+        assertEquals(1, fake.abortCount)
         assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
         assertEquals(1000L, scheduler.nextDelayMs()) // webrtc.md: backoff starts at 1 s
     }
@@ -509,6 +511,29 @@ class SignalingClientResumeTest {
     }
 
     @Test
+    fun `a reconnect whose handshake times out keeps retrying instead of failing BAD_AUTH`() {
+        setUp()
+        authorizeResume()
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        scheduler.advance(scheduler.nextDelayMs()!!) // reconnect attempt opens
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.clear()
+
+        // The desktop is up but too slow to answer the handshake.
+        scheduler.advance(SignalingClient.HANDSHAKE_TIMEOUT_MS)
+
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertTrue(events.none { it is SignalingClient.Event.Failed })
+        assertEquals(1, fake.abortCount)
+        assertEquals(2000L, scheduler.nextDelayMs()) // next ladder rung
+
+        // The next attempt authorizes normally.
+        scheduler.advance(2000)
+        authorizeResume()
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+    }
+
+    @Test
     fun `a trusted reconnect ladder is bounded — it ends in unreachable, not forever`() {
         setUp()
         authorizeResume()
@@ -570,6 +595,14 @@ private class FakeTransport : SignalingTransport {
     override fun close(code: Int, reason: String) {
         closeCount += 1
         listener?.onTransportClosed(code, reason)
+    }
+
+    /** Like OkHttp's cancel() as wrapped by the real transport: silent. */
+    var abortCount = 0
+        private set
+
+    override fun abort() {
+        abortCount += 1
     }
 }
 

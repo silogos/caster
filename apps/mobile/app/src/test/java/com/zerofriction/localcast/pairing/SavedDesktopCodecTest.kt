@@ -39,4 +39,10 @@ class SavedDesktopCodecTest {
         assertNull(decodeSavedDesktop(encodeSavedDesktop(entry.copy(sealedTrustKey = ""))))
         assertNull(decodeSavedDesktop(encodeSavedDesktop(entry.copy(desktopId = ""))))
     }
+
+    @Test
+    fun `timestamps past 2038 still decode - unix seconds are Long, not Int`() {
+        val later = entry.copy(savedAtUnixSeconds = 2_200_000_000, lastConnectedAtUnixSeconds = 2_200_000_100)
+        assertEquals(later, decodeSavedDesktop(encodeSavedDesktop(later)))
+    }
 }

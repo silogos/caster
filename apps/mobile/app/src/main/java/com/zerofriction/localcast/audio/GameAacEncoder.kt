@@ -129,7 +129,7 @@ class GameAacEncoder(
     }
 
     private fun feed(codec: MediaCodec, unit: ByteArray) {
-        val index = codec.dequeueInputBuffer(POLL_TIMEOUT_MS)
+        val index = codec.dequeueInputBuffer(INPUT_DEQUEUE_TIMEOUT_US)
         if (index < 0) {
             droppedInputs++
             return // drop the unit, never block the loop
@@ -196,8 +196,15 @@ class GameAacEncoder(
         /** Capture chunks buffered for the encoder thread (~80 ms of 10 ms chunks). */
         const val QUEUE_CHUNKS = 8
 
-        /** dequeueInputBuffer / queue.poll timeout — the reference's 10 ms poll. */
+        /** queue.poll timeout — the reference's 10 ms poll. */
         const val POLL_TIMEOUT_MS = 10L
+
+        /**
+         * The same 10 ms for `dequeueInputBuffer`, whose timeout is in
+         * **microseconds** — passing [POLL_TIMEOUT_MS] there waited 10 µs, so
+         * any momentarily busy codec dropped the unit (an audible gap).
+         */
+        const val INPUT_DEQUEUE_TIMEOUT_US = POLL_TIMEOUT_MS * 1_000L
 
         private const val JOIN_TIMEOUT_MS = 500L
     }

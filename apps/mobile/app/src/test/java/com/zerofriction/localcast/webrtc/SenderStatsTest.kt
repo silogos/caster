@@ -161,4 +161,12 @@ class SenderStatsTest {
         assertEquals(0L, sample.bytesSent)
         assertNull(sample.rttMs)
     }
+
+    @Test
+    fun `send bitrate is the byte delta over time, and never negative after a pc rebuild`() {
+        assertEquals(0L, sendBitrateBps(0, 50_000, 0, 1_000)) // first sample
+        assertEquals(800_000L, sendBitrateBps(100_000, 200_000, 1_000, 2_000))
+        // Re-auth rebuilt the pc: bytesSent restarted near 0.
+        assertEquals(0L, sendBitrateBps(9_000_000, 12_000, 5_000, 6_000))
+    }
 }
