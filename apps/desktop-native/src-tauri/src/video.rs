@@ -49,8 +49,11 @@ const PIXEL_FORMAT: u32 = objc2_core_video::kCVPixelFormatType_420YpCbCr8BiPlana
 const POOL_ALLOCATION_THRESHOLD: i64 = 8;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
 const WINDOW_TITLE: &str = "Zero-Friction Cast";
-/// NSWindowStyleMask: titled | closable | miniaturizable | resizable.
-const WINDOW_STYLE: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+/// Frameless (product choice, 2026-11-09 — the Electron receiver's
+/// frameless spec): NSWindowStyleMaskBorderless | Resizable — no title
+/// bar, no traffic lights, square corners; OBS captures pure video. Moved
+/// by dragging the video, resized from the edges, closed from the deck.
+const WINDOW_STYLE: u64 = 1 << 3;
 const NS_BACKING_STORE_BUFFERED: usize = 2;
 /// NSWindowOcclusionStateVisible.
 const OCCLUSION_VISIBLE: u64 = 1 << 1;
@@ -84,6 +87,140 @@ unsafe impl Sync for VideoWindow {}
 static VIDEO_WINDOW: OnceLock<VideoWindow> = OnceLock::new();
 /// Published by the main thread ([`refresh_visibility`]), read per frame.
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// The user wants the video window: set by "Open video", cleared by
+/// "Close video" or the window's own close button. A closed window renders
+/// nothing (and the app keeps its audio silent — lib.rs).
+static VIDEO_OPEN: AtomicBool = AtomicBool::new(false);
+/// A stream is delivering frames. While false the window shows the
+/// "no input" card, like a capture card with nothing plugged in — OBS
+/// records that card, never a frozen last frame.
+static LIVE: AtomicBool = AtomicBool::new(false);
+/// The "no input" card layer (a sublayer of the display layer).
+static NO_INPUT_CARD: OnceLock<LayerRef> = OnceLock::new();
+
+struct LayerRef(Id);
+// Created and toggled on the main thread only; retained for the process.
+unsafe impl Send for LayerRef {}
+unsafe impl Sync for LayerRef {}
+
+/// `CGColorRef` with its Objective-C type encoding (`^{CGColor=}`), so the
+/// layer setters receive exactly what they declare.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct CGColorRef(*const c_void);
+unsafe impl objc2::encode::Encode for CGColorRef {
+    const ENCODING: objc2::encode::Encoding =
+        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColor", &[]));
+}
+
+/// Signal Deck colors for the card (designs/desktop-signal-deck.figcraft).
+const CARD_BG: u32 = 0x0e1216;
+const CARD_LAMP: u32 = 0x5d6672;
+const CARD_TITLE: u32 = 0xeef1f4;
+const CARD_SUB: u32 = 0x8a93a0;
+const CARD_BRAND: u32 = 0x5d6672;
+/// CALayer autoresizing: fill the parent / stay centered / stay at the bottom.
+const FILL_PARENT: u32 = 2 | 16; // width | height sizable
+const KEEP_CENTERED: u32 = 1 | 4 | 8 | 32; // all margins flexible
+const KEEP_AT_BOTTOM: u32 = 1 | 4 | 32; // x margins + top margin flexible
+
+unsafe fn cg_color(rgb: u32) -> CGColorRef {
+    let channel = |shift: u32| f64::from((rgb >> shift) & 0xff) / 255.0;
+    let color: Id = msg_send![class!(NSColor), colorWithSRGBRed: channel(16), green: channel(8), blue: channel(0), alpha: 1.0f64];
+    msg_send![color, CGColor]
+}
+
+unsafe fn text_layer(text: &str, font: &str, size: f64, rgb: u32, frame: NSRect, mask: u32, scale: f64) -> Id {
+    let layer: Id = msg_send![class!(CATextLayer), layer];
+    let string = NSString::from_str(text);
+    let font_name = NSString::from_str(font);
+    let center = NSString::from_str("center");
+    let _: () = msg_send![layer, setString: &*string];
+    let _: () = msg_send![layer, setFont: &*font_name];
+    let _: () = msg_send![layer, setFontSize: size];
+    let _: () = msg_send![layer, setForegroundColor: cg_color(rgb)];
+    let _: () = msg_send![layer, setAlignmentMode: &*center];
+    let _: () = msg_send![layer, setContentsScale: scale];
+    let _: () = msg_send![layer, setFrame: frame];
+    let _: () = msg_send![layer, setAutoresizingMask: mask];
+    layer
+}
+
+/// Builds the "no input" card over the display layer: graphite, a grey
+/// lamp, NO INPUT, a hint, and the brand — the Signal Deck look.
+unsafe fn build_no_input_card(display_layer: Id, (w, h): (f64, f64), scale: f64) -> Id {
+    let card: Id = msg_send![class!(CALayer), layer];
+    let _: () = msg_send![card, setBackgroundColor: cg_color(CARD_BG)];
+    let _: () = msg_send![card, setFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h))];
+    let _: () = msg_send![card, setAutoresizingMask: FILL_PARENT];
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    // Layer coordinates: y grows upward from the bottom edge.
+    let lamp: Id = msg_send![class!(CALayer), layer];
+    let _: () = msg_send![lamp, setBackgroundColor: cg_color(CARD_LAMP)];
+    let _: () = msg_send![lamp, setCornerRadius: 6.0f64];
+    let _: () = msg_send![lamp, setFrame: NSRect::new(NSPoint::new(cx - 6.0, cy + 46.0), NSSize::new(12.0, 12.0))];
+    let _: () = msg_send![lamp, setAutoresizingMask: KEEP_CENTERED];
+    let _: () = msg_send![card, addSublayer: lamp];
+    let title = text_layer("NO INPUT", "Menlo-Bold", 26.0, CARD_TITLE,
+        NSRect::new(NSPoint::new(cx - 200.0, cy + 4.0), NSSize::new(400.0, 34.0)), KEEP_CENTERED, scale);
+    let _: () = msg_send![card, addSublayer: title];
+    let sub = text_layer("Start casting from your phone", "HelveticaNeue", 15.0, CARD_SUB,
+        NSRect::new(NSPoint::new(cx - 250.0, cy - 28.0), NSSize::new(500.0, 22.0)), KEEP_CENTERED, scale);
+    let _: () = msg_send![card, addSublayer: sub];
+    let brand = text_layer("LOCAL CAST", "Menlo-Bold", 11.0, CARD_BRAND,
+        NSRect::new(NSPoint::new(cx - 100.0, 24.0), NSSize::new(200.0, 16.0)), KEEP_AT_BOTTOM, scale);
+    let _: () = msg_send![card, addSublayer: brand];
+    let _: () = msg_send![card, setHidden: LIVE.load(Ordering::Relaxed)];
+    let _: () = msg_send![display_layer, addSublayer: card];
+    card
+}
+
+/// Bumped for every new video stream and whenever the media pc closes;
+/// a frame loop whose generation is no longer current exits (libwebrtc's
+/// stream does not end when its pc closes — each cast leaked a thread).
+static STREAM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A new video stream starts; returns its generation.
+pub fn begin_stream() -> u64 {
+    STREAM_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// The media pc closed: whatever stream was running is over.
+pub fn end_streams() {
+    STREAM_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn is_current_stream(generation: u64) -> bool {
+    STREAM_GENERATION.load(Ordering::Relaxed) == generation
+}
+
+pub fn is_live() -> bool {
+    LIVE.load(Ordering::Relaxed)
+}
+
+/// Any thread: records whether input is live. True when it changed — the
+/// caller then tells the UI and applies the card on the main thread.
+pub fn set_live(live: bool) -> bool {
+    LIVE.swap(live, Ordering::Relaxed) != live
+}
+
+/// Main thread: shows the NO INPUT card while no input is live (dropping
+/// the last frame, so a capture never freezes on stale video) and hides it
+/// while frames flow.
+pub fn apply_no_input_card() {
+    let no_input = !is_live();
+    let Some(card) = NO_INPUT_CARD.get() else { return };
+    let layer = VIDEO_WINDOW.get().map(|vw| vw.layer);
+    guarded("toggle no-input card", || unsafe {
+        let _: () = msg_send![card.0, setHidden: !no_input];
+        if no_input {
+            if let Some(layer) = layer {
+                let _: () = msg_send![layer, flushAndRemoveImage];
+            }
+        }
+    });
+    log::info!(target: "video", "{}", if no_input { "no input — showing the no-input card" } else { "input live — card hidden" });
+}
 
 /// Runs an ObjC block, turning an exception into a logged `false`.
 fn guarded(what: &str, f: impl FnOnce()) -> bool {
@@ -100,8 +237,33 @@ fn exception_reason(exception: Option<Retained<objc2::exception::Exception>>) ->
     exception.map_or_else(|| "(no exception object)".to_string(), |e| format!("{e:?}"))
 }
 
+/// Whether the user has the video window open.
+pub fn is_open() -> bool {
+    VIDEO_OPEN.load(Ordering::Relaxed)
+}
+
+/// Main thread: "Open video" — creates the window on first use and shows it.
+pub fn open_video_window() {
+    VIDEO_OPEN.store(true, Ordering::Relaxed);
+    create_video_window();
+    log::info!(target: "video", "video window opened");
+}
+
+/// Main thread: "Close video" — hides the window; frames stop rendering.
+pub fn close_video_window() {
+    VIDEO_OPEN.store(false, Ordering::Relaxed);
+    WINDOW_VISIBLE.store(false, Ordering::Relaxed);
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        guarded("close video window", || unsafe {
+            let _: () = msg_send![vw.window, orderOut: std::ptr::null::<AnyObject>()];
+            let _: () = msg_send![vw.layer, flush];
+        });
+    }
+    log::info!(target: "video", "video window closed");
+}
+
 /// Main thread: creates the video window (idempotent) and shows it.
-pub fn create_video_window() {
+fn create_video_window() {
     if VIDEO_WINDOW.get().is_none() {
         guarded("create video window", || unsafe {
             let (w, h) = INITIAL_WINDOW_SIZE;
@@ -120,15 +282,24 @@ pub fn create_video_window() {
                 backing: NS_BACKING_STORE_BUFFERED,
                 defer: false
             ];
-            // Closing hides the window; the next cast shows it again.
+            // Closing hides the window (the object stays for "Open video").
             let _: () = msg_send![window, setReleasedWhenClosed: false];
             // Layer attached BEFORE the view enters the window — attaching
             // after display left the window blank once (live M3).
             let _: () = msg_send![view, setLayer: layer];
+            // The title still names the window in Mission Control and OBS's
+            // window list, though no title bar shows it.
             let title = NSString::from_str(WINDOW_TITLE);
             let _: () = msg_send![window, setTitle: &*title];
+            let _: () = msg_send![window, setMovableByWindowBackground: true];
+            let _: () = msg_send![window, setHasShadow: true];
+            let black: Id = msg_send![class!(NSColor), blackColor];
+            let _: () = msg_send![window, setBackgroundColor: black];
             let _: () = msg_send![window, setContentView: view];
             let _: () = msg_send![view, release]; // the window owns its content view
+            let scale: f64 = msg_send![window, backingScaleFactor];
+            let card = build_no_input_card(layer, INITIAL_WINDOW_SIZE, scale);
+            let _ = NO_INPUT_CARD.set(LayerRef(card));
             let _: () = msg_send![window, center];
             // `alloc`/`new` already returned +1: these are the process's refs.
             let _ = VIDEO_WINDOW.set(VideoWindow { window, layer });
@@ -151,23 +322,25 @@ pub fn show_video_window() {
 }
 
 /// Main thread: publishes whether the window is actually composited.
-pub fn refresh_visibility() {
-    if let Some(vw) = VIDEO_WINDOW.get() {
-        let mut visible = false;
-        guarded("read window occlusion", || unsafe {
-            let occlusion: u64 = msg_send![vw.window, occlusionState];
-            visible = occlusion & OCCLUSION_VISIBLE != 0;
-        });
-        if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
-            log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
-        }
+/// Returns `true` when it found the user closed an open window with its
+/// own close button (the caller silences the audio and tells the UI).
+pub fn refresh_visibility() -> bool {
+    let Some(vw) = VIDEO_WINDOW.get() else { return false };
+    let (mut on_screen, mut visible) = (false, false);
+    guarded("read window state", || unsafe {
+        on_screen = msg_send![vw.window, isVisible];
+        let occlusion: u64 = msg_send![vw.window, occlusionState];
+        visible = occlusion & OCCLUSION_VISIBLE != 0;
+    });
+    let closed_by_user = !on_screen && VIDEO_OPEN.swap(false, Ordering::Relaxed);
+    let visible = visible && on_screen && is_open();
+    if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
+        log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
     }
-}
-
-/// True once the native window exists (the webview preview covers the
-/// first frames until then).
-pub fn is_active() -> bool {
-    VIDEO_WINDOW.get().is_some()
+    if closed_by_user {
+        log::info!(target: "video", "video window closed by the user");
+    }
+    closed_by_user
 }
 
 // ---- the frame path (one renderer per video stream) ------------------------
@@ -221,6 +394,18 @@ impl Renderer {
             dropped_not_ready: 0,
             dropped_pool_full: 0,
         }
+    }
+
+    /// Handles a frame the window cannot show WITHOUT converting it —
+    /// `Some(followup)` when it was dropped, `None` when it should render.
+    /// Saves the decoder-buffer → I420 conversion for every hidden frame.
+    pub fn drop_if_hidden(&mut self) -> Option<Followup> {
+        // Closed (or never opened): nothing to render, nothing to raise.
+        let Some(vw) = VIDEO_WINDOW.get().filter(|_| is_open()) else { return Some(Followup::None) };
+        if WINDOW_VISIBLE.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(self.drop_hidden(vw))
     }
 
     /// Copies one I420 frame into a pooled NV12 buffer and enqueues it.
@@ -496,5 +681,69 @@ fn cf_dict(pairs: &[(*const c_void, *const c_void)]) -> Option<CFRetained<CFDict
             &kCFTypeDictionaryKeyCallBacks,
             &kCFTypeDictionaryValueCallBacks,
         )
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    /// Why the I420 → NV12 copy stays a plain loop: measured 2026-11-09 on
+    /// the M-series dev Mac, 1280×800 — the loop (vectorized by rustc)
+    /// ~18 µs/frame, libyuv's `i420_to_nv12` ~54 µs/frame.
+    /// `cargo test --release --lib video::bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn i420_to_nv12_scalar_vs_libyuv() {
+        let (w, h) = (1280usize, 800usize);
+        let (cw, ch) = (w / 2, h / 2);
+        let (y, u, v) = (vec![16u8; w * h], vec![128u8; cw * ch], vec![130u8; cw * ch]);
+        let (mut dy, mut duv) = (vec![0u8; w * h], vec![0u8; w * h / 2]);
+        let runs = 300;
+        let t = std::time::Instant::now();
+        for _ in 0..runs {
+            for r in 0..h {
+                dy[r * w..r * w + w].copy_from_slice(&y[r * w..r * w + w]);
+            }
+            for r in 0..ch {
+                let dst = &mut duv[r * w..r * w + cw * 2];
+                let (us, vs) = (&u[r * cw..r * cw + cw], &v[r * cw..r * cw + cw]);
+                for (x, pair) in dst.chunks_exact_mut(2).enumerate() {
+                    pair[0] = us[x];
+                    pair[1] = vs[x];
+                }
+            }
+        }
+        let scalar = t.elapsed() / runs;
+        let t = std::time::Instant::now();
+        for _ in 0..runs {
+            livekit::webrtc::native::yuv_helper::i420_to_nv12(
+                &y, w as u32, &u, cw as u32, &v, cw as u32, &mut dy, w as u32, &mut duv, w as u32, w as i32, h as i32,
+            );
+        }
+        let simd = t.elapsed() / runs;
+        println!("1280x800 I420→NV12: scalar {scalar:?}/frame, libyuv {simd:?}/frame");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_pc_retires_the_running_frame_loop() {
+        let first = begin_stream();
+        assert!(is_current_stream(first));
+        end_streams(); // the phone stopped casting (bye → pc closed)
+        assert!(!is_current_stream(first), "the old loop must exit, not wait forever");
+        let second = begin_stream();
+        assert!(is_current_stream(second) && !is_current_stream(first));
+    }
+
+    #[test]
+    fn live_changes_are_reported_once() {
+        set_live(false);
+        assert!(set_live(true), "no input → live: show the video");
+        assert!(!set_live(true), "already live: nothing to announce");
+        assert!(set_live(false), "live → no input: show the card");
+        assert!(!is_live());
     }
 }

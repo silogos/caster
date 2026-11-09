@@ -20,7 +20,7 @@ use livekit::webrtc::{
 use crate::protocol::{Candidate, PcId};
 use crate::signaling::{IceSender, OutboundIce};
 use futures_util::StreamExt;
-use livekit::webrtc::peer_connection::IceGatheringState;
+use livekit::webrtc::peer_connection::{IceGatheringState, PeerConnectionState};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
@@ -216,8 +216,22 @@ impl MediaAnswerer {
             }
         })));
 
+        let state_app = self.app.clone();
         pc.on_connection_state_change(Some(Box::new(move |state| {
             log::info!(target: "webrtc", "pc={} state: {state:?}", role.as_str());
+            if role != PcId::Media {
+                return;
+            }
+            // The display stays awake exactly while the cast is live.
+            crate::power::keep_display_awake(state == PeerConnectionState::Connected);
+            // The link is gone (the phone stopped, dropped, or the pc was
+            // replaced): no input until frames flow again.
+            if matches!(state, PeerConnectionState::Disconnected | PeerConnectionState::Failed | PeerConnectionState::Closed) {
+                announce_input(&state_app, false);
+            }
+            if matches!(state, PeerConnectionState::Failed | PeerConnectionState::Closed) {
+                crate::video::end_streams();
+            }
         })));
         pc.on_ice_connection_state_change(Some(Box::new(move |state| {
             log::info!(target: "webrtc", "pc={} ice state: {state:?}", role.as_str());
@@ -283,6 +297,11 @@ impl MediaAnswerer {
 
     /// Tears this pc down (a `bye`, or before a re-offer replaces it).
     pub fn close(&self) {
+        if self.role == PcId::Media {
+            crate::power::keep_display_awake(false);
+            crate::video::end_streams();
+            announce_input(&self.app, false);
+        }
         *self.game_audio_dc.lock().expect("dc keep lock") = None;
         if let Some(pc) = self.pc.lock().expect("pc lock").take() {
             pc.close();
@@ -291,81 +310,100 @@ impl MediaAnswerer {
     }
 }
 
-/// Preview cadence for the webview (~12 fps) while the native window does
-/// not exist yet, and its size/quality.
-const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
-const PREVIEW_MAX_WIDTH: f32 = 640.0;
-const PREVIEW_JPEG_QUALITY: u8 = 88;
 const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// How often a frame loop waiting for frames checks whether its stream is
+/// still the current one.
+const STALE_STREAM_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Input went live or stopped: the deck's ON AIR, and the video window's
+/// NO INPUT card (main thread). No-op when nothing changed.
+fn announce_input(app: &tauri::AppHandle, live: bool) {
+    if crate::video::set_live(live) {
+        let _ = app.emit("cast:state", json!({ "live": live }));
+        let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+    }
+}
 
 /// The video frame loop for one stream (one cast): renders into the native
-/// window, keeps its visibility fresh from the main thread, and feeds the
-/// webview preview until the window exists.
+/// window while the user has it open, keeps its visibility fresh from the
+/// main thread, and tells the UI when the cast goes live / ends.
 async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
+    let generation = crate::video::begin_stream();
     let mut frames: u64 = 0;
     let mut window_requested = false;
     let mut last_visibility_poll: Option<std::time::Instant> = None;
-    let mut last_preview: Option<std::time::Instant> = None;
     let mut last_log = std::time::Instant::now();
     let mut frames_at_last_log: u64 = 0;
-    while let Some(frame) = stream.next().await {
+    // Per-frame cost of convert + copy + enqueue (rendered frames only).
+    let mut render_cost = std::time::Duration::ZERO;
+    let mut rendered: u32 = 0;
+    loop {
+        if !crate::video::is_current_stream(generation) {
+            log::info!(target: "webrtc", "video stream replaced or closed — frame loop exits");
+            break;
+        }
+        let frame = match tokio::time::timeout(STALE_STREAM_CHECK, stream.next()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => continue, // no frame yet: re-check the generation
+        };
         let (w, h) = (frame.buffer.width(), frame.buffer.height());
         if !window_requested {
             window_requested = true;
             log::info!(target: "webrtc", "first frame {w}x{h}");
-            // Creates the window, or shows it again if a previous cast's was closed.
-            let _ = app.run_on_main_thread(crate::video::create_video_window);
+            // A window the user left open comes back for the new cast.
+            if crate::video::is_open() {
+                let _ = app.run_on_main_thread(crate::video::open_video_window);
+            }
+        }
+        // Frames flow: live (also after a transient disconnect recovers).
+        if !crate::video::is_live() {
+            announce_input(&app, true);
         }
         if last_visibility_poll.map_or(true, |t| t.elapsed() >= crate::video::VISIBILITY_POLL_INTERVAL) {
             last_visibility_poll = Some(std::time::Instant::now());
-            let _ = app.run_on_main_thread(crate::video::refresh_visibility);
+            let poll_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                // The window's own close button: silence the sound, update the UI.
+                if crate::video::refresh_visibility() {
+                    crate::audio::set_output_enabled(false);
+                    let _ = poll_app.emit("video:window", json!({ "open": false }));
+                }
+            });
         }
-        let i420 = frame.buffer.to_i420();
-        let (y, u, v) = i420.data();
-        let (sy, su, sv) = i420.strides();
-        if renderer.render_i420(w, h, y, u, v, sy, su, sv) == crate::video::Followup::RaiseWindow {
+        let started = std::time::Instant::now();
+        let followup = match renderer.drop_if_hidden() {
+            Some(followup) => followup,
+            None => {
+                let i420 = frame.buffer.to_i420();
+                let (y, u, v) = i420.data();
+                let (sy, su, sv) = i420.strides();
+                let followup = renderer.render_i420(w, h, y, u, v, sy, su, sv);
+                render_cost += started.elapsed();
+                rendered += 1;
+                followup
+            }
+        };
+        if followup == crate::video::Followup::RaiseWindow {
             let _ = app.run_on_main_thread(crate::video::show_video_window);
         }
         frames += 1;
-        if !crate::video::is_active() && last_preview.map_or(true, |t| t.elapsed() >= PREVIEW_INTERVAL) {
-            last_preview = Some(std::time::Instant::now());
-            if let Some(data_url) = preview_jpeg(&*frame.buffer) {
-                let _ = app.emit("video:jpeg", json!({ "dataUrl": data_url }));
-            }
-        }
         if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
             let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
             log::info!(target: "webrtc", "video: {frames} frames, {fps:.0} fps, {w}x{h}");
+            if rendered > 0 {
+                log::debug!(target: "video", "render cost {:?}/frame over {rendered} frames", render_cost / rendered);
+            }
+            render_cost = std::time::Duration::ZERO;
+            rendered = 0;
             last_log = std::time::Instant::now();
             frames_at_last_log = frames;
         }
     }
-    log::info!(target: "webrtc", "video frame stream ended after {frames} frames");
-}
-
-/// A downscaled JPEG data URL of one frame for the webview's receiving stage.
-fn preview_jpeg(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> Option<String> {
-    use base64::Engine;
-    let (sw, sh) = (buffer.width(), buffer.height());
-    if sw == 0 || sh == 0 {
-        return None;
+    log::info!(target: "webrtc", "video frame loop ended after {frames} frames");
+    if crate::video::is_current_stream(generation) {
+        announce_input(&app, false);
     }
-    let scale = (PREVIEW_MAX_WIDTH / sw as f32).min(1.0);
-    let (dw, dh) = ((sw as f32 * scale).max(2.0) as i32, (sh as f32 * scale).max(2.0) as i32);
-    let mut pixels = vec![0u8; (dw * dh * 4) as usize];
-    // libyuv's "ABGR" is R,G,B,A in memory — exactly RgbaImage's layout
-    // (asking for "RGBA" produced A,B,G,R bytes: all-red, found live). It
-    // also expands the limited range, so no manual 16–235 stretch.
-    buffer.to_argb(livekit::webrtc::video_frame::VideoFormatType::ABGR, &mut pixels, (dw * 4) as u32, dw, dh);
-    let image = image::RgbaImage::from_raw(dw as u32, dh as u32, pixels)?;
-    let mut jpg = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, PREVIEW_JPEG_QUALITY);
-    if let Err(e) = image::DynamicImage::ImageRgba8(image).write_with_encoder(encoder) {
-        log::warn!(target: "webrtc", "preview jpeg encode failed: {e}");
-        return None;
-    }
-    // Frames never touch the disk (AGENTS.md logging rules).
-    Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpg)))
 }

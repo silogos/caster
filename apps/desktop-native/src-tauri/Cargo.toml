@@ -7,7 +7,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
@@ -19,7 +19,7 @@ hkdf = "0.12"
 base64 = "0.22"
 rand = "0.8"
 qrcode = { version = "0.14", features = ["image"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 if-addrs = "0.13"
 objc2 = { version = "0.6", features = ["exception"] }
 objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
