@@ -150,11 +150,19 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
-        sender?.interrupt()
+        val drainer = sender
         sender = null
+        drainer?.interrupt()
+        // The native channel is freed only once the drain thread is gone — a
+        // send racing dispose() would touch freed memory. A thread that does
+        // not stop in time leaks the channel instead (logged, never a crash).
+        drainer?.join(SENDER_JOIN_TIMEOUT_MS)
+        val drained = drainer?.isAlive != true
         channel?.let {
             try {
+                it.unregisterObserver()
                 it.close()
+                if (drained) it.dispose() else Log.w(TAG, "game audio sender did not stop — channel not disposed")
             } catch (t: Throwable) {
                 Log.d(TAG, "closing the game audio channel: ${t.message}")
             }
@@ -170,6 +178,9 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
 
     companion object {
         private const val TAG = "GameAudioDataCh"
+
+        /** How long close() waits for the drain thread (it polls every 50 ms). */
+        private const val SENDER_JOIN_TIMEOUT_MS = 500L
 
         /** The desktop switches sinks on this label (webrtc.md channel registry). */
         const val CHANNEL_LABEL = "game-audio"

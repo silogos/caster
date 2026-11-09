@@ -24,11 +24,17 @@ package com.zerofriction.localcast.webrtc
 object SdpOpusFmtp {
 
     /**
-     * Stereo game/music content at ~transparency on LAN Wi-Fi — still a
-     * rounding error next to the video bitrate (6× the 32 kbps default,
-     * <3% of even the lowest video preset).
+     * 32 kbps: the track is only the desktop's fallback, and it is mono
+     * whatever the fmtp says. Measured 2026-11-09: the pinned prebuilt
+     * ignores `stereo=1` (desktop side/mid −61…−130 dB, L = R by ear). The
+     * stereo game audio rides the DataChannel (ADR-012/013). 192 kbps bought
+     * nothing on a mono stream that plays only after 3 s of channel silence;
+     * 32 kbps is still clean for game audio, and anything lower drops Opus
+     * into its speech modes (transients and music suffer). The track cannot
+     * be silenced instead — that stops the recording the channel is fed from
+     * (ADR-016).
      */
-    const val STEREO_MAX_AVERAGE_BITRATE_BPS = 192000
+    const val STEREO_MAX_AVERAGE_BITRATE_BPS = 32000
 
     /**
      * Adds `stereo=1; sprop-stereo=1; maxaveragebitrate=<bps>` to the Opus

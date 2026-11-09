@@ -38,7 +38,7 @@ class SdpOpusFmtpTest {
     fun `adds stereo params to the existing opus fmtp`() {
         val result = SdpOpusFmtp.preferStereo(audioSdp())
         assertEquals(
-            "a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=192000",
+            "a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=32000",
             fmtpLine(result),
         )
     }
@@ -49,13 +49,13 @@ class SdpOpusFmtpTest {
         val lines = result.split("\r\n")
         assertEquals(
             "a=rtpmap:111 opus/48000/2",
-            lines[lines.indexOf("a=fmtp:111 stereo=1;sprop-stereo=1;maxaveragebitrate=192000") - 1],
+            lines[lines.indexOf("a=fmtp:111 stereo=1;sprop-stereo=1;maxaveragebitrate=32000") - 1],
         )
     }
 
     @Test
     fun `already stereo sdp is returned untouched`() {
-        val sdp = audioSdp(fmtp = "a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=192000")
+        val sdp = audioSdp(fmtp = "a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=32000")
         assertEquals(sdp, SdpOpusFmtp.preferStereo(sdp))
     }
 
@@ -88,7 +88,7 @@ class SdpOpusFmtpTest {
         val result = SdpOpusFmtp.preferStereo(sdp)
         assertEquals("a=fmtp:63 0-15", result.lineSequence().first { it.startsWith("a=fmtp:63") })
         assertEquals(
-            "a=fmtp:111 stereo=1;sprop-stereo=1;maxaveragebitrate=192000",
+            "a=fmtp:111 stereo=1;sprop-stereo=1;maxaveragebitrate=32000",
             result.lineSequence().first { it.startsWith("a=fmtp:111") },
         )
     }

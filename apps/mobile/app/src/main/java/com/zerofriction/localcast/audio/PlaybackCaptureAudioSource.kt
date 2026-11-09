@@ -97,6 +97,14 @@ class PlaybackCaptureAudioSource(
     private var captureDump: AudioCaptureFileRecorder? = null
 
     /**
+     * The dump setting, read once per capture swap — the samples callback
+     * runs 100×/s, and it used to query `Settings.Global` (a binder call into
+     * the settings provider) on every buffer of every cast while unarmed.
+     */
+    @Volatile
+    private var captureDumpArmed = false
+
+    /**
      * ADR-012: the encoder-input bytes offered to the session's DataChannel
      * sender (the bytes the prebuilt encoder folds to mono). Set by the
      * session when the game-audio channel is attached; invoked on the ADM's
@@ -132,7 +140,7 @@ class PlaybackCaptureAudioSource(
             // A capped dump steps aside so the next dump starts — a long
             // session gets successive bounded files instead of just the first.
             captureDump?.let { dump -> if (dump.isClosed) captureDump = null }
-            if (captureDump === null) maybeStartCaptureDump()
+            if (captureDump === null && captureDumpArmed) maybeStartCaptureDump()
             captureDump?.onSamples(samples.data)
             // Stereo diagnostics + tap self-heal (audio.md): whether the mix
             // carries L≠R, one report per second, a bounded capture-record
@@ -237,6 +245,13 @@ class PlaybackCaptureAudioSource(
         captureDump = null
     }
 
+    private fun readCaptureDumpSetting(): Boolean =
+        try {
+            android.provider.Settings.Global.getInt(appContext.contentResolver, CAPTURE_DUMP_SETTING, 0) == 1
+        } catch (t: Throwable) {
+            false
+        }
+
     /**
      * Starts the bounded WAV dump of the encoder-consumed bytes when the
      * `localcast_capture_dump` global setting is 1 (a development toggle set
@@ -244,17 +259,7 @@ class PlaybackCaptureAudioSource(
      * cast, at the swap where the encoder's stream begins.
      */
     private fun maybeStartCaptureDump() {
-        if (captureDump !== null) return
-        val enabled = try {
-            android.provider.Settings.Global.getInt(
-                appContext.contentResolver,
-                CAPTURE_DUMP_SETTING,
-                0,
-            ) == 1
-        } catch (t: Throwable) {
-            false
-        }
-        if (!enabled) return
+        if (captureDump !== null || !captureDumpArmed) return
         val dir = appContext.getExternalFilesDir(null) ?: return
         val context = swapContext ?: return
         captureDump = AudioCaptureFileRecorder.start(
@@ -322,6 +327,7 @@ class PlaybackCaptureAudioSource(
             stopAndRelease(micRecord)
             val readBytes = (byteBufferField.get(audioInput) as java.nio.ByteBuffer).capacity()
             swapContext = SwapContext(audioInput, capture.sampleRate, capture.channelCount, readBytes)
+            captureDumpArmed = readCaptureDumpSetting()
             maybeStartCaptureDump()
             Log.i(
                 TAG,

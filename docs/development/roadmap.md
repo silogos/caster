@@ -160,6 +160,12 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Scope:** libwebrtc's callbacks (connection state, set-remote-description results, stats) hop to the media session thread, which owns the candidate queue, the restart ladder and the stats deltas; a failed `setRemoteDescription` concludes the attempt at once; the AAC encoder's input wait is 10 ms, not 10 µs (`dequeueInputBuffer` takes µs); a silent desktop is dropped with an abort (`cancel()`), so reconnect starts at the heartbeat bound, not ~60 s later; a reconnect handshake timeout retries instead of failing `BAD_AUTH`; auto quality's step down never raises any dimension (sharp → balanced); `seq` is assigned under a lock; the send bitrate is never negative after a pc rebuild; saved-desktop timestamps decode as Long (post-2038). Mic FGS (#13 of the review) deferred with the rest of the mic work.
 **Accept:** `testDebugUnitTest` 336/336, `assembleDebug` clean. **On-device pending:** a normal cast to CONNECTED and live stats; killing the desktop mid-cast → the phone reconnects in ~15–20 s.
 
+## Perf 2026-11l — Mobile review, group D: battery and performance ✅ implemented — awaiting on-device check
+*(Not a numbered phase: the 2026-11-09 review of `apps/mobile`, group D of A–G.)*
+**Scope:** the Opus fallback track's `maxaveragebitrate` drops from 192 to 32 kbps (it is mono and plays only after 3 s of channel silence — measured below); the capture-dump setting is read once per capture swap, not on every 10 ms buffer; replaced pcs are `dispose()`d and the game-audio DataChannel frees its native object once its drain thread has stopped; a re-auth keeps a media pc that is still CONNECTED instead of rebuilding it (the desktop keeps its pcs across a socket drop).
+**Not shipped — item 18 (pause the Opus fallback track while the channel flows):** tried and disproven on-device, [ADR-016](../decisions/ADR-016-pause-fallback-opus-track.md) (rejected): both pausing (`active = false`) and muting (`setEnabled(false)`) the track stop libwebrtc's ADM recording, which is the channel's own source, and produced a ~0.7 s gap every ~2 s.
+**Accept:** `testDebugUnitTest` 336/336, `assembleDebug` clean; on-device (TB321FU, 2026-11-09) a ~2.7 min cast with 0 mid-cast `stopRecording`, the channel steady at 100 chunks/s, and 0 underruns. Same session: the Opus fallback track was measured **dual-mono** despite the stereo fmtp (features/game-audio.md). **On-device pending:** the re-auth keep path (needs a socket-only drop).
+
 ---
 
 ## Definition of Done (every phase)

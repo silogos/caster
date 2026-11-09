@@ -150,6 +150,9 @@ class MediaCastSession(
     /** True once the answer's remote description was applied — gates addIceCandidate. */
     private var remoteDescriptionSet = false
 
+    /** The current pc reported CONNECTED and nothing worse since — session thread only. */
+    private var pcConnected = false
+
     /** Grown once the answer's parameters exist; sampled by the stats poller. */
     private var lastBytesSent = 0L
     private var lastStatsAtMs = 0L
@@ -228,9 +231,22 @@ class MediaCastSession(
     private val signalingListener: (SignalingClient.Event) -> Unit = { event ->
         when (event) {
             is SignalingClient.Event.Authorized ->
-                // Every (re)auth rebuilds the pcs — the socket may have been
-                // gone for a while; the old transport objects are dead.
-                post { if (active) negotiate() }
+                post {
+                    if (!active) return@post
+                    // The desktop keeps its pcs across a socket drop (only a
+                    // `bye` closes them), and media flows over its own UDP
+                    // path — a pc still CONNECTED survived the outage. Rebuilding
+                    // it froze video for a fresh keyframe and re-ran the game
+                    // audio handshake for nothing (mobile review, group D). A
+                    // pc that is not connected (or a desktop that restarted and
+                    // lost it — the pc then fails and the ICE ladder recovers)
+                    // is rebuilt as before.
+                    if (pc !== null && pcConnected) {
+                        Log.i(TAG, "re-auth: media pc still connected — keeping it")
+                    } else {
+                        negotiate()
+                    }
+                }
 
             is SignalingClient.Event.SdpAnswer ->
                 if (event.pc == PC_ID) post { if (active) applyAnswer(event.sdp) }
@@ -434,6 +450,10 @@ class MediaCastSession(
 
     /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
     private fun negotiate() {
+        // Release the previous game-audio pipeline before its pc: a re-auth's
+        // negotiate() used to overwrite the fields and leak the old sender +
+        // encoder threads spinning on the dead pc.
+        releaseGameAudioPipeline()
         closePc()
         pendingCandidates.clear()
         val newFactory = factory ?: return
@@ -465,14 +485,7 @@ class MediaCastSession(
             // ADR-012/013: the track's encoder is mono-hard in the pinned
             // prebuilt (audio.md) — true stereo rides the DataChannel instead,
             // AAC by default; the track stays as the desktop's fallback when
-            // the channel is quiet. Release the previous pipeline first: a
-            // re-auth's negotiate() used to overwrite the fields and leak the
-            // old sender + encoder threads spinning on the dead pc.
-            audio?.onEncoderInputSamples = null
-            gameAudioChannel?.close()
-            gameAudioChannel = null
-            gameAacSender?.release()
-            gameAacSender = null
+            // the channel is quiet (the previous pipeline was released above).
             // Feature 2026-11d: the low-latency toggle forces raw PCM —
             // selfSupportsAac=false makes the negotiator announce `pcm16` and
             // never switch (the wire shape is unchanged, the same path an
@@ -774,6 +787,7 @@ class MediaCastSession(
 
         private fun onConnectionStateOnThread(newState: PeerConnection.PeerConnectionState) {
             Log.i(TAG, "connection state: $newState")
+            pcConnected = newState == PeerConnection.PeerConnectionState.CONNECTED
             when (newState) {
                 PeerConnection.PeerConnectionState.CONNECTED -> {
                     if (restarts.busy) Log.i(TAG, "connection recovered — ice restart ladder reset")
@@ -934,6 +948,7 @@ class MediaCastSession(
         onState(State.CLOSED)
         handler?.removeCallbacks(statsRunnable)
         cancelRecoveryWatchdog()
+        releaseGameAudioPipeline()
         closePc()
         try {
             capturer?.stopCapture()
@@ -952,11 +967,6 @@ class MediaCastSession(
         audioSource = null
         // Release a pre-opened capture record the substitution never consumed
         // (the consumed one is released by the ADM's own stop path).
-        audio?.onEncoderInputSamples = null
-        gameAacSender?.release()
-        gameAacSender = null
-        gameAudioChannel?.close()
-        gameAudioChannel = null
         audio?.release()
         // The audio ADM is owned (and released) by the factory below —
         // JavaAudioDeviceModule.release() must not be called from app code.
@@ -973,8 +983,24 @@ class MediaCastSession(
         Log.i(TAG, "media session torn down")
     }
 
+    /** Stop feeding, then release the AAC sender and the DataChannel (it frees its native object). */
+    private fun releaseGameAudioPipeline() {
+        audio?.onEncoderInputSamples = null
+        gameAacSender?.release()
+        gameAacSender = null
+        gameAudioChannel?.close()
+        gameAudioChannel = null
+    }
+
+    /**
+     * close() alone left every replaced pc's native object (and its
+     * observer's JNI ref) alive for the process lifetime — one per re-auth.
+     * dispose() closes it too, and frees its senders' track wrappers (the
+     * tracks themselves stay; they are owned and disposed by this session).
+     */
     private fun closePc() {
-        pc?.close()
+        pcConnected = false
+        pc?.dispose()
         pc = null
     }
 
