@@ -2,13 +2,6 @@ package com.zerofriction.localcast.ui.home
 
 import android.Manifest
 import android.app.Activity
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
-import android.content.Context
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -20,15 +13,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,16 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -58,9 +43,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
-import com.zerofriction.localcast.hotspot.HotspotControl
-import com.zerofriction.localcast.hotspot.HotspotMachine
-import com.zerofriction.localcast.hotspot.hotspotHintFor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -70,61 +52,45 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
-import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
-import com.zerofriction.localcast.audio.MicDeviceResolver
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.QualityProfile
-import com.zerofriction.localcast.config.matchingProfile
-import com.zerofriction.localcast.debug.DebugTestTone
-import com.zerofriction.localcast.pairing.DeviceIdentity
+import com.zerofriction.localcast.hotspot.HotspotControl
+import com.zerofriction.localcast.hotspot.HotspotMachine
+import com.zerofriction.localcast.hotspot.hotspotHintFor
 import com.zerofriction.localcast.pairing.PairingClient
 import com.zerofriction.localcast.pairing.PairingError
-import com.zerofriction.localcast.pairing.SavedDesktops
-import com.zerofriction.localcast.pairing.KeystoreTrustVault
-import com.zerofriction.localcast.pairing.defaultSignalingScheduler
-import com.zerofriction.localcast.pairing.defaultTransportFactory
-import com.zerofriction.localcast.ui.pairing.defaultUserAgent
-import com.zerofriction.localcast.pairing.applyGrant
 import com.zerofriction.localcast.service.AdaptiveUiState
-import com.zerofriction.localcast.service.CastState
+import com.zerofriction.localcast.service.AudioRoutingUiState
 import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.service.MicRoutingUiState
-import com.zerofriction.localcast.service.AudioRoutingUiState
 import com.zerofriction.localcast.service.VcCapability
 import com.zerofriction.localcast.service.VirtualCameraUiState
 import com.zerofriction.localcast.signaling.Envelope
 import com.zerofriction.localcast.thermal.ThermalState
-import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.components.AnnuncTone
 import com.zerofriction.localcast.ui.components.Annunciator
 import com.zerofriction.localcast.ui.components.BrandMark
 import com.zerofriction.localcast.ui.components.CardFoot
-import com.zerofriction.localcast.ui.components.CastSegRow
 import com.zerofriction.localcast.ui.components.CastCard
-import com.zerofriction.localcast.ui.components.CastChipRow
+import com.zerofriction.localcast.ui.components.CastSegRow
 import com.zerofriction.localcast.ui.components.CastSwitch
 import com.zerofriction.localcast.ui.components.CastTextButton
 import com.zerofriction.localcast.ui.components.IconListRow
-import com.zerofriction.localcast.ui.components.LedDot
-import com.zerofriction.localcast.ui.components.LedListRow
-import com.zerofriction.localcast.ui.components.LedTone
 import com.zerofriction.localcast.ui.components.SilkscreenLabel
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
-import kotlinx.coroutines.delay
 
 /**
  * The Home hub (designs/mobile-app.html — the broadcast-console redesign):
@@ -182,47 +148,26 @@ fun HomeScreen(
         }
     }
 
-    // ---- The share consent ladder (mobile.md): every grant is non-fatal —
-    // RECORD_AUDIO denial means a video-only cast, the notification prompt is
-    // visibility-only, and the projection consent is per cast, never stored.
-    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val consentData = result.data
-        if (result.resultCode == Activity.RESULT_OK && consentData != null) {
-            val signaling = ConnectedDesktop.releaseForCast()
-            if (signaling !== null) {
-                val (width, height) = DisplaySize.physicalPx(context)
-                // "Changes take effect on the next cast": read the store fresh.
-                val castSettings = CastSettingsStore(context).load()
-                val started = CastService.start(
-                    context,
-                    CastService.StartArgs(
-                        signaling = signaling,
-                        config = castSettings.toConfig(),
-                        projectionIntent = consentData,
-                        physicalWidth = width,
-                        physicalHeight = height,
-                        desktopName = (ConnectedDesktop.state.value as? ConnectedDesktop.State.Connected)?.desktopName
-                            ?: "",
-                    ),
-                )
-                if (!started) ConnectedDesktop.takeBack(signaling)
-            }
-        }
-    }
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        val manager = context.getSystemService(MediaProjectionManager::class.java)
-        projectionLauncher.launch(manager.createScreenCaptureIntent())
-    }
-    // Non-fatal on denial (mobile.md): a video-only cast beats no cast.
-    val recordAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            val manager = context.getSystemService(MediaProjectionManager::class.java)
-            projectionLauncher.launch(manager.createScreenCaptureIntent())
-        }
+    // The share consent ladder (ShareConsent.kt): every grant is non-fatal;
+    // the projection consent is per cast, never stored.
+    val shareScreen = rememberShareScreenFlow { consentData ->
+        val signaling = ConnectedDesktop.releaseForCast() ?: return@rememberShareScreenFlow
+        val (width, height) = DisplaySize.physicalPx(context)
+        // "Changes take effect on the next cast": read the store fresh.
+        val castSettings = CastSettingsStore(context).load()
+        val started = CastService.start(
+            context,
+            CastService.StartArgs(
+                signaling = signaling,
+                config = castSettings.toConfig(),
+                projectionIntent = consentData,
+                physicalWidth = width,
+                physicalHeight = height,
+                desktopName = (ConnectedDesktop.state.value as? ConnectedDesktop.State.Connected)?.desktopName
+                    ?: "",
+            ),
+        )
+        if (!started) ConnectedDesktop.takeBack(signaling)
     }
     val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) CastService.requestToggleMic(context)
@@ -285,18 +230,7 @@ fun HomeScreen(
         onToggleVirtualCamera = { CastService.requestToggleVirtualCamera(context) },
         audioRouting = audioRouting,
         onSetAudioRouting = { mode -> CastService.requestSetAudioRouting(context, mode) },
-        onShareScreen = {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                val manager = context.getSystemService(MediaProjectionManager::class.java)
-                projectionLauncher.launch(manager.createScreenCaptureIntent())
-            }
-        },
+        onShareScreen = shareScreen,
         onStopShareScreen = { CastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
         onTerminate = { CastService.requestTerminate(context) },
@@ -767,79 +701,6 @@ private fun resumeFailureMessage(error: PairingError): String = stringResource(
     }
 )
 
-/**
- * The hotspot card (issue #96, ADR-011) — the guided-manual flow's anchor:
- * credentials while Active, honesty while Starting/Failed. Every failure is
- * plain words with a one-tap retry; OS revocation says so.
- */
-@Composable
-private fun HotspotCard(
-    state: HotspotMachine.State,
-    onStop: () -> Unit,
-    onRetry: () -> Unit,
-) {
-    CastCard {
-        when (state) {
-            HotspotMachine.State.Idle -> {}
-            HotspotMachine.State.NeedPermission, HotspotMachine.State.Starting -> {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                ) {
-                    CircularProgressIndicator(Modifier.size(16.dp))
-                    Text(text = stringResource(R.string.hotspot_turning_on), fontSize = 14.sp)
-                }
-            }
-
-            is HotspotMachine.State.Active -> {
-                IconListRow(iconRes = R.drawable.ic_info, title = stringResource(R.string.hotspot_active_title))
-                Text(
-                    text = stringResource(
-                        R.string.hotspot_credentials_line,
-                        state.ssid,
-                        state.password,
-                    ),
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, end = 16.dp),
-                )
-                HintText(stringResource(R.string.hotspot_join_hint))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    modifier = Modifier.padding(start = 16.dp, bottom = 12.dp),
-                ) {
-                    CastTextButton(text = stringResource(R.string.hotspot_stop), onClick = onStop)
-                }
-            }
-
-            is HotspotMachine.State.Failed -> {
-                IconListRow(iconRes = R.drawable.ic_warning, title = hotspotFailureMessage(state.reason), err = true)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
-                ) {
-                    CastTextButton(text = stringResource(R.string.hotspot_retry), onClick = onRetry)
-                }
-            }
-        }
-    }
-}
-
-/** The hotspot failure table — plain words per AGENTS.md, codes stay in logs. */
-@Composable
-private fun hotspotFailureMessage(reason: HotspotMachine.Reason): String = stringResource(
-    when (reason) {
-        HotspotMachine.Reason.PERMISSION_DECLINED -> R.string.hotspot_error_permission
-        HotspotMachine.Reason.NOT_SUPPORTED -> R.string.hotspot_error_not_supported
-        HotspotMachine.Reason.NO_CHANNEL -> R.string.hotspot_error_no_channel
-        HotspotMachine.Reason.INCOMPATIBLE_MODE -> R.string.hotspot_error_incompatible_mode
-        HotspotMachine.Reason.OS_REVOKED -> R.string.hotspot_error_os_revoked
-        HotspotMachine.Reason.UNKNOWN -> R.string.hotspot_error_unknown
-    }
-)
-
 /** The bar's annunciator states — machine words (designs/mobile-app.html). */
 internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) {
     STANDBY(R.string.app_bar_state_standby, AnnuncTone.QUIET),
@@ -848,7 +709,6 @@ internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) 
     FAULT(R.string.app_bar_state_fault, AnnuncTone.FAULT),
 }
 
-/** Idle-with-a-pairing reads STANDBY — Home is only shown while connected. */
 /**
  * The virtual camera row's honest subline (ADR-007): what turning it on does
  * right now — setup pending, publishing, or plain ready. Pure — JVM-tested.
@@ -859,115 +719,12 @@ internal fun vcSublineRes(state: VirtualCameraUiState): Int = when {
     else -> R.string.vc_hint_ready
 }
 
+/** Idle-with-a-pairing reads STANDBY — Home is only shown while connected. */
 internal fun annunciatorFor(castState: CastState): ConsoleAnnunciator = when (castState) {
     is CastState.Starting -> ConsoleAnnunciator.STARTING
     is CastState.Casting -> ConsoleAnnunciator.ON_AIR
     is CastState.Failed -> ConsoleAnnunciator.FAULT
     CastState.Idle -> ConsoleAnnunciator.STANDBY
-}
-
-/** One offered mic kind: the config value plus its localized label. */
-private data class MicDeviceOption(val source: MicDeviceSource, val labelRes: Int)
-
-/** Connected input device types as AudioManager reports them right now. */
-private fun connectedInputTypes(context: Context): Set<Int> =
-    (context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
-        ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        ?.map { it.type }
-        ?.toSet()
-        ?: emptySet()
-
-/** Localized kind name ("Phone mic", …). */
-@Composable
-private fun micSourceName(source: MicDeviceSource): String = stringResource(
-    when (source) {
-        MicDeviceSource.BUILTIN -> R.string.mic_device_builtin
-        MicDeviceSource.WIRED_HEADSET -> R.string.mic_device_wired
-        MicDeviceSource.USB -> R.string.mic_device_usb
-        MicDeviceSource.BLUETOOTH -> R.string.mic_device_bluetooth
-    },
-)
-
-/**
- * The connected kinds from the inputs plugged in right now — the phone mic
- * always, a kind only while one of its inputs is connected (MicDeviceResolver
- * resolves the same way at capture time, so the offered chips and the actual
- * fallback can't drift apart). Follows plug/unplug **live**.
- */
-@Composable
-private fun rememberMicOptions(): List<MicDeviceOption> {
-    val context = LocalContext.current
-    var connectedTypes by remember { mutableStateOf(connectedInputTypes(context)) }
-    DisposableEffect(context) {
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        val callback = object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                connectedTypes = connectedInputTypes(context)
-            }
-
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                connectedTypes = connectedInputTypes(context)
-            }
-        }
-        audioManager?.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
-        onDispose { audioManager?.unregisterAudioDeviceCallback(callback) }
-    }
-    return remember(connectedTypes) {
-        Log.d(TAG, "mic options from connected input types: \$connectedTypes")
-        listOf(
-            MicDeviceOption(MicDeviceSource.BUILTIN, R.string.mic_device_builtin),
-            MicDeviceOption(MicDeviceSource.WIRED_HEADSET, R.string.mic_device_wired),
-            MicDeviceOption(MicDeviceSource.USB, R.string.mic_device_usb),
-            MicDeviceOption(MicDeviceSource.BLUETOOTH, R.string.mic_device_bluetooth),
-        ).filter {
-            it.source == MicDeviceSource.BUILTIN ||
-                MicDeviceResolver.resolveType(it.source, connectedTypes) != MicDeviceResolver.FALLBACK_TYPE
-        }
-    }
-}
-
-/**
- * The mic-device picker under the Microphone row (designs/mobile-app.html):
- * the connected kinds as chips — picking one while casting reroutes the LIVE
- * record (no session rebuild); idle it sets the next-start default. A kind
- * that vanished mid-cast shows the plain-words fallback fact instead.
- */
-@Composable
-private fun MicDevicePicker(
-    effective: MicDeviceSource,
-    fallbackFrom: MicDeviceSource?,
-    onSelect: (MicDeviceSource) -> Unit,
-) {
-    val options = rememberMicOptions()
-    val dividerColor = MaterialTheme.colorScheme.outline
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .drawBehind {
-                val y = 0.5.dp.toPx()
-                drawLine(
-                    color = dividerColor,
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = 1.dp.toPx(),
-                )
-            }
-            .padding(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 14.dp),
-    ) {
-        CastChipRow(
-            options = options.map { option -> micSourceName(option.source) to (option.source == effective) },
-            onSelect = { index -> onSelect(options[index].source) },
-        )
-        if (fallbackFrom != null) {
-            Text(
-                text = stringResource(R.string.mic_device_fallback_fact, micSourceName(fallbackFrom)),
-                fontSize = 13.sp,
-                lineHeight = 19.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
-    }
 }
 
 /** h:mm:ss / mm:ss — the hero timer's format (unit-tested; clamps at zero). */
@@ -977,190 +734,6 @@ internal fun formatCastDuration(totalSeconds: Long): String {
     val m = (total % 3600) / 60
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
-}
-
-/** The 13sp muted explanation under a control. */
-@Composable
-private fun HintText(text: String) {
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 8.dp),
-        lineHeight = 18.sp,
-    )
-}
-
-/**
- * The thermal read-out of a running cast (Phase11, thermal.md) as a console
- * lamp: plain words for the platform ladder — read-only diagnostics, never
- * a technical dump and never an automatic action (AGENTS.md; the numbers
- * live in the service logs). DIM when normal, amber from warm, hot at
- * severe+. The advice lines are suggestions for the user.
- */
-@Composable
-private fun ThermalLedRow(thermalState: ThermalState, topDivider: Boolean) {
-    val hot = thermalState.status == ThermalStatus.SEVERE ||
-        thermalState.status == ThermalStatus.CRITICAL ||
-        thermalState.status == ThermalStatus.EMERGENCY ||
-        thermalState.status == ThermalStatus.SHUTDOWN
-    LedListRow(
-        text = when (thermalState.status) {
-            ThermalStatus.NONE -> stringResource(R.string.thermal_normal)
-            ThermalStatus.LIGHT -> stringResource(R.string.thermal_light)
-            ThermalStatus.MODERATE -> stringResource(R.string.thermal_moderate)
-            ThermalStatus.SEVERE -> stringResource(R.string.thermal_severe)
-            ThermalStatus.CRITICAL, ThermalStatus.EMERGENCY, ThermalStatus.SHUTDOWN ->
-                stringResource(R.string.thermal_critical)
-        },
-        tone = when {
-            hot -> LedTone.HOT
-            thermalState.status == ThermalStatus.NONE -> LedTone.DIM
-            else -> LedTone.ON
-        },
-        hot = hot,
-        topDivider = topDivider,
-    )
-}
-
-/**
- * The auto-quality read-out of a running cast (Phase12, thermal.md) as a
- * lamp: plain words for what the policy did — the current level against the
- * ceiling (the user's settings at cast start) and, when one fired, what
- * happened and why. Quiet while nothing changed: no line, no log noise.
- */
-@Composable
-private fun AdaptiveLedRow(adaptiveState: AdaptiveUiState, topDivider: Boolean) {
-    val context = LocalContext.current
-    val ceiling = adaptiveState.ceiling ?: return
-    val current = adaptiveState.current ?: return
-    val change = adaptiveState.lastChange ?: return
-    if (current == ceiling && adaptiveState.lastChange == null) return
-    val down = change.direction == AdaptiveQualityController.Direction.DOWN
-    LedListRow(
-        text = when {
-            down && change.reason == AdaptiveQualityController.Reason.THERMAL ->
-                stringResource(R.string.adaptive_lowered_thermal, levelName(change.to))
-
-            down -> stringResource(R.string.adaptive_lowered_stream, levelName(change.to))
-
-            change.reason == AdaptiveQualityController.Reason.USER ->
-                stringResource(R.string.adaptive_restored, levelName(change.to))
-
-            else -> stringResource(R.string.adaptive_raised, levelName(change.to))
-        },
-        tone = if (down) LedTone.ON else LedTone.DIM,
-        topDivider = topDivider,
-        right = if (current != ceiling) {
-            {
-                CastTextButton(
-                    text = stringResource(R.string.adaptive_restore),
-                    onClick = { CastService.requestRestoreQuality(context) },
-                )
-            }
-        } else {
-            null
-        },
-    )
-}
-
-/** Localized name for a quality level — "your settings" for a tweaked top rung. */
-@Composable
-private fun levelName(level: QualityLevel): String = when (
-    matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
-) {
-    QualityProfile.COOL -> stringResource(R.string.profile_cool)
-    QualityProfile.BALANCED -> stringResource(R.string.profile_balanced)
-    QualityProfile.PERFORMANCE -> stringResource(R.string.profile_performance)
-    QualityProfile.SHARP -> stringResource(R.string.profile_sharp)
-    null -> stringResource(R.string.adaptive_your_settings)
-}
-
-/**
- * Debug-only capture test signal (Phase7): a loud continuous tone from this
- * app — one of the few capturable sources, since apps targeting API29+ opt
- * OUT of playback capture by default. Audible on the desktop = the whole
- * game-audio chain works.
- */
-@Composable
-private fun DebugToneButton(topDivider: Boolean) {
-    var playing by rememberSaveable { mutableStateOf(false) }
-    val dividerColor = MaterialTheme.colorScheme.outline
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (topDivider) {
-                    Modifier.drawBehind {
-                        drawLine(
-                            color = dividerColor,
-                            start = Offset(0f, 0.5.dp.toPx()),
-                            end = Offset(size.width, 0.5.dp.toPx()),
-                            strokeWidth = 1.dp.toPx(),
-                        )
-                    }
-                } else {
-                    Modifier
-                },
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = {
-            if (playing) DebugTestTone.stop() else DebugTestTone.start()
-            playing = !playing
-        }) {
-            Text(
-                stringResource(if (playing) R.string.debug_stop_test_tone else R.string.debug_play_test_tone),
-                fontSize = 13.sp,
-            )
-        }
-    }
-}
-
-private const val TAG = "HomeScreen"
-
-/**
- * The Home's ViewModels, injected once (ADR-006): the saved-desktop store
- * (Keystore-sealed) and the resume pairing machine — the machine writes every
- * granted/refreshed desktop identity straight into the store.
- */
-@Composable
-private fun homeFactory(): ViewModelProvider.Factory {
-    val context = LocalContext.current
-    return remember(context) {
-        object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val appContext = context.applicationContext
-                val store = SavedDesktops(appContext, KeystoreTrustVault())
-                return HomeViewModel(
-                    savedDesktops = store,
-                    pairingClient = PairingClient(
-                        ::defaultTransportFactory,
-                        ::defaultSignalingScheduler,
-                        ::defaultUserAgent,
-                        deviceIdProvider = { DeviceIdentity.id(appContext) },
-                        onDesktopIdentity = { name, grant -> store.applyGrant(grant, name) },
-                    ),
-                ) as T
-            }
-        }
-    }
-}
-
-/** The settings store, injected once — the Home's audio rows persist through it. */
-@Composable
-private fun settingsFactory(): ViewModelProvider.Factory {
-    val context = LocalContext.current
-    return remember(context) {
-        object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val store = CastSettingsStore(context.applicationContext)
-                return SettingsViewModel(store.load(), store::save) as T
-            }
-        }
-    }
 }
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 640)

@@ -71,9 +71,9 @@ class MicRecordSubstituter(
             return
         }
         try {
-            val audioInputField = AUDIO_INPUT_FIELD ?: run { logDegrade("ADM recorder internals not found"); return }
-            val recordField = RECORD_FIELD ?: run { logDegrade("ADM record field not found"); return }
-            val byteBufferField = BYTE_BUFFER_FIELD ?: run { logDegrade("ADM byte buffer field not found"); return }
+            val audioInputField = AdmRecorderInternals.AUDIO_INPUT_FIELD ?: run { logDegrade("ADM recorder internals not found"); return }
+            val recordField = AdmRecorderInternals.RECORD_FIELD ?: run { logDegrade("ADM record field not found"); return }
+            val byteBufferField = AdmRecorderInternals.BYTE_BUFFER_FIELD ?: run { logDegrade("ADM byte buffer field not found"); return }
             val audioInput = audioInputField.get(adm) ?: run { logDegrade("ADM recorder is missing"); return }
             val stock = recordField.get(audioInput) as? AudioRecord
                 ?: run { logDegrade("ADM recorder has no AudioRecord to substitute"); return }
@@ -224,21 +224,5 @@ class MicRecordSubstituter(
          * stays explicit because MIC is non-sensitive by default anyway.
          */
         const val CAPTURE_SOURCE = MediaRecorder.AudioSource.MIC
-
-        /**
-         * Lazy lookups, never class-init: a library update that renames the
-         * internals degrades this fix to the stock record instead of crashing
-         * the session (same shape as PlaybackCaptureAudioSource's).
-         */
-        private val AUDIO_INPUT_FIELD: Field? = lookupField(JavaAudioDeviceModule::class.java, "audioInput")
-        private val RECORD_FIELD: Field? = AUDIO_INPUT_FIELD?.let { lookupField(it.type, "audioRecord") }
-        private val BYTE_BUFFER_FIELD: Field? = AUDIO_INPUT_FIELD?.let { lookupField(it.type, "byteBuffer") }
-
-        private fun lookupField(container: Class<*>, name: String): Field? = try {
-            container.getDeclaredField(name).apply { isAccessible = true }
-        } catch (t: Throwable) {
-            Log.w(TAG, "field $name not found on ${container.name} — mic substitution unavailable")
-            null
-        }
     }
 }
