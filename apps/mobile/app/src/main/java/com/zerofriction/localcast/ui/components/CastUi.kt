@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +17,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -41,6 +44,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -249,7 +255,10 @@ fun CastSegRow(
                                 Color.Transparent
                             },
                         )
-                        .clickable { onSelect(index) }
+                        // A tab, with its selected state (TalkBack: "Preset,
+                        // selected, tab 1 of 2"); 48dp tall at minimum.
+                        .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(index) })
+                        .heightIn(min = MIN_TOUCH_TARGET)
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -320,14 +329,30 @@ fun IconListRow(
     topDivider: Boolean = false,
     right: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    /**
+     * A switch row: the whole row is one toggle (TalkBack reads "Title,
+     * sub, switch, on" — the bare Switch used to be its own label-less
+     * node, read as "Switch, on"), and the trailing [CastSwitch] is drawn
+     * for it. Mutually exclusive with [right] and [onClick].
+     */
+    checked: Boolean? = null,
+    onCheckedChange: ((Boolean) -> Unit)? = null,
+    /** Under the texts: an inline action (e.g. "Open settings"). */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val dividerColor = MaterialTheme.colorScheme.outline
+    val toggle = if (checked != null && onCheckedChange != null) {
+        Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+    } else {
+        Modifier
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .topHairline(topDivider, dividerColor)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(toggle)
             .padding(horizontal = 16.dp, vertical = 13.dp),
     ) {
         CastIconContainer(
@@ -365,8 +390,12 @@ fun IconListRow(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+            if (footer != null) footer()
         }
-        if (right != null) {
+        if (checked != null) {
+            Spacer(Modifier.width(10.dp))
+            CastSwitch(checked = checked, onCheckedChange = null)
+        } else if (right != null) {
             Spacer(Modifier.width(10.dp))
             right()
         }
@@ -462,7 +491,10 @@ fun CastTextButton(
 ) {
     TextButton(
         onClick = onClick,
-        modifier = modifier.height(40.dp),
+        // A minimum, not a fixed height: a large system font grows the
+        // button instead of clipping its label (Material keeps the 48dp
+        // touch target around it).
+        modifier = modifier.heightIn(min = 40.dp),
     ) {
         Text(
             text = text,
@@ -499,6 +531,9 @@ fun CastChipRow(
     ) {
         options.forEachIndexed { index, (label, selected) ->
             Surface(
+                // The selectable Surface carries the selected state; the role
+                // makes TalkBack read the row as a single choice.
+                selected = selected,
                 onClick = { onSelect(index) },
                 enabled = enabled,
                 shape = RoundedCornerShape(50),
@@ -520,9 +555,9 @@ fun CastChipRow(
                         MaterialTheme.colorScheme.outline
                     },
                 ),
-                modifier = Modifier.then(
-                    if (enabled) Modifier else Modifier.alpha(0.45f),
-                ),
+                modifier = Modifier
+                    .semantics { role = Role.RadioButton }
+                    .then(if (enabled) Modifier else Modifier.alpha(0.45f)),
             ) {
                 Text(
                     text = label,
@@ -534,6 +569,9 @@ fun CastChipRow(
         }
     }
 }
+
+/** Material's minimum touch target (and the review's group F floor). */
+val MIN_TOUCH_TARGET = 48.dp
 
 /** The prototype's row-divider hairline (1dp line at the row's top edge). */
 private fun Modifier.topHairline(enabled: Boolean, color: Color): Modifier =
@@ -560,7 +598,8 @@ private fun Modifier.topHairline(enabled: Boolean, color: Color): Modifier =
 @Composable
 fun CastSwitch(
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    /** Null when the enclosing row is the toggle ([IconListRow]'s checked). */
+    onCheckedChange: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Switch(
