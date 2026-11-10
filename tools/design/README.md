@@ -31,12 +31,17 @@
 2. **Build.**
 
    ```bash
-   python3 -I tools/design/build_mobile_figcraft.py /tmp/zfc-design designs/mobile-app.figcraft --spec designs/mobile-ux-a11y.figcraft
+   python3 -I tools/design/build_custom_profiles_spec.py /tmp/zfc-design/custom-profiles.figcraft
+   python3 -I tools/design/build_mobile_figcraft.py /tmp/zfc-design designs/mobile-app.figcraft \
+     --spec designs/mobile-ux-a11y.figcraft --spec /tmp/zfc-design/custom-profiles.figcraft
    ```
 
-   This produces two pages:
+   This produces three pages (one measured, then one per `--spec`):
    - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Settings · Advanced plus Scan: camera permission, pairing, and failed.
    - **Group F · UX & a11y:** the accessibility spec, copied in. It comes from `build_group_f_spec.py`, which writes `designs/mobile-ux-a11y.figcraft`. Its layers are auto layout too, placed by `autolayout.solve()`, so nothing is hand-placed; only the annotations (badges, 48dp outlines) are absolute.
+   - **Mobile design v2 · custom profiles (draft, #165):** a proposal, not the shipped UI: the profile list on Home, editing and adding a profile, the row menu, and Home without an Advanced page (a profile holds every picture setting; “Under network pressure” and “Automatic quality” are drawn as one field). Its last frame lists the issue's open questions and what the draft assumes for each. It comes from `build_custom_profiles_spec.py` and lives only as a page of this file.
+
+   Both specs are written with `spec_dsl.py`: the shipped amber tokens, frames with auto-layout parameters, and ports of the app's components. A design that is not built yet goes in as a new page the same way (a builder script, one more `--spec`), named `Mobile design v<n> · <what>`.
 
 3. **Check.**
    - **Auto layout.** FigCraft keeps stored positions until something is edited, so opening the file does not prove the auto layout is right. `check_auto_layout.py` re-runs the layout from the parameters alone (`autolayout.py`, Figma's rules) and fails on any layer that lands more than 1.5dp from where Compose measured it:
@@ -44,9 +49,10 @@
      ```bash
      python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft            # page 1
      python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 1   # group F
+     python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 2   # design v2
      ```
 
-   - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`).
+   - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`; `ui.screenshot` returns the window as a PNG, to look at a page that has no exported render).
    - **Visual.** Compare the frames with the exported PNGs.
 
 ## Known simplifications
