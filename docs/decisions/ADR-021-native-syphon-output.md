@@ -1,6 +1,6 @@
 # ADR-021: The native receiver publishes the cast through Syphon, from inside the app
 
-- **Status:** accepted (2026-11-10). Unit and bridge tests pass and an independent Syphon client sees the server and its idle still; **a live cast through it and OBS itself are not verified yet** (see Consequences). Amends [ADR-007](ADR-007-virtual-camera.md) for the native receiver.
+- **Status:** accepted (2026-11-10) — verified on-device the same day (Lenovo TB321FU → MacBook Pro M1 Pro), including in OBS by the product owner ("Sudah tegak"). Amends [ADR-007](ADR-007-virtual-camera.md) for the native receiver.
 
 ## Context
 
@@ -12,7 +12,7 @@ The Electron path does not carry over. It read each frame back from a canvas to 
 
 ## Decision
 
-1. **In-process, on the GPU.** `native/syphon_bridge.m` (compiled by `build.rs`, linked against the vendored `Syphon.framework`) turns the frame's own pixel buffer into a BGRA Metal texture with Core Image and publishes it. No pixel is copied on the CPU beyond the I420 → NV12 copy the window already needs. Colour management is off: only the YCbCr → RGB matrix and the range the buffer's pixel format states.
+1. **In-process, on the GPU.** `native/syphon_bridge.m` (compiled by `build.rs`, linked against the vendored `Syphon.framework`) turns the frame's own pixel buffer into a BGRA Metal texture with Core Image and publishes it. No pixel is copied on the CPU beyond the I420 → NV12 copy the window already needs. Colour management is off: only the YCbCr → RGB matrix and the range the buffer's pixel format states. **The surface is published bottom row first**, Syphon's convention from its OpenGL origin; Core Image's own bottom-left origin gives that order without a flip, so Syphon can blit.
 2. **Published when due.** `syphon.rs` publishes each frame on its own thread at the pacer's due time (ADR-017), so OBS gets the window's even cadence, not Wi-Fi's bursts. The queue holds six frames; a fuller one drops the newest.
 3. **Only while read.** The frame thread makes a buffer for the output only while it is on **and** a client is connected (polled every 250 ms). With the window closed and nobody reading, frames are still dropped before any conversion.
 4. **Independent of the window.** While a client reads, frames are converted even when the video window is closed or covered.
@@ -33,13 +33,27 @@ The Electron path does not carry over. It read each frame back from a canvas to 
 
 ## Consequences
 
-**Verified, 2026-11-10 (MacBook Pro M1 Pro):**
-- `cargo test`: 87 passed (+6). One test goes end to end through the bridge: an NV12 frame in, the BGRA frame the Syphon server offers out — right size, top row first, video-range white ≥ 250 and black ≤ 5.
-- An independent Syphon client (not the receiver) lists the server by name and receives the 1920×1080 "No input video" still, upright.
+**Verified, 2026-11-10 (Lenovo TB321FU → MacBook Pro M1 Pro):**
+- `cargo test`: 87 passed (+6). One test goes end to end through the bridge: an NV12 frame in, the BGRA frame the Syphon server offers out — right size, bottom row first, video-range white ≥ 250 and black ≤ 5.
+- An independent Syphon client (not the receiver) lists the server by name and receives the 1920×1080 "No input video" still.
+- **A live cast** (the 60 fps latency test pattern), read by that client for 15 s:
 
-**Not verified yet:**
-- A live cast through the output: frame rate, spacing, colours against the window, and the cost of the conversion.
-- OBS's own Syphon Client source.
+| Measure | Result |
+|---|---|
+| Frames received | 59.7 fps, 1920×1200 |
+| Frame spacing | median 16.7 ms, p95 20.5 ms |
+| Gaps over 50 ms | 2 (delivery stalls longer than the pacer's 50 ms cap; max 115 ms) |
+| Frames dropped by the publisher | 1 of ~900 |
+| Colours | red 255/0/0, blue 0/0/255, white 255/255/255 — exact |
+| Video window not on screen | frames kept flowing to the client |
+
+- **OBS** (Syphon Client source), by the product owner, with PUBG running: the picture is shown and is the right way up.
+
+**Found live:** the first build published the top row first. The verification client read rows in that same order, so it looked right there while OBS showed the picture upside down. The bridge test now asserts Syphon's order. Read with the same client, the Electron receiver's helper also publishes the top row first; whether it was upside down in OBS was not checked.
+
+**Not verified:**
+- The CPU cost of the conversion. A one-minute comparison was spoiled by the tablet being in use (the incoming frame rate varied between 1 and 63 fps); the first frame's publish call took 2.9 ms, which includes Core Image's one-time setup.
+- TikTok LIVE Studio through window capture.
 
 **Known limits:**
 - OBS and other Syphon clients on the same Mac only. Call apps and TikTok LIVE Studio do not read Syphon; LIVE Studio is served by window capture until a real camera exists.
