@@ -25,6 +25,9 @@ import org.webrtc.defaultEncoderFactoryAround
  * escape hatch when a hardware encoder competes with gameplay), with
  * libwebrtc's pure-software factory behind it for anything MediaCodec lacks.
  *
+ * Every MediaCodec encoder, in both modes, is watched for a stall and
+ * re-created when it stops answering ([StallRecoveringEncoder], ADR-022).
+ *
  * The `enableH264HighProfile` flag rides along in both modes (Advanced →
  * H.264 profile): libwebrtc only offers the High-profile codec entry when it
  * is on, so an offer simply stops advertising High.
@@ -37,23 +40,27 @@ object CastEncoderFactory {
                 // libwebrtc's DefaultVideoEncoderFactory composition, with the
                 // hardware encoders configured for low latency (ADR-018).
                 defaultEncoderFactoryAround(
-                    LowLatencyHardwareEncoderFactory(
-                        HardwareVideoEncoderFactory(
-                            eglContext,
-                            /* enableIntelVp8Encoder = */ true,
-                            /* enableH264HighProfile = */ config.h264HighProfile,
+                    StallRecoveringEncoderFactory(
+                        LowLatencyHardwareEncoderFactory(
+                            HardwareVideoEncoderFactory(
+                                eglContext,
+                                /* enableIntelVp8Encoder = */ true,
+                                /* enableH264HighProfile = */ config.h264HighProfile,
+                            ),
+                            EncoderLatencyKeys.hardware(),
                         ),
-                        EncoderLatencyKeys.hardware(),
                     ),
                 )
 
             EncoderImplementation.SOFTWARE ->
                 ChainedEncoderFactory(
-                    primary = HardwareVideoEncoderFactory(
-                        eglContext,
-                        /* enableIntelVp8Encoder = */ true,
-                        /* enableH264HighProfile = */ config.h264HighProfile,
-                        softwareOnlyPredicate(),
+                    primary = StallRecoveringEncoderFactory(
+                        HardwareVideoEncoderFactory(
+                            eglContext,
+                            /* enableIntelVp8Encoder = */ true,
+                            /* enableH264HighProfile = */ config.h264HighProfile,
+                            softwareOnlyPredicate(),
+                        ),
                     ),
                     fallback = SoftwareVideoEncoderFactory(),
                 )
