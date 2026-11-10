@@ -305,6 +305,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** not watched on screen through a full ten-minute cast.
 
+## Feature 2026-11x — Syphon output on the native receiver ✅ verified on-device, including in OBS (2026-11-10)
+*(Not a numbered phase: the first Electron-only feature ported for issue #152.)*
+**Scope:** "Output to OBS → Syphon" in the receiver's window publishes the cast as a Syphon server from inside the app: the frame's own pixel buffer is converted on the GPU and published at the pacer's due time, only while a client reads it, also with the video window closed; a "No input video" still between casts — [ADR-021](../decisions/ADR-021-native-syphon-output.md). The framework is vendored under `apps/desktop-native/vendor/syphon/`.
+
+**Accept:** desktop `cargo test` 90 (+6: publisher ordering and due times, late frame, full queue, tick, on/read gate, and one end-to-end bridge test through the GPU). **On-device:** an independent Syphon client received a live cast at 59.7 fps (median spacing 16.7 ms, p95 20.5 ms), 1920×1200, exact colours, also with the video window off screen; the product owner confirmed the picture in OBS, the right way up (the first build was upside down there: Syphon's surface is bottom row first).
+
+**Not done:** the conversion's CPU cost is not measured cleanly (the tablet was in use during the comparison); TikTok LIVE Studio through window capture is untried.
+
 ## Definition of Done (every phase)
 
 ```text

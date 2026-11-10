@@ -14,11 +14,13 @@ pub struct ReceiverSettings {
     /// Game-audio level, 0.0–1.0 (linear, like the Electron mixer's GainNode).
     pub game_volume: f32,
     pub game_muted: bool,
+    /// The Syphon output for OBS (ADR-021). Off until the user turns it on.
+    pub syphon_output: bool,
 }
 
 impl Default for ReceiverSettings {
     fn default() -> Self {
-        Self { game_volume: 1.0, game_muted: false }
+        Self { game_volume: 1.0, game_muted: false, syphon_output: false }
     }
 }
 
@@ -71,7 +73,7 @@ mod tests {
         let dir = scratch("rt");
         let path = settings_path(&dir);
         assert_eq!(load(&path), ReceiverSettings::default(), "no file → defaults");
-        let s = ReceiverSettings { game_volume: 0.4, game_muted: true };
+        let s = ReceiverSettings { game_volume: 0.4, game_muted: true, syphon_output: true };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
         assert_eq!(s.effective_game_gain(), 0.0);
@@ -88,6 +90,7 @@ mod tests {
         assert_eq!(load(&path), ReceiverSettings::default());
         std::fs::write(&path, r#"{"gameVolume": 7.5}"#).unwrap();
         assert_eq!(load(&path).game_volume, 1.0, "clamped, and a missing key takes its default");
+        assert!(!load(&path).syphon_output, "a file from before the Syphon output leaves it off");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -366,6 +366,10 @@ fn announce_input(app: &tauri::AppHandle, live: bool) {
     if crate::video::set_live(live) {
         let _ = app.emit("cast:state", json!({ "live": live }));
         let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+        if !live {
+            // OBS shows the still, not the last frame of the cast (ADR-021).
+            crate::syphon::publish_no_input();
+        }
     }
 }
 

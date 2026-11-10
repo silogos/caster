@@ -152,7 +152,29 @@ function applyGameAudio(volume, muted, persist) {
 $('game-volume').addEventListener('input', () => applyGameAudio(Number($('game-volume').value) / 100, false, false))
 $('game-volume').addEventListener('change', () => applyGameAudio(Number($('game-volume').value) / 100, false, true))
 $('game-switch').addEventListener('click', () => applyGameAudio(gameAudio.gameVolume, !gameAudio.gameMuted, true))
-invoke('receiver_settings').then((saved) => { gameAudio = saved; renderGameAudio() }).catch(() => {})
+
+// The Syphon output for OBS: a receiver control, saved with the others.
+let syphonOutput = false
+function renderSyphon() {
+  $('syphon-switch').classList.toggle('on', syphonOutput)
+  $('syphon-sub').textContent = syphonOutput
+    ? 'On. In OBS add a Syphon Client source named "Zero-Friction Local Cast". It keeps working with the video window closed.'
+    : 'Off. OBS can still capture the video window.'
+}
+$('syphon-switch').addEventListener('click', () => {
+  invoke('set_syphon_output', { enabled: !syphonOutput })
+    .then((saved) => { syphonOutput = saved.syphonOutput === true; renderSyphon() })
+    .catch((err) => console.error('set_syphon_output failed:', err))
+})
+
+invoke('receiver_settings')
+  .then((saved) => {
+    gameAudio = saved
+    syphonOutput = saved.syphonOutput === true
+    renderGameAudio()
+    renderSyphon()
+  })
+  .catch(() => {})
 
 // Disconnect forgets the phone (it must scan again) — a two-step link
 // instead of a dialog, so a stray click cannot end a cast.
