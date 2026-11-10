@@ -178,11 +178,15 @@ impl MediaAnswerer {
                 if chunks % DC_LOG_EVERY_CHUNKS == 0 {
                     let st = crate::audio::stats();
                     log::info!(
-                        target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} sheds={} depth={}ms played={} side={:.0}dB",
+                        target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} ({}ms silent) sheds={} depth={}ms trough={}ms out={}f/{:.1}ms played={} side={:.0}dB",
                         bytes / 1024,
                         st.underruns,
+                        st.starved_ms,
                         st.sheds,
                         st.depth_ms,
+                        st.floor_ms,
+                        st.callback_frames,
+                        st.device_delay_ms,
                         st.frames_played,
                         crate::audio::take_side_db()
                     );

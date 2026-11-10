@@ -9,13 +9,18 @@
 //!
 //! A lock-free ring sits between them and the CPAL real-time callback:
 //! writers are serialized by a producer lock (so it is single-producer by
-//! construction), the callback is the only consumer and owns the playout:
-//! it starts from a 40 ms cushion, re-primes after starving, and holds the
-//! buffer near that target by playing up to 1 % faster or slower — never by
-//! throwing audio away. (The first version trimmed any backlog over 60 ms;
-//! a 274 s PUBG session showed that trim destroying the very cushion that
-//! absorbs SCTP's next delivery stall: 244 trims → 195 underruns.) Only a
-//! backlog over 200 ms — a real outage — is still cut.
+//! construction), the callback is the only consumer and owns the playout
+//! (ADR-020): it starts from a 40 ms cushion, then steers the buffer's
+//! *trough* — the least audio left after a callback — to a 15 ms margin by
+//! playing up to 1 % faster or slower, never by throwing audio away. The
+//! phone delivers audio in bursts (one per capture period), so the depth is
+//! a sawtooth; steering its low point instead of its mean keeps exactly the
+//! cushion the arrival pattern needs and no more. Starving decays to
+//! silence and resumes on the next chunk; only a long gap rebuilds the full
+//! cushion. (The first version trimmed any backlog over 60 ms; a 274 s PUBG
+//! session showed that trim destroying the very cushion that absorbs SCTP's
+//! next delivery stall: 244 trims → 195 underruns.) Only a backlog over
+//! 200 ms — a real outage — is still cut.
 //! The callback adapts to the device: 48 kHz stereo when it supports it,
 //! otherwise channel mapping + linear resampling (44.1 kHz DACs, 16/24 kHz
 //! Bluetooth HFP). Never logs samples (AGENTS.md) — counters and dB only.
@@ -30,19 +35,39 @@ const SOURCE_CHANNELS: usize = 2;
 const BYTES_PER_FRAME: usize = SOURCE_CHANNELS * 2;
 /// 250 ms of source audio — room above the emergency threshold.
 pub const RING_CAPACITY_FRAMES: usize = 12_000;
-/// The playout target (40 ms): playback (re)starts once this much is
-/// buffered, and rate control steers the smoothed depth back to it.
-const TARGET_FRAMES: usize = 1_920;
+/// The start cushion (40 ms): playback starts, or restarts after a long
+/// gap, once this much is buffered. Rate control then trims it down.
+const PRIME_FRAMES: usize = 1_920;
+/// The safety margin (15 ms) rate control keeps under the trough: how late
+/// a burst may arrive, beyond the regular arrival pattern, without a gap.
+/// Measured 2026-11-10 (latency-measurement.md): 15 ms gaps as rarely as
+/// the fixed 40 ms target it replaces; 10 ms saves ~8 ms for 2–3× the gaps.
+const MARGIN_FRAMES: usize = 720;
+/// After a short starve, playback resumes once this much (5 ms) is back.
+/// The gap itself has already moved the timeline later by the lateness.
+const RESUME_FRAMES: usize = 240;
+/// A starve longer than this (50 ms of output) is an outage, not jitter:
+/// the arrival phase is unknown again, so the full start cushion is rebuilt.
+const LONG_GAP_FRAMES: usize = 2_400;
+/// How fast the tracked trough may rise, in source frames per output frame
+/// (10 ms per second). It follows a lower trough at once, so draining
+/// never overshoots; the slow rise keeps the cushion a while after a stall.
+const FLOOR_RISE_PER_FRAME: f64 = 0.01;
+/// Output frames over which a starve decays to silence and a resume fades
+/// in (2 ms) — a step in the waveform would click.
+const FADE_FRAMES: usize = 96;
+/// The device IO buffer asked for (2.7 ms at 48 kHz). The system default
+/// (often 512 frames) adds its length to the output delay and makes each
+/// callback need that much audio at once.
+const OUTPUT_BUFFER_FRAMES: u32 = 128;
 /// Only a backlog this deep (200 ms — an outage, not jitter) is cut back
-/// to the target; every cut skips audio audibly and is counted.
+/// to the start cushion; every cut skips audio audibly and is counted.
 const EMERGENCY_SHED_FRAMES: usize = 9_600;
-/// Rate control: a depth error of 100 % of the target asks for 1 % speed…
+/// Rate control: a trough one margin above (or below) the margin asks for
+/// 1 % speed…
 const RATE_GAIN: f64 = 0.01;
 /// …capped at ±1 % (≈ 17 cents — inaudible as it moves gradually).
 const MAX_RATE_CORRECTION: f64 = 0.01;
-/// Depth smoothing per callback (~1 s time constant at ~10 ms callbacks),
-/// so single SCTP bursts do not swing the playback rate.
-const DEPTH_SMOOTHING: f64 = 0.01;
 /// The documented fallback window: DataChannel quiet this long hands the
 /// ear output to the dual-mono track.
 const FALLBACK_AFTER_DC_QUIET: Duration = Duration::from_secs(3);
@@ -61,6 +86,13 @@ struct Ring {
     /// Backlog trims — each one skips audio (an audible jump).
     sheds: AtomicU64,
     frames_played: AtomicU64,
+    /// Diagnostics from the callback: the tracked trough (frames), the
+    /// callback size (output frames) and the device's output delay (µs).
+    floor_frames: AtomicUsize,
+    /// Output frames of silence played because the ring starved.
+    starved_frames: AtomicU64,
+    callback_frames: AtomicUsize,
+    device_delay_us: AtomicU64,
 }
 
 const NO_FLUSH: usize = usize::MAX;
@@ -75,6 +107,10 @@ impl Ring {
             underruns: AtomicU64::new(0),
             sheds: AtomicU64::new(0),
             frames_played: AtomicU64::new(0),
+            floor_frames: AtomicUsize::new(0),
+            starved_frames: AtomicU64::new(0),
+            callback_frames: AtomicUsize::new(0),
+            device_delay_us: AtomicU64::new(0),
         }
     }
 
@@ -124,13 +160,46 @@ struct Playout {
     primed: bool,
     /// Fractional source position between `tail` and `tail + 1` (resampling).
     phase: f64,
-    /// Smoothed buffer depth in frames (the rate controller's input).
-    smoothed_depth: f64,
+    /// The tracked trough in source frames (the rate controller's input):
+    /// the least audio left after a callback, recently.
+    floor: f64,
+    /// Output frames of silence since playback starved (saturating).
+    dry_frames: usize,
+    /// The last frame played, decayed to silence when the ring starves.
+    last: (f32, f32),
+    decay_left: usize,
+    fade_in_left: usize,
 }
 
 impl Playout {
     fn new() -> Self {
-        Self { primed: false, phase: 0.0, smoothed_depth: TARGET_FRAMES as f64 }
+        Self {
+            primed: false,
+            phase: 0.0,
+            floor: MARGIN_FRAMES as f64,
+            dry_frames: usize::MAX,
+            last: (0.0, 0.0),
+            decay_left: 0,
+            fade_in_left: 0,
+        }
+    }
+
+    /// Back to the start state: the next audio waits for the full cushion.
+    fn restart(&mut self) {
+        self.primed = false;
+        self.phase = 0.0;
+        self.floor = MARGIN_FRAMES as f64;
+        self.dry_frames = usize::MAX;
+    }
+
+    /// How much must be buffered before playback (re)starts.
+    fn start_threshold(&self) -> usize {
+        if self.dry_frames > LONG_GAP_FRAMES { PRIME_FRAMES } else { RESUME_FRAMES }
+    }
+
+    /// Tracks the trough: down at once, up slowly.
+    fn note_trough(&mut self, remaining: usize, out_frames: usize) {
+        self.floor = (remaining as f64).min(self.floor + FLOOR_RISE_PER_FRAME * out_frames as f64);
     }
 }
 
@@ -194,6 +263,7 @@ pub fn reset_session() {
     e.ring.request_flush();
     e.ring.underruns.store(0, Ordering::Relaxed);
     e.ring.sheds.store(0, Ordering::Relaxed);
+    e.ring.starved_frames.store(0, Ordering::Relaxed);
     e.ring.frames_played.store(0, Ordering::Relaxed);
     *e.stereo_energy.lock().expect("stereo energy") = (0.0, 0.0);
 }
@@ -290,6 +360,14 @@ pub struct Stats {
     pub frames_played: u64,
     /// Buffered audio right now, in ms.
     pub depth_ms: u64,
+    /// The tracked trough (least audio left after a callback), in ms.
+    pub floor_ms: u64,
+    /// Silence played inside a running stream because the ring starved, in ms.
+    pub starved_ms: u64,
+    /// Output frames per device callback.
+    pub callback_frames: u64,
+    /// The device's reported output delay (callback → speaker), in ms.
+    pub device_delay_ms: f64,
 }
 
 pub fn stats() -> Stats {
@@ -300,6 +378,10 @@ pub fn stats() -> Stats {
         sheds: ring.sheds.load(Ordering::Relaxed),
         frames_played: ring.frames_played.load(Ordering::Relaxed),
         depth_ms: depth as u64 * 1_000 / u64::from(SOURCE_RATE_HZ),
+        floor_ms: ring.floor_frames.load(Ordering::Relaxed) as u64 * 1_000 / u64::from(SOURCE_RATE_HZ),
+        starved_ms: ring.starved_frames.load(Ordering::Relaxed) * 1_000 / u64::from(SOURCE_RATE_HZ),
+        callback_frames: ring.callback_frames.load(Ordering::Relaxed) as u64,
+        device_delay_ms: ring.device_delay_us.load(Ordering::Relaxed) as f64 / 1_000.0,
     }
 }
 
@@ -332,21 +414,41 @@ fn open_output() -> Option<Output> {
         out_channels,
         if (step - 1.0).abs() > f64::EPSILON || out_channels != SOURCE_CHANNELS { " — converting" } else { "" }
     );
-    let ring = Arc::clone(&engine().ring);
-    let mut state = Playout::new();
-    let stream = device
-        .build_output_stream(
-            &config,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+    let build = |config: &cpal::StreamConfig| {
+        let ring = Arc::clone(&engine().ring);
+        let mut state = Playout::new();
+        device.build_output_stream(
+            config,
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                let stamp = info.timestamp();
+                if let Some(delay) = stamp.playback.duration_since(&stamp.callback) {
+                    ring.device_delay_us.store(delay.as_micros() as u64, Ordering::Relaxed);
+                }
                 render(&ring, &mut state, data, out_channels, step, game_gain());
             },
             |error| log::warn!(target: "audio", "output stream error: {error}"),
             None,
         )
+    };
+    // The small IO buffer first; a device that refuses it gets its default.
+    let stream = build(&config)
+        .or_else(|error| {
+            log::warn!(target: "audio", "output buffer {:?} refused ({error}) — using the device default", config.buffer_size);
+            build(&cpal::StreamConfig { buffer_size: cpal::BufferSize::Default, ..config.clone() })
+        })
         .map_err(|e| log::error!(target: "audio", "output stream: {e}"))
         .ok()?;
     stream.play().map_err(|e| log::error!(target: "audio", "output start: {e}")).ok()?;
     Some(Output(stream))
+}
+
+/// [`OUTPUT_BUFFER_FRAMES`] within what the device allows; the device
+/// default when it does not say.
+fn small_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => cpal::BufferSize::Fixed(OUTPUT_BUFFER_FRAMES.clamp(*min, *max)),
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+    }
 }
 
 /// 48 kHz with the fewest conversions: prefer stereo f32 at 48 kHz, then
@@ -368,7 +470,7 @@ fn choose_config(device: &cpal::Device) -> Option<cpal::StreamConfig> {
         .find(|c| usize::from(c.channels()) == SOURCE_CHANNELS)
         .or_else(|| at_48k.first());
     match best {
-        Some(range) => Some(cpal::StreamConfig { channels: range.channels(), sample_rate: rate, buffer_size: cpal::BufferSize::Default }),
+        Some(range) => Some(cpal::StreamConfig { channels: range.channels(), sample_rate: rate, buffer_size: small_buffer(range.buffer_size()) }),
         None => {
             let default = device
                 .default_output_config()
@@ -391,49 +493,98 @@ fn render(ring: &Ring, state: &mut Playout, data: &mut [f32], out_channels: usiz
     let flush = ring.flush_to.swap(NO_FLUSH, Ordering::Acquire);
     if flush != NO_FLUSH && flush > tail {
         tail = flush;
-        state.primed = false;
-        state.phase = 0.0;
+        state.restart();
     }
     let head = ring.head.load(Ordering::Acquire);
     let mut depth = head - tail;
     if depth > EMERGENCY_SHED_FRAMES {
-        tail = head - TARGET_FRAMES;
-        depth = TARGET_FRAMES;
-        state.smoothed_depth = TARGET_FRAMES as f64;
+        tail = head - PRIME_FRAMES;
+        depth = PRIME_FRAMES;
+        state.floor = MARGIN_FRAMES as f64;
         ring.sheds.fetch_add(1, Ordering::Relaxed);
     }
-    if !state.primed && depth >= TARGET_FRAMES {
+    if !state.primed && depth >= state.start_threshold() {
         state.primed = true;
+        state.dry_frames = 0;
+        state.fade_in_left = FADE_FRAMES;
     }
-    state.smoothed_depth += DEPTH_SMOOTHING * (depth as f64 - state.smoothed_depth);
 
     let mut written = 0;
     if state.primed {
-        let step = step * (1.0 + rate_correction(state.smoothed_depth));
+        let step = step * (1.0 + rate_correction(state.floor));
         let (consumed, frames) = convert(|i| ring.frame(tail + i), depth, &mut data[..], out_channels, step, &mut state.phase);
         tail += consumed;
         written = frames;
         ring.frames_played.fetch_add(consumed as u64, Ordering::Relaxed);
+        fade_in(&mut data[..written * out_channels], out_channels, &mut state.fade_in_left);
+        if written > 0 {
+            let at = (written - 1) * out_channels;
+            state.last = (data[at], if out_channels > 1 { data[at + 1] } else { 0.0 });
+        }
         if frames < out_frames {
-            // Starved: count it and re-prime rather than ride the floor.
+            // Starved: count it, decay to silence, resume on the next chunk.
             ring.underruns.fetch_add(1, Ordering::Relaxed);
             state.primed = false;
+            state.floor = 0.0;
+            state.decay_left = FADE_FRAMES;
+        } else {
+            state.note_trough(depth - consumed, out_frames);
         }
     }
-    data[written * out_channels..].fill(0.0);
+    let silent = &mut data[written * out_channels..];
+    silent.fill(0.0);
+    decay(silent, out_channels, state);
+    if !state.primed {
+        // Only gaps inside a running stream count as starved — not the
+        // wait for the first audio or after an outage.
+        if state.dry_frames <= LONG_GAP_FRAMES {
+            ring.starved_frames.fetch_add((out_frames - written) as u64, Ordering::Relaxed);
+        }
+        state.dry_frames = state.dry_frames.saturating_add(out_frames - written);
+    }
     if gain < 1.0 {
-        for sample in &mut data[..written * out_channels] {
+        for sample in data.iter_mut() {
             *sample *= gain;
         }
     }
     ring.tail.store(tail, Ordering::Release);
+    ring.floor_frames.store(state.floor.max(0.0) as usize, Ordering::Relaxed);
+    ring.callback_frames.store(out_frames, Ordering::Relaxed);
 }
 
-/// Playback speed offset for a smoothed depth: positive (faster) above the
-/// target, negative (slower) below, proportional and capped.
-fn rate_correction(smoothed_depth: f64) -> f64 {
-    let target = TARGET_FRAMES as f64;
-    ((smoothed_depth - target) / target * RATE_GAIN).clamp(-MAX_RATE_CORRECTION, MAX_RATE_CORRECTION)
+/// Ramps resumed audio up from silence over [`FADE_FRAMES`].
+fn fade_in(played: &mut [f32], out_channels: usize, left: &mut usize) {
+    for frame in played.chunks_exact_mut(out_channels) {
+        if *left == 0 {
+            return;
+        }
+        let level = 1.0 - *left as f32 / FADE_FRAMES as f32;
+        frame.iter_mut().for_each(|sample| *sample *= level);
+        *left -= 1;
+    }
+}
+
+/// Lets the last played frame die away over [`FADE_FRAMES`] at the start of
+/// a starve, instead of stepping to zero.
+fn decay(silent: &mut [f32], out_channels: usize, state: &mut Playout) {
+    for frame in silent.chunks_exact_mut(out_channels) {
+        if state.decay_left == 0 {
+            return;
+        }
+        state.decay_left -= 1;
+        let level = state.decay_left as f32 / FADE_FRAMES as f32;
+        frame[0] = state.last.0 * level;
+        if out_channels > 1 {
+            frame[1] = state.last.1 * level;
+        }
+    }
+}
+
+/// Playback speed offset for a tracked trough: positive (faster) above the
+/// margin, negative (slower) below, proportional and capped.
+fn rate_correction(floor: f64) -> f64 {
+    let margin = MARGIN_FRAMES as f64;
+    ((floor - margin) / margin * RATE_GAIN).clamp(-MAX_RATE_CORRECTION, MAX_RATE_CORRECTION)
 }
 
 /// Renders up to `out.len() / out_channels` frames from `available` source
@@ -516,28 +667,52 @@ mod tests {
     }
 
     #[test]
-    fn playback_waits_for_the_prime_cushion() {
-        let ring = filled(TARGET_FRAMES - 1);
+    fn playback_waits_for_the_start_cushion() {
+        let ring = filled(PRIME_FRAMES - 1);
         let mut state = Playout::new();
         let mut out = vec![1.0f32; 2 * 256];
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
-        assert!(out.iter().all(|s| *s == 0.0), "silence until 50 ms is buffered");
+        assert!(out.iter().all(|s| *s == 0.0), "silence until the start cushion is buffered");
         assert_eq!(ring.tail.load(Ordering::Relaxed), 0, "nothing consumed");
         ring.push(&pcm(&[(5, 5)]));
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
-        let played = ring.tail.load(Ordering::Relaxed);
-        assert!((254..=257).contains(&played), "primed: plays ~1x ({played})");
+        assert_eq!(ring.tail.load(Ordering::Relaxed), 256, "primed: plays at 1x");
+        assert_eq!(out[0], 0.0, "and fades in from silence");
     }
 
     #[test]
-    fn starving_counts_an_underrun_and_re_primes() {
-        let ring = filled(TARGET_FRAMES);
+    fn starving_decays_to_silence_and_resumes_on_the_next_chunk() {
+        let ring = filled(PRIME_FRAMES);
         let mut state = Playout::new();
-        let mut out = vec![0.0f32; 2 * (TARGET_FRAMES + 100)];
+        let mut out = vec![0.0f32; 2 * (PRIME_FRAMES + 200)];
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         assert_eq!(ring.underruns.load(Ordering::Relaxed), 1);
-        assert!(!state.primed, "must rebuild the cushion before playing again");
-        assert!(out[2 * TARGET_FRAMES..].iter().all(|s| *s == 0.0), "the gap is silence, not garbage");
+        let last_played = out[2 * (PRIME_FRAMES - 1)];
+        let gap = &out[2 * PRIME_FRAMES..];
+        assert!(gap[0] != 0.0 && gap[0].abs() < last_played.abs(), "the last frame dies away — no step to zero");
+        assert!(gap[2 * FADE_FRAMES..].iter().all(|s| *s == 0.0), "then silence, not garbage");
+
+        // The next chunk plays at once: the gap already moved the timeline.
+        ring.push(&pcm(&vec![(8_000, 8_000); RESUME_FRAMES]));
+        let mut out = vec![1.0f32; 2 * 64];
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
+        let resumed = ring.tail.load(Ordering::Relaxed) - PRIME_FRAMES;
+        assert!((63..=64).contains(&resumed), "resumed without rebuilding the cushion, a touch slower: {resumed}");
+        assert_eq!(ring.underruns.load(Ordering::Relaxed), 1, "one gap is counted once");
+        assert!(out[0] == 0.0 && out[2 * 63] > out[2], "and fades back in");
+    }
+
+    #[test]
+    fn a_long_gap_rebuilds_the_start_cushion() {
+        let ring = filled(PRIME_FRAMES);
+        let mut state = Playout::new();
+        let mut out = vec![0.0f32; 2 * (PRIME_FRAMES + LONG_GAP_FRAMES + 10)];
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
+        ring.push(&pcm(&vec![(8_000, 8_000); RESUME_FRAMES]));
+        let mut out = vec![1.0f32; 2 * 64];
+        render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
+        assert_eq!(ring.tail.load(Ordering::Relaxed), PRIME_FRAMES, "an outage waits for the full cushion again");
+        assert!(out.iter().all(|s| *s == 0.0));
     }
 
     #[test]
@@ -558,7 +733,7 @@ mod tests {
         let ring = filled(4_800);
         let mut state = Playout::new();
         state.primed = true;
-        state.smoothed_depth = 4_800.0; // the backlog has persisted
+        state.floor = 4_000.0; // the trough has stayed this high
         let mut out = vec![0.0f32; 2 * 1_000];
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         let consumed = ring.tail.load(Ordering::Relaxed);
@@ -567,11 +742,61 @@ mod tests {
 
     #[test]
     fn rate_correction_is_proportional_and_capped() {
-        assert_eq!(rate_correction(TARGET_FRAMES as f64), 0.0);
-        assert!(rate_correction(TARGET_FRAMES as f64 * 1.5) > 0.0);
-        assert!(rate_correction(TARGET_FRAMES as f64 * 0.5) < 0.0);
+        assert_eq!(rate_correction(MARGIN_FRAMES as f64), 0.0);
+        assert!(rate_correction(MARGIN_FRAMES as f64 * 1.5) > 0.0);
+        assert!(rate_correction(MARGIN_FRAMES as f64 * 0.5) < 0.0);
         assert_eq!(rate_correction(1e9), MAX_RATE_CORRECTION);
         assert_eq!(rate_correction(0.0), -MAX_RATE_CORRECTION);
+    }
+
+    #[test]
+    fn the_trough_is_followed_down_at_once_and_up_slowly() {
+        let mut state = Playout::new();
+        state.note_trough(100, 128);
+        assert_eq!(state.floor, 100.0, "a lower trough counts immediately");
+        state.note_trough(5_000, 128);
+        assert!((state.floor - 101.28).abs() < 1e-9, "a higher one only at 10 ms per second: {}", state.floor);
+    }
+
+    /// Plays a stream that arrives one capture period (1 024 frames) at a
+    /// time through 128-frame callbacks; `late` delays single bursts.
+    /// Returns (underruns, least audio left after a callback in the last second).
+    fn play_bursty(seconds: usize, late: impl Fn(usize) -> usize) -> (u64, usize) {
+        const BURST: usize = 1_024;
+        const CALLBACK: usize = 128;
+        let ring = Ring::new();
+        let mut state = Playout::new();
+        let burst = pcm(&vec![(1_000, 1_000); BURST]);
+        let mut out = vec![0.0f32; 2 * CALLBACK];
+        let total = 48_000 * seconds;
+        let (mut clock, mut sent, mut trough) = (0, 0, usize::MAX);
+        while clock < total {
+            while clock >= sent * BURST + late(sent) {
+                ring.push(&burst);
+                sent += 1;
+            }
+            render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
+            clock += CALLBACK;
+            if clock > total - 48_000 {
+                trough = trough.min(ring.head.load(Ordering::Relaxed) - ring.tail.load(Ordering::Relaxed));
+            }
+        }
+        (ring.underruns.load(Ordering::Relaxed), trough)
+    }
+
+    #[test]
+    fn a_bursty_stream_settles_at_the_margin_without_gaps() {
+        let (underruns, trough) = play_bursty(30, |_| 0);
+        assert_eq!(underruns, 0);
+        assert!((MARGIN_FRAMES - 60..=MARGIN_FRAMES + 120).contains(&trough), "trough steered to the margin: {trough}");
+    }
+
+    #[test]
+    fn one_late_burst_costs_one_gap_and_widens_the_cushion() {
+        // After settling, one burst arrives 25 ms late — more than the margin.
+        let (underruns, trough) = play_bursty(30, |burst| if burst == 1_000 { 1_200 } else { 0 });
+        assert_eq!(underruns, 1, "the late burst itself, and nothing after it");
+        assert!(trough >= MARGIN_FRAMES - 60, "the cushion is back at the margin or above: {trough}");
     }
 
     #[test]
@@ -581,21 +806,29 @@ mod tests {
         let mut out = vec![0.0f32; 2 * 10];
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
         let head = ring.head.load(Ordering::Relaxed);
-        assert_eq!(head - ring.tail.load(Ordering::Relaxed), TARGET_FRAMES - 10);
+        assert_eq!(head - ring.tail.load(Ordering::Relaxed), PRIME_FRAMES - 10);
         assert_eq!(ring.sheds.load(Ordering::Relaxed), 1, "every skip is counted");
     }
 
     #[test]
     fn a_flush_drops_buffered_audio_and_re_primes() {
-        let ring = filled(TARGET_FRAMES * 2);
+        let ring = filled(PRIME_FRAMES * 2);
         let mut state = Playout::new();
         state.primed = true;
         ring.request_flush();
         let mut out = vec![1.0f32; 2 * 64];
         render(&ring, &mut state, &mut out, 2, 1.0, 1.0);
-        assert_eq!(ring.tail.load(Ordering::Relaxed), TARGET_FRAMES * 2, "old source's audio dropped");
+        assert_eq!(ring.tail.load(Ordering::Relaxed), PRIME_FRAMES * 2, "old source's audio dropped");
         assert!(out.iter().all(|s| *s == 0.0));
         assert!(!state.primed);
+    }
+
+    #[test]
+    fn the_small_io_buffer_respects_the_device_range() {
+        let fixed = |min, max| small_buffer(&cpal::SupportedBufferSize::Range { min, max });
+        assert_eq!(fixed(14, 4_096), cpal::BufferSize::Fixed(OUTPUT_BUFFER_FRAMES));
+        assert_eq!(fixed(256, 4_096), cpal::BufferSize::Fixed(256), "a device with a larger minimum gets its minimum");
+        assert_eq!(small_buffer(&cpal::SupportedBufferSize::Unknown), cpal::BufferSize::Default);
     }
 
     #[test]
@@ -651,12 +884,12 @@ mod tests {
 
     #[test]
     fn the_game_level_scales_output_and_mute_is_silence() {
-        let ring = filled(TARGET_FRAMES * 2);
+        let ring = filled(PRIME_FRAMES * 2);
         let mut state = Playout::new();
         state.primed = true;
         let mut full = vec![0.0f32; 2 * 64];
         render(&ring, &mut state, &mut full, 2, 1.0, 1.0);
-        let ring = filled(TARGET_FRAMES * 2);
+        let ring = filled(PRIME_FRAMES * 2);
         let mut state = Playout::new();
         state.primed = true;
         let mut half = vec![0.0f32; 2 * 64];
@@ -664,7 +897,7 @@ mod tests {
         for (h, f) in half.iter().zip(&full) {
             assert!((h - f * 0.5).abs() < 1e-6);
         }
-        let ring = filled(TARGET_FRAMES * 2);
+        let ring = filled(PRIME_FRAMES * 2);
         let mut state = Playout::new();
         state.primed = true;
         let mut muted = vec![1.0f32; 2 * 64];

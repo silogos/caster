@@ -4,7 +4,7 @@ How to measure the cast's glass-to-glass latency — video from the phone's scre
 
 ## Result in one paragraph (2026-11-10)
 
-**Video on the Mac appears at the same moment as on the phone's own screen** (median 0–1 ms against SurfaceFlinger's actual present time, range about −18 to +20 ms). Earlier figures of 46–117 ms "phone screen → Mac screen" were inflated by an assumption in the tool: Android holds an app's frames 2–4 vsyncs before its own panel shows them (SurfaceFlinger `actual − desired` present 47–64 ms, varying per activity instance), while the virtual display captures them earlier. **Game audio on the Mac trails the phone's own speaker by ~150 ms** (click → phone speaker ~101 ms, click → Mac playout ~250 ms). Nearly all of it is Android's playback-capture path, about 220 ms from the click entering a track to leaving the capture record; it does not move with the capture record's buffer size. Wi-Fi adds ~4 ms and the Mac ring ~40 ms. Nothing left on the video side is worth cutting. On the audio side, the Mac ring is the only lever this app controls, and the measurements below argue against moving it.
+**Video on the Mac appears at the same moment as on the phone's own screen** (median 0–1 ms against SurfaceFlinger's actual present time, range about −18 to +20 ms). Earlier figures of 46–117 ms "phone screen → Mac screen" were inflated by an assumption in the tool: Android holds an app's frames 2–4 vsyncs before its own panel shows them (SurfaceFlinger `actual − desired` present 47–64 ms, varying per activity instance), while the virtual display captures them earlier. **Game audio on the Mac trails the phone's own speaker by ~150 ms** (click → phone speaker ~101 ms, click → Mac playout ~250 ms). Nearly all of it is Android's playback-capture path, about 220 ms from the click entering a track to leaving the capture record; it does not move with the capture record's buffer size. Wi-Fi adds ~4 ms and the Mac ring ~28 ms (its 40 ms target was a mean; arriving audio waits less). Nothing left on the video side is worth cutting. On the audio side, the Mac was the only part this app controls: [ADR-020](../decisions/ADR-020-audio-playout-steers-the-trough.md) took 8 ms out of the output buffer and made gaps shorter, and found the ring itself had nothing safe left to give.
 
 ## How it works
 
@@ -138,5 +138,23 @@ Reproduced on purpose in cast K. **Fixed by [ADR-019](../decisions/ADR-019-ice-r
 The 13 ms at 96 kHz was that probe's tee buffer happening to start lower (1 920–2 816 frames in the dump); 192 kHz showed no gain. Reverted.
 
 **What this leaves:** on this device nothing in the Android half is reachable through public APIs. A capture that bypasses the tee needs a system-only routing permission. The app-side remainder is the 10 ms ADM read, ~4 ms of Wi-Fi, the 40 ms Mac ring, and the Mac's output device buffer (cpal default, not measured).
+
+## The Mac side (2026-11-10, [ADR-020](../decisions/ADR-020-audio-playout-steers-the-trough.md))
+
+`ring at beep arrival` is the receiver probe's ring depth ahead of each click: how long arriving audio waits before it plays. Old and new binaries alternated on one cast, midday Wi-Fi, ~118 s per run:
+
+| Playout | Wait in the ring (median) | Underruns | Silence while starved |
+|---|---|---|---|
+| Old: mean depth 40 ms, 512-frame IO buffer | 28 / 30 ms | 3 / 2 | not counted (each rebuilt 40 ms) |
+| Trough margin 10 ms, 128-frame IO buffer | 20–21 ms | 6–10 | 42–76 ms |
+| Margin 12 ms | 25 ms | 5 | 67 ms |
+| Margin 15 ms | 27–28 ms | 2–4 | 0–86 ms |
+| Margin 20 ms | 32 ms | 2 | 19 ms |
+| **Shipped: margin 15 ms** (178 s) | **26 ms** | **7** | **102 ms** — one 94 ms network stall (3 underruns), then gaps of 1, 4 and 3 ms |
+
+- The old 40 ms was a mean over a sawtooth, so arriving audio waited ~28–30 ms. A 15 ms trough margin is the same wait with as few gaps.
+- Lateness beyond ~10 ms is common enough on this network that a 10 ms margin triples the gaps for ~8 ms.
+- The IO buffer is the real saving: 512 → 128 frames, 8 ms less output delay. That figure comes from the buffer sizes (cpal reports the callback → playback delay as the buffer length), not from an acoustic measurement.
+- Wi-Fi was busier than in the night runs above, where the old playout had 0 underruns in ~70 s.
 
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.

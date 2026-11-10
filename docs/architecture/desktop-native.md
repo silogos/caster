@@ -54,13 +54,16 @@ Two sources, never both: the `game-audio` DataChannel's raw PCM16 (true stereo, 
 
 Playout (the CoreAudio callback owns it):
 
-- starts from a **40 ms** cushion and re-primes after starving (an underrun = audible gap, counted);
-- holds the smoothed depth near 40 ms by playing **up to ±1 %** faster/slower (linear resampling) — never by discarding audio; only a backlog over **200 ms** (an outage) is cut back, counted as a `shed`;
+- starts from a **40 ms** cushion, then steers the buffer's **trough** (the least audio left after a callback) to a **15 ms margin** by playing **up to ±1 %** faster/slower (linear resampling) — never by discarding audio; only a backlog over **200 ms** (an outage) is cut back, counted as a `shed` ([ADR-020](../decisions/ADR-020-audio-playout-steers-the-trough.md));
+- a starve is a short gap: the last frame decays over 2 ms, playback resumes once 5 ms is back and fades in; only a gap over 50 ms rebuilds the start cushion (an underrun is counted, and so is the silence it played);
+- asks the device for a **128-frame IO buffer** (2.7 ms; the default 512 frames added 8 ms), falling back to the device default;
 - adapts to the device: 48 kHz stereo when supported, else channel mapping (mono mixdown; extra channels silent) and resampling (44.1 kHz, 16/24 kHz HFP).
+
+Why the trough and not the mean depth: the phone delivers audio in bursts (one capture period, ~21 ms, often two or three together), so the depth is a sawtooth. The mean says nothing about how close the low point comes to empty. With the old 40 ms mean, arriving audio waited ~28–30 ms; the 15 ms margin gives the same wait and as few gaps, and means the same on a phone with a different burst size.
 
 Why rate control: a 60 ms trim (the first version) discarded the cushion that absorbs SCTP's next delivery stall — 244 trims and 195 underruns in a 274 s PUBG session. With rate control: 1 trim, ~0.24 underruns/s, median playout ~70 ms (the product owner chose fewer dropouts over draining faster to 40 ms).
 
-The 1 Hz `dc:` log line carries `underruns`, `sheds`, `depth` and `side` (side-vs-mid dB of the PCM: ≈ −∞ means the wire carries L = R — a phone-side capture fold, audio.md — not a receiver bug).
+The 1 Hz `dc:` log line carries `underruns` (with the ms of silence played while starved), `sheds`, `depth`, `trough`, `out` (callback frames / IO buffer ms) and `side` (side-vs-mid dB of the PCM: ≈ −∞ means the wire carries L = R — a phone-side capture fold, audio.md — not a receiver bug).
 
 ## Video
 
