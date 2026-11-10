@@ -512,6 +512,20 @@ pub fn show_video_window() {
     }
 }
 
+/// Main thread: a Dock click — the open window comes back out of the Dock
+/// if it was minimized, and to the front.
+pub fn restore_video_window() {
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        guarded("restore video window", || unsafe {
+            let minimized: bool = msg_send![vw.window, isMiniaturized];
+            if minimized {
+                let _: () = msg_send![vw.window, deminiaturize: std::ptr::null::<AnyObject>()];
+            }
+        });
+    }
+    show_video_window();
+}
+
 /// Main thread: publishes whether the window is actually composited.
 /// Returns `true` when it found the user closed an open window with its
 /// own close button (the caller silences the audio and tells the UI).

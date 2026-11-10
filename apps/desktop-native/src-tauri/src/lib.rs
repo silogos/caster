@@ -263,9 +263,10 @@ pub fn run() {
                 let control = app.state::<ServerControl>();
                 tray::quit(app, &|| { let _ = send_command(&control, signaling::ServerCommand::SayGoodbye); });
             }
-            // Dock icon click while hidden.
+            // Dock icon click: the video window while it is open, else the
+            // main window (back from the tray).
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+            tauri::RunEvent::Reopen { .. } => tray::on_dock_click(app),
             _ => {}
         });
 }
