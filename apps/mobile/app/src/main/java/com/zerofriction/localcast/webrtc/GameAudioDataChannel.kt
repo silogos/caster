@@ -126,6 +126,9 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
     private var bufferedSamples = 0
     private var bufferedWindowStartMs = 0L
 
+    /** Debug-only: how late a chunk is handed to the channel. */
+    private val sendGaps = com.zerofriction.localcast.debug.GapProbe("audio send")
+
     private fun noteBuffered(bytes: Long) {
         val now = System.currentTimeMillis()
         if (bufferedWindowStartMs == 0L) bufferedWindowStartMs = now
@@ -163,6 +166,7 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
                 }
                 current.send(DataChannel.Buffer(ByteBuffer.wrap(chunk), true))
                 sentChunks.incrementAndGet()
+                if (BuildConfig.DEBUG) sendGaps.onEvent()
             } catch (t: Throwable) {
                 Log.w(TAG, "game audio send failed: ${t.message}")
             }

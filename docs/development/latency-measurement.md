@@ -157,4 +157,36 @@ The 13 ms at 96 kHz was that probe's tee buffer happening to start lower (1 920�
 - The IO buffer is the real saving: 512 → 128 frames, 8 ms less output delay. That figure comes from the buffer sizes (cpal reports the callback → playback delay as the buffer length), not from an acoustic measurement.
 - Wi-Fi was busier than in the night runs above, where the old playout had 0 underruns in ~70 s.
 
+## Audio starves in a long game cast (2026-11-10/11, open)
+
+Found in the log of a 62-minute cast with a game running on a hot tablet (thermal SEVERE): the Mac's playout starved **9 times a minute** (597 underruns, 9.8 s of silence, median 13 ms each), against 0.3–2.6 a minute in the short casts above with an idle tablet.
+
+What the existing log settles:
+
+- **Not the IO buffer.** Another app on the Mac reset the output device to 512 frames 3 minutes in (the device's buffer size is shared; the receiver's 128 is a request, not a lock). The starve rate was the same before and after (10.6 a minute in the first 3 minutes at 128 frames).
+- **Not video hiccups.** Seconds with a starve and seconds without had nearly the same video frame rate (49 vs 54 fps).
+- **The ring was restless:** trough p10–p90 of 6–41 ms (idle: 12–17 ms) and a median depth of 55 ms (idle: 36–40 ms), which is what bursty arrival looks like.
+- The 1 Hz log could not show a late chunk, so it could not say where the lateness came from.
+
+**Probes added** (the longest pause between consecutive events in each second; 30 ms and more counts as late — a capture block is 21 ms):
+
+| Point | Where | Log |
+|---|---|---|
+| A captured block reaches the app | phone, debug | `LatencyTest: audio read gap n=… max=… ms, long=…` |
+| A chunk is handed to the DataChannel | phone, debug | `LatencyTest: audio send gap …` |
+| A chunk arrives | receiver, always | `gap=<ms>/<long>` on the `dc:` line |
+
+**Baseline, idle and cool tablet, test pattern (TB321FU → MacBook Pro M1 Pro, 2 minutes):**
+
+| Point | Longest pause per second: p50 / p90 / max | Seconds with a pause ≥ 30 ms |
+|---|---|---|
+| Capture → app | 23 / 25 / 31 ms | 1 of 125 |
+| App → channel | 24 / 27 / 36 ms | 2 of 125 |
+| Arrival on the Mac | 26 / 31 / 43 ms | 21 of 147 |
+
+- 3 underruns (10 ms of silence), each in a second whose longest arrival pause was 31–43 ms: a pause of a capture block (21 ms) plus the 15 ms margin starves the ring.
+- Even idle, the network and the Mac's receive path add up to ~10 ms to the phone's rhythm.
+
+**Not done:** the same three numbers with a game running, which is the measurement that places the lateness (Android's capture, the app's send thread, or Wi-Fi / the Mac).
+
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.
