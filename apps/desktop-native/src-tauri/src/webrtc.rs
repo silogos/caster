@@ -399,6 +399,26 @@ const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 /// still the current one.
 const STALE_STREAM_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// The picture the receiver is actually getting, measured once a second:
+/// what the decoder hands over, not what the phone said it captures. The
+/// two differ whenever the sender scales the frame down or drops frames
+/// under pressure (found 2026-11-11: 640×400 arrived under a status that
+/// read 1920×1200 · 60 fps).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReceivedPicture {
+    width: u32,
+    height: u32,
+    fps: u32,
+}
+
+/// The picture that is arriving changed, or stopped arriving (None): the
+/// deck's live readout shows it. The cast's settings stay the phone's
+/// `session-info`, on the pill and the tray.
+fn announce_picture(app: &tauri::AppHandle, picture: Option<ReceivedPicture>) {
+    let payload = picture.map(|p| json!({ "width": p.width, "height": p.height, "fps": p.fps }));
+    let _ = app.emit("cast:picture", payload);
+}
+
 /// Input went live or stopped: the deck's ON AIR, and the video window's
 /// NO INPUT card (main thread). No-op when nothing changed.
 fn announce_input(app: &tauri::AppHandle, live: bool) {
@@ -497,6 +517,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     let mut last_visibility_poll: Option<std::time::Instant> = None;
     let mut last_log = std::time::Instant::now();
     let mut frames_at_last_log: u64 = 0;
+    let mut last_picture: Option<ReceivedPicture> = None;
     // Per-frame cost of convert + copy + enqueue (rendered frames only).
     let mut render_cost = std::time::Duration::ZERO;
     let mut rendered: u32 = 0;
@@ -571,6 +592,11 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         frames += 1;
         if last_log.elapsed() >= VIDEO_LOG_INTERVAL {
             let fps = (frames - frames_at_last_log) as f64 / last_log.elapsed().as_secs_f64();
+            let picture = ReceivedPicture { width: w, height: h, fps: fps.round() as u32 };
+            if last_picture != Some(picture) {
+                last_picture = Some(picture);
+                announce_picture(&app, last_picture);
+            }
             let pacing = renderer.take_pacing_window();
             if pacing.frames > 0 {
                 // Delay = how long frames waited for their slot (ADR-017);
@@ -598,6 +624,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     log::info!(target: "webrtc", "video frame loop ended after {frames} frames");
     if crate::video::is_current_stream(generation) {
         announce_input(&app, false);
+        announce_picture(&app, None);
     }
 }
 

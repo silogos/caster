@@ -341,6 +341,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** no comparison against "Keep resolution" on the same content, no real game, no hot tablet. The late audio chunks that remain are not the video backlog's doing and are not addressed. A 4K stream ran at 38–51 fps for a reason not found. *Bitrate mode: VBR* is still a placebo.
 
+## Fix 2026-11ad — The receiver's readout shows the picture that arrives ⏳ built; not seen on the Mac in this form yet (2026-11-11)
+*(Not a numbered phase: reported by the product owner during a cast.)*
+**Scope:** the deck showed the phone's announced size and frame rate in both places. Under "Keep frame rate" the sender scales the frame inside the encoder, so 640×400 arrived under `1920×1200 · 60 fps`. The product owner's split: the **pill** (`Casting · …`) and the tray keep the cast's settings; the **readout** beside the timecode shows the size and frame rate that arrive, measured once a second — [desktop-native.md](../architecture/desktop-native.md).
+
+**Accept:** desktop `cargo test` 94 (unchanged: the change is the frame loop's event and the window's script, which have no unit tests).
+
+**Not done:** not looked at on the Mac in this form. A first version (the measured picture in both places) ran during a game cast and followed the picture down to 640×400. The measured frame rate is not smoothed and can read 61–63.
+
 ## Definition of Done (every phase)
 
 ```text
