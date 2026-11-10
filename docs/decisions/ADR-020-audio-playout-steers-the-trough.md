@@ -1,6 +1,6 @@
 # ADR-020: The receiver's audio playout steers the buffer's trough, with a small IO buffer
 
-- **Status:** accepted (2026-11-10) — measured on-device the same day (Lenovo TB321FU → MacBook Pro M1 Pro). Replaces the fixed 40 ms target of `audio.rs` (ADR-014 Fase A's engine).
+- **Status:** accepted (2026-11-10) — measured on-device the same day (Lenovo TB321FU → MacBook Pro M1 Pro); the product owner's listening check in a game: "Bersih" (clean). Replaces the fixed 40 ms target of `audio.rs` (ADR-014 Fase A's engine).
 
 ## Context
 
