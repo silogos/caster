@@ -279,6 +279,16 @@ Known limitation: after a ~35 s outage the channel resumes only ~60 s later (SCT
 
 ---
 
+## Fix 2026-11v — Receiver audio playout: trough margin and a small IO buffer ✅ verified on-device (2026-11-10)
+*(Not a numbered phase: the Mac half of the audio-delay work.)*
+**Scope:** the ear output asked the device for a 128-frame IO buffer (was the 512-frame default: 8 ms less output delay) and steers the ring's trough to a 15 ms margin instead of its mean depth to 40 ms. A starve decays, resumes on the next chunk and fades in instead of rebuilding the whole cushion — [ADR-020](../decisions/ADR-020-audio-playout-steers-the-trough.md). The Android half was traced to the system's own buffers and cannot be shortened by the app ([latency-measurement.md](latency-measurement.md)).
+
+**Accept:** desktop `cargo test` 81 (+5: bursty-stream simulation, late burst, long gap, trough tracking, IO buffer range). **On-device**, old and new binaries alternated on one cast: arriving audio waits 26–28 ms in the ring (old: 28–30 ms) with as few underruns (2–4 per ~2 min vs 2–3), and short gaps cost 1–4 ms of silence instead of a 40 ms rebuild.
+
+Product owner's listening check in a game: "Bersih" (clean).
+
+**Not done:** the 8 ms from the IO buffer is computed from buffer sizes, not measured acoustically.
+
 ## Definition of Done (every phase)
 
 ```text
