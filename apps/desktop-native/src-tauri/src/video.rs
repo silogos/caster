@@ -24,8 +24,8 @@
 //! after arrival when Wi-Fi bunched it (ADR-017), never on raw arrival.
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{class, msg_send};
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{class, msg_send, sel};
 use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber, CFNumberType,
     CFRetained, CFString,
@@ -87,11 +87,54 @@ pub fn range_of_decoder_format(format: u32) -> VideoRange {
     if FULL_RANGE_FORMATS.contains(&format) { VideoRange::Full } else { VideoRange::Limited }
 }
 
-/// The range of one decoded frame. A VideoToolbox frame states it in its
-/// pixel format; a software decoder's I420 carries no tag the Rust API
-/// exposes, and libwebrtc's software decoders (libvpx, FFmpeg) emit the
-/// stream's nominal video range.
-pub fn range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
+/// Remembers a stream's range, so it is read from a frame only when it can
+/// have changed.
+///
+/// Reading it costs a frame: the only place a VideoToolbox frame states its
+/// range is its pixel buffer's format, and webrtc-sys' `get_cv_pixel_buffer`
+/// leaves a reference on the decoded surface on every call (the module doc).
+/// Called per frame it pinned every decoded frame — 3.5 MB each at
+/// 1920×1200, about 12 GB a minute — until the Mac ran out of memory after
+/// ~16 500 frames (found live 2026-11-10; the per-frame call came in with
+/// the colour-range fix the day before). The range belongs to the encoder
+/// session, so one read per stream, and one more when the dimensions change
+/// (a new encoder session), is enough.
+pub struct RangeTracker {
+    known: Option<((u32, u32), VideoRange)>,
+}
+
+impl RangeTracker {
+    pub fn new() -> Self {
+        Self { known: None }
+    }
+
+    /// The range for a frame of these dimensions. `read` — the costly look
+    /// at the frame ([`read_range_of_frame`]) — runs only when the answer
+    /// is not known yet. A software-decoded frame (`native == false`) has
+    /// no surface and no tag: libwebrtc's software decoders emit the
+    /// stream's nominal video range.
+    pub fn range(&mut self, width: u32, height: u32, native: bool, read: impl FnOnce() -> VideoRange) -> VideoRange {
+        if !native {
+            // A switch back to the hardware decoder reads again.
+            self.known = None;
+            return VideoRange::Limited;
+        }
+        match self.known {
+            Some((dims, range)) if dims == (width, height) => range,
+            _ => {
+                let range = read();
+                self.known = Some(((width, height), range));
+                range
+            }
+        }
+    }
+}
+
+/// The range one decoded frame states in its pixel format.
+///
+/// **Pins the frame's decoded surface for the life of the process** (the
+/// webrtc-sys leak above) — call it through [`RangeTracker`], never per frame.
+pub fn read_range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
     let Some(native) = buffer.as_native() else { return VideoRange::Limited };
     let pixel_buffer = native.get_cv_pixel_buffer() as *const CVPixelBuffer;
     if pixel_buffer.is_null() {
@@ -113,10 +156,11 @@ const PTS_TIMESCALE: i32 = 1_000_000_000;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
 const WINDOW_TITLE: &str = "Zero-Friction Cast";
 /// Frameless (product choice, 2026-11-09 — the Electron receiver's
-/// frameless spec): NSWindowStyleMaskBorderless | Resizable — no title
-/// bar, no traffic lights, square corners; OBS captures pure video. Moved
-/// by dragging the video, resized from the edges, closed from the deck.
-const WINDOW_STYLE: u64 = 1 << 3;
+/// frameless spec): no title bar, no traffic lights, square corners; OBS
+/// captures pure video. Moved by dragging the video, resized from the
+/// edges. Closable | Miniaturizable | Resizable without Titled draws no
+/// chrome, but lets the Window menu's Minimize and Close apply to it.
+const WINDOW_STYLE: u64 = (1 << 1) | (1 << 2) | (1 << 3);
 const NS_BACKING_STORE_BUFFERED: usize = 2;
 /// NSWindowOcclusionStateVisible.
 const OCCLUSION_VISIBLE: u64 = 1 << 1;
@@ -154,6 +198,11 @@ static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 /// "Close video" or the window's own close button. A closed window renders
 /// nothing (and the app keeps its audio silent — lib.rs).
 static VIDEO_OPEN: AtomicBool = AtomicBool::new(false);
+/// The user closed the window itself (Cmd+W / the Window menu), noticed by
+/// the next [`refresh_visibility`]. Being off screen is not enough to
+/// conclude that: a window on its way into the Dock, or one whose app is
+/// hidden, is off screen too.
+static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// A stream is delivering frames. While false the window shows the
 /// "no input" card, like a capture card with nothing plugged in — OBS
 /// records that card, never a frozen last frame.
@@ -192,7 +241,7 @@ extern "C" {
 }
 
 /// The host clock now, in seconds — the pacer's and the layer's time line.
-fn host_now() -> f64 {
+pub(crate) fn host_now() -> f64 {
     unsafe { CMClock::host_time_clock().time().seconds() }
 }
 
@@ -345,6 +394,7 @@ pub fn is_open() -> bool {
 /// Main thread: "Open video" — creates the window on first use and shows it.
 pub fn open_video_window() {
     VIDEO_OPEN.store(true, Ordering::Relaxed);
+    CLOSE_REQUESTED.store(false, Ordering::Relaxed);
     create_video_window();
     log::info!(target: "video", "video window opened");
 }
@@ -362,6 +412,45 @@ pub fn close_video_window() {
     log::info!(target: "video", "video window closed");
 }
 
+/// The video window's class: an `NSWindow` that may become main and key.
+///
+/// A window without a title bar answers NO to both by default, and AppKit
+/// then treats it as a helper panel: it is left out of the app's Window
+/// menu and of the Dock icon's window list, and cannot be minimized
+/// (found live 2026-11-10: the open video window was missing from the
+/// Dock). With these answers it is an ordinary window of the app that
+/// merely draws no frame. Minimize and Close are routed to the calls that
+/// work without title-bar buttons.
+fn video_window_class() -> &'static AnyClass {
+    static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
+    extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
+        Bool::YES
+    }
+    extern "C-unwind" fn minimize(this: &AnyObject, _: Sel, sender: Id) {
+        unsafe {
+            let _: () = msg_send![this, miniaturize: sender];
+        }
+    }
+    extern "C-unwind" fn close(this: &AnyObject, _: Sel, sender: Id) {
+        // Hidden, not destroyed; `refresh_visibility` then reports it as
+        // closed by the user, exactly like "Close video".
+        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+        unsafe {
+            let _: () = msg_send![this, orderOut: sender];
+        }
+    }
+    CLASS.get_or_init(|| {
+        let mut builder = ClassBuilder::new(c"ZFVideoWindow", class!(NSWindow)).expect("ZFVideoWindow is registered once");
+        unsafe {
+            builder.add_method(sel!(canBecomeMainWindow), yes as extern "C-unwind" fn(_, _) -> _);
+            builder.add_method(sel!(canBecomeKeyWindow), yes as extern "C-unwind" fn(_, _) -> _);
+            builder.add_method(sel!(performMiniaturize:), minimize as extern "C-unwind" fn(_, _, _));
+            builder.add_method(sel!(performClose:), close as extern "C-unwind" fn(_, _, _));
+        }
+        builder.register()
+    })
+}
+
 /// Main thread: creates the video window (idempotent) and shows it.
 fn create_video_window() {
     if VIDEO_WINDOW.get().is_none() {
@@ -375,7 +464,7 @@ fn create_video_window() {
             let gravity = NSString::from_str("AVLayerVideoGravityResizeAspect");
             let _: () = msg_send![layer, setVideoGravity: &*gravity];
             attach_host_timebase(layer);
-            let window: Id = msg_send![class!(NSWindow), alloc];
+            let window: Id = msg_send![video_window_class(), alloc];
             let window: Id = msg_send![
                 window,
                 initWithContentRect: frame,
@@ -388,8 +477,9 @@ fn create_video_window() {
             // Layer attached BEFORE the view enters the window — attaching
             // after display left the window blank once (live M3).
             let _: () = msg_send![view, setLayer: layer];
-            // The title still names the window in Mission Control and OBS's
-            // window list, though no title bar shows it.
+            // The title names the window in the Dock's window list, the
+            // Window menu, Mission Control and OBS's window list, though no
+            // title bar shows it.
             let title = NSString::from_str(WINDOW_TITLE);
             let _: () = msg_send![window, setTitle: &*title];
             let _: () = msg_send![window, setMovableByWindowBackground: true];
@@ -422,19 +512,36 @@ pub fn show_video_window() {
     }
 }
 
+/// Main thread: a Dock click — the open window comes back out of the Dock
+/// if it was minimized, and to the front.
+pub fn restore_video_window() {
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        guarded("restore video window", || unsafe {
+            let minimized: bool = msg_send![vw.window, isMiniaturized];
+            if minimized {
+                let _: () = msg_send![vw.window, deminiaturize: std::ptr::null::<AnyObject>()];
+            }
+        });
+    }
+    show_video_window();
+}
+
 /// Main thread: publishes whether the window is actually composited.
 /// Returns `true` when it found the user closed an open window with its
 /// own close button (the caller silences the audio and tells the UI).
 pub fn refresh_visibility() -> bool {
     let Some(vw) = VIDEO_WINDOW.get() else { return false };
-    let (mut on_screen, mut visible) = (false, false);
+    let (mut on_screen, mut unoccluded) = (false, false);
     guarded("read window state", || unsafe {
         on_screen = msg_send![vw.window, isVisible];
         let occlusion: u64 = msg_send![vw.window, occlusionState];
-        visible = occlusion & OCCLUSION_VISIBLE != 0;
+        unoccluded = occlusion & OCCLUSION_VISIBLE != 0;
     });
-    let closed_by_user = !on_screen && VIDEO_OPEN.swap(false, Ordering::Relaxed);
-    let visible = visible && on_screen && is_open();
+    let close_requested = CLOSE_REQUESTED.swap(false, Ordering::Relaxed);
+    let (closed_by_user, visible) = window_state(is_open(), close_requested, on_screen, unoccluded);
+    if closed_by_user {
+        VIDEO_OPEN.store(false, Ordering::Relaxed);
+    }
     if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
         log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
     }
@@ -442,6 +549,16 @@ pub fn refresh_visibility() -> bool {
         log::info!(target: "video", "video window closed by the user");
     }
     closed_by_user
+}
+
+/// What the window's state means: (the user closed it, frames should be
+/// composited). Only an explicit close closes it. A window minimized to
+/// the Dock, or hidden with its app, is still open — its sound keeps
+/// playing and it comes back — it just shows nothing.
+fn window_state(open: bool, close_requested: bool, on_screen: bool, unoccluded: bool) -> (bool, bool) {
+    let closed_by_user = open && close_requested;
+    let visible = open && !closed_by_user && on_screen && unoccluded;
+    (closed_by_user, visible)
 }
 
 // ---- the frame path (one renderer per video stream) ------------------------
@@ -507,6 +624,11 @@ impl Renderer {
     /// `Some(followup)` when it was dropped, `None` when it should render.
     /// Saves the decoder-buffer → I420 conversion for every hidden frame.
     pub fn drop_if_hidden(&mut self) -> Option<Followup> {
+        // The Syphon output is being read: it needs the frame even when
+        // the window does not (ADR-021).
+        if crate::syphon::wants_frames() {
+            return None;
+        }
         // Closed (or never opened): nothing to render, nothing to raise.
         let Some(vw) = VIDEO_WINDOW.get().filter(|_| is_open()) else { return Some(Followup::None) };
         if WINDOW_VISIBLE.load(Ordering::Relaxed) {
@@ -525,16 +647,19 @@ impl Renderer {
         self.pacer.take_window()
     }
 
-    /// Copies one I420 frame into a pooled NV12 buffer and enqueues it, due
-    /// when the pacer says.
+    /// Copies one I420 frame into a pooled NV12 buffer, due when the pacer
+    /// says: enqueued on the window's layer while it is visible, handed to
+    /// the Syphon output while that is being read — the same buffer for both.
     #[allow(clippy::too_many_arguments)]
     pub fn render_i420(&mut self, width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
-        let Some(vw) = VIDEO_WINDOW.get() else { return Followup::None };
         if width == 0 || height == 0 {
             return Followup::None;
         }
-        if !WINDOW_VISIBLE.load(Ordering::Relaxed) {
-            return self.drop_hidden(vw);
+        let window = VIDEO_WINDOW.get();
+        let visible = window.is_some() && WINDOW_VISIBLE.load(Ordering::Relaxed);
+        let syphon = crate::syphon::wants_frames();
+        if !visible && !syphon {
+            return window.map_or(Followup::None, |vw| self.drop_hidden(vw));
         }
         let arrival = host_now();
         let due = self.pacer.due(arrival);
@@ -544,9 +669,21 @@ impl Renderer {
             return Followup::None;
         };
         copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
-        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) else { return Followup::None };
-        self.enqueue(vw, &sample);
-        Followup::None
+        if syphon {
+            crate::syphon::submit(&pixel_buffer, width, height, due);
+        }
+        match window {
+            Some(vw) if visible => {
+                if let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) {
+                    self.enqueue(vw, &sample);
+                }
+                Followup::None
+            }
+            // Syphon only: an open but covered window still gets its
+            // hidden-frame housekeeping (flush, raise once).
+            Some(vw) if is_open() => self.drop_hidden(vw),
+            _ => Followup::None,
+        }
     }
 
     /// A hidden window is not composited: enqueued samples would pin their
@@ -751,6 +888,14 @@ fn copy_i420_to_nv12(pb: &CVPixelBuffer, width: u32, height: u32, y: &[u8], u: &
     }
 }
 
+/// One NV12 buffer filled from I420 planes, as the frame thread makes them.
+#[cfg(test)]
+pub(crate) fn test_nv12_buffer(width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8]) -> Option<CFRetained<CVPixelBuffer>> {
+    let buffer = Renderer::new().pixel_buffer(width, height, range)?;
+    copy_i420_to_nv12(&buffer, width, height, y, u, v, width, width.div_ceil(2), width.div_ceil(2));
+    Some(buffer)
+}
+
 fn create_pool(width: u32, height: u32, range: VideoRange) -> Option<CFRetained<CVPixelBufferPool>> {
     use objc2_core_video::{kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey};
     let key = |k: &'static CFString| k as *const CFString as *const c_void;
@@ -891,5 +1036,52 @@ mod tests {
         assert!(!set_live(true), "already live: nothing to announce");
         assert!(set_live(false), "live → no input: show the card");
         assert!(!is_live());
+    }
+    #[test]
+    fn the_range_is_read_once_per_stream_and_again_when_the_size_changes() {
+        let reads = std::cell::Cell::new(0);
+        let read = |range: VideoRange| {
+            let reads = &reads;
+            move || {
+                reads.set(reads.get() + 1);
+                range
+            }
+        };
+        let mut tracker = RangeTracker::new();
+        // A minute of frames at one size: one read, not 3 600.
+        for _ in 0..3_600 {
+            assert_eq!(tracker.range(1920, 1200, true, read(VideoRange::Full)), VideoRange::Full);
+        }
+        assert_eq!(reads.get(), 1, "every read pins a decoded frame — it must not happen per frame");
+        // The quality ladder or a rotation starts a new encoder session.
+        assert_eq!(tracker.range(1280, 800, true, read(VideoRange::Limited)), VideoRange::Limited);
+        assert_eq!(tracker.range(1280, 800, true, read(VideoRange::Full)), VideoRange::Limited, "remembered, not re-read");
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn software_frames_are_video_range_without_a_read() {
+        let reads = std::cell::Cell::new(0);
+        let mut tracker = RangeTracker::new();
+        let mut read = || {
+            reads.set(reads.get() + 1);
+            VideoRange::Full
+        };
+        assert_eq!(tracker.range(1920, 1200, true, &mut read), VideoRange::Full);
+        assert_eq!(tracker.range(1920, 1200, false, &mut read), VideoRange::Limited, "a software frame has no surface to ask");
+        assert_eq!(reads.get(), 1);
+        assert_eq!(tracker.range(1920, 1200, true, &mut read), VideoRange::Full);
+        assert_eq!(reads.get(), 2, "back on the hardware decoder: asked once more");
+    }
+
+    #[test]
+    fn a_minimized_window_is_open_but_shows_nothing() {
+        // (open, close requested, on screen, unoccluded) → (closed by the user, composited)
+        assert_eq!(window_state(true, false, true, true), (false, true), "in front: rendering");
+        assert_eq!(window_state(true, false, true, false), (false, false), "covered: open, nothing composited");
+        assert_eq!(window_state(true, false, false, false), (false, false), "in the Dock or app hidden: still open — the sound stays on");
+        assert_eq!(window_state(true, true, false, false), (true, false), "Cmd+W: the user closed it");
+        assert_eq!(window_state(true, true, true, true), (true, false), "closing wins even if the window is still on screen this instant");
+        assert_eq!(window_state(false, true, false, false), (false, false), "already closed: nothing to report");
     }
 }

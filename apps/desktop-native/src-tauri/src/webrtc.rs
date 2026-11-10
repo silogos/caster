@@ -366,6 +366,10 @@ fn announce_input(app: &tauri::AppHandle, live: bool) {
     if crate::video::set_live(live) {
         let _ = app.emit("cast:state", json!({ "live": live }));
         let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+        if !live {
+            // OBS shows the still, not the last frame of the cast (ADR-021).
+            crate::syphon::publish_no_input();
+        }
     }
 }
 
@@ -447,6 +451,7 @@ fn spawn_receive_stats(receiver: livekit::webrtc::rtp_receiver::RtpReceiver) {
 async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
+    let mut range_tracker = crate::video::RangeTracker::new();
     let generation = crate::video::begin_stream();
     let mut frames: u64 = 0;
     let mut window_requested = false;
@@ -487,6 +492,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
                 // The window's own close button: silence the sound, update the UI.
                 if crate::video::refresh_visibility() {
                     crate::audio::set_output_enabled(false);
+                    crate::tray::sync_dock_icon(&poll_app);
                     let _ = poll_app.emit("video:window", json!({ "open": false }));
                 }
             });
@@ -495,8 +501,11 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         let followup = match renderer.drop_if_hidden() {
             Some(followup) => followup,
             None => {
-                // Read before the conversion: the decoder's own buffer states it.
-                let range = crate::video::range_of_frame(frame.buffer.as_ref());
+                // The decoder's own buffer states the range — asked once per
+                // stream and size, because asking pins the frame (RangeTracker).
+                let range = range_tracker.range(w, h, frame.buffer.as_native().is_some(), || {
+                    crate::video::read_range_of_frame(frame.buffer.as_ref())
+                });
                 let i420 = frame.buffer.to_i420();
                 let (y, u, v) = i420.data();
                 let (sy, su, sv) = i420.strides();

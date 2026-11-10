@@ -7,6 +7,7 @@ mod power;
 mod protocol;
 mod settings;
 mod signaling;
+mod syphon;
 mod tray;
 mod video;
 mod webrtc;
@@ -62,6 +63,7 @@ fn open_video(app: tauri::AppHandle) -> Result<(), String> {
     app.run_on_main_thread(move || {
         video::open_video_window();
         audio::set_output_enabled(true);
+        tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
     })
     .map_err(|e| e.to_string())
@@ -74,6 +76,7 @@ fn close_video(app: tauri::AppHandle) -> Result<(), String> {
     app.run_on_main_thread(move || {
         video::close_video_window();
         audio::set_output_enabled(false);
+        tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": false }));
     })
     .map_err(|e| e.to_string())
@@ -94,12 +97,25 @@ fn set_game_audio(
     persist: bool,
 ) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
-    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted };
+    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted, ..*current };
     audio::set_game_gain(current.effective_game_gain());
     if persist {
         if let Err(e) = settings::save(&controls.path, &current) {
             log::warn!(target: "settings", "not saved: {e}");
         }
+    }
+    Ok(*current)
+}
+
+/// The Syphon output for OBS (ADR-021) — a receiver control. The saved
+/// value is what was asked for; the returned one is what is running (a Mac
+/// without a Metal device cannot start it).
+#[tauri::command]
+fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
+    let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
+    current.syphon_output = syphon::set_enabled(enabled);
+    if let Err(e) = settings::save(&controls.path, &current) {
+        log::warn!(target: "settings", "not saved: {e}");
     }
     Ok(*current)
 }
@@ -186,6 +202,7 @@ pub fn run() {
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
             audio::set_game_gain(saved.effective_game_gain());
+            let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && syphon::set_enabled(true), ..saved };
             app.manage(ReceiverControls { path: settings_path, current: Mutex::new(saved) });
             // The first session exists before the window can ask for it.
             let mut store = pairing::SessionStore::new(pairing::SESSION_TTL_SECONDS);
@@ -233,6 +250,7 @@ pub fn run() {
             regenerate_pairing,
             receiver_settings,
             set_game_audio,
+            set_syphon_output,
             open_video,
             close_video
         ])
@@ -245,9 +263,10 @@ pub fn run() {
                 let control = app.state::<ServerControl>();
                 tray::quit(app, &|| { let _ = send_command(&control, signaling::ServerCommand::SayGoodbye); });
             }
-            // Dock icon click while hidden.
+            // Dock icon click: the video window while it is open, else the
+            // main window (back from the tray).
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+            tauri::RunEvent::Reopen { .. } => tray::on_dock_click(app),
             _ => {}
         });
 }

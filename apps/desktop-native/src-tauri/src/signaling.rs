@@ -200,7 +200,13 @@ pub async fn serve<H: SignalingHost + 'static>(
                 let hosts = (config.hosts)();
                 let stale = shared.borrow().store.needs_regeneration(pairing::unix_now(), &hosts);
                 if stale {
-                    regenerate(&shared, &*host, hosts, true);
+                    // A phone that resumed with its trust key left a spare
+                    // QR session behind, and that one expires mid-cast.
+                    // Replace it, but do not put it on screen: the window is
+                    // showing the cast (found live 2026-11-10 — the deck
+                    // flipped to the QR ten minutes into a cast).
+                    let phone_connected = shared.borrow().authorized.is_some();
+                    regenerate(&shared, &*host, hosts, !phone_connected);
                 }
             }
         }

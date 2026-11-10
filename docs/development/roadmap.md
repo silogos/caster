@@ -289,7 +289,39 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the 8 ms from the IO buffer is computed from buffer sizes, not measured acoustically.
 
----
+## Fix 2026-11w — The receiver no longer pins every decoded frame ✅ verified on-device (2026-11-10)
+*(Not a numbered phase: found live — the receiver died after about five minutes with the video window showing.)*
+**Scope:** the colour-range fix of 2026-11-09 asked each frame for its pixel format through webrtc-sys' `get_cv_pixel_buffer`, which leaks a reference to the decoded surface per call. Every shown frame stayed pinned in `VTDecoderXPCService` (about 180 MB a second at 1920×1200 and 60 fps) until macOS ran out of memory: 57 GB after 16 517 frames, then the receiver was killed. `RangeTracker` now reads the range once per stream and again when the dimensions change, and remembers it — [desktop-native.md](../architecture/desktop-native.md).
+
+**Accept:** desktop `cargo test` 83 (+2: one read per stream and size, not per frame; software frames need no read). **On-device:** with a cast running and the video window showing, the decoder service grew from 383 MB to 4 GB in 21 s before the fix and stayed at 42 MB for 60 s (~3 300 frames) after it; the range is still detected (`'420f'`, full).
+
+**Not done:** each read still pins one frame (3.5 MB) — one per stream and per size change. The leak itself is in webrtc-sys.
+
+## Fix 2026-11z — No QR on screen while a phone is casting ✅ tested; not yet confirmed on screen in a ten-minute cast (2026-11-10)
+*(Not a numbered phase: found live by the product owner — the video window kept playing while the main window showed the QR.)*
+**Scope:** a phone that reconnects with its trust key bypasses the QR session, and the receiver stages a spare one. Ten minutes later that spare session expired, the 1 s sweep replaced it, and it announced the new QR to the window, which switched from the deck to the QR hero mid-cast. The sweep still replaces the expired session, but announces it only while no phone is connected. A QR-paired phone was never affected (its own session outlives the TTL).
+
+**Accept:** desktop `cargo test` 84 (+1: an expired spare QR is replaced silently while a phone is connected; the test fails without the fix).
+
+**Not done:** not watched on screen through a full ten-minute cast.
+
+## Feature 2026-11x — Syphon output on the native receiver ✅ verified on-device, including in OBS (2026-11-10)
+*(Not a numbered phase: the first Electron-only feature ported for issue #152.)*
+**Scope:** "Output to OBS → Syphon" in the receiver's window publishes the cast as a Syphon server from inside the app: the frame's own pixel buffer is converted on the GPU and published at the pacer's due time, only while a client reads it, also with the video window closed; a "No input video" still between casts — [ADR-021](../decisions/ADR-021-native-syphon-output.md). The framework is vendored under `apps/desktop-native/vendor/syphon/`.
+
+**Accept:** desktop `cargo test` 90 (+6: publisher ordering and due times, late frame, full queue, tick, on/read gate, and one end-to-end bridge test through the GPU). **On-device:** an independent Syphon client received a live cast at 59.7 fps (median spacing 16.7 ms, p95 20.5 ms), 1920×1200, exact colours, also with the video window off screen; the product owner confirmed the picture in OBS, the right way up (the first build was upside down there: Syphon's surface is bottom row first).
+
+**Not done:** the conversion's CPU cost is not measured cleanly (the tablet was in use during the comparison); TikTok LIVE Studio through window capture is untried.
+
+## Fix 2026-11y — The video window is listed in the Dock ⏳ built and tested; Dock behaviour not confirmed by the product owner yet (2026-11-10)
+*(Not a numbered phase: found live by the product owner — "render video harus independent window".)*
+**Scope:** the frameless video window was missing from the Dock: AppKit treats a window that cannot become main as a helper panel. It is now an `NSWindow` subclass that can become main and key (listed in the Dock icon's window list and the Window menu, Cmd+M and Cmd+W work, still no frame drawn). A minimized window counts as open, not as closed by the user. The Dock icon stays while the video window is open, also after the main window is closed to the tray.
+
+**Follow-up, same day** (product owner: "ketika di-click pada dock yang muncul bukan render videonya"): a Dock click always raised the main window. It now goes to the video window while that is open (restored from the Dock if minimized) and to the main window only when the video window is closed; the main window stays reachable from the tray's *Open window*.
+
+**Accept:** desktop `cargo test` 93 (+3: a minimized window is open but shows nothing; the Dock icon follows either window; a Dock click goes to the video window while it is open). Scripted run on the Mac with the reopen Apple event a Dock click sends (not a real click): video open + main hidden → video stays, main stays hidden; video minimized → restored, main stays hidden; video closed → main window shown.
+
+**Not done:** the Dock list, minimize, the kept Dock icon and a real Dock click have not been confirmed on screen by the product owner.
 
 ## Fix 2026-11aa — A stalled video encoder is re-created ✅ verified on-device with an injected stall (2026-11-10)
 *(Not a numbered phase: found live by the product owner — the picture froze 37 minutes into a cast while the sound carried on.)*

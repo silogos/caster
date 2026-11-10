@@ -49,10 +49,11 @@ There are two desktop apps in the tree. Only one is being developed.
 | Video | Shown on arrival with a bounded 50 ms pacer ([ADR-017](docs/decisions/ADR-017-receiver-frame-pacing.md)) | Chromium's playout, ~91 ms floor ([ADR-014](docs/decisions/ADR-014-native-low-latency-audio-output.md)) |
 | Game audio | Stereo PCM over the DataChannel, CoreAudio output ([ADR-020](docs/decisions/ADR-020-audio-playout-steers-the-trough.md)) | Stereo PCM through a Rust sidecar engine |
 | Microphone playback | **Not yet** (the connection is answered, the track is not played) | Yes |
-| Virtual camera, audio routing | **Not yet** (speaks protocol version 1) | Yes (protocol version 2) |
+| Output to OBS | Syphon, switched on the receiver ([ADR-021](docs/decisions/ADR-021-native-syphon-output.md)) | Syphon / softcam / PipeWire, switched from the phone |
+| Audio routing | **Not yet** (speaks protocol version 1) | Yes (protocol version 2) |
 | Launch at login, frameless window | **Not yet** | Yes |
 | Game audio after an ICE restart | Stays on the stereo channel ([ADR-019](docs/decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md)) | Not checked; the fix was made in the native receiver only |
-| Tests | 81 `cargo test` tests, **run locally only** | Vitest suite, run by the CI `desktop` job |
+| Tests | 93 `cargo test` tests, **run locally only** | Vitest suite, run by the CI `desktop` job |
 
 Things to know before touching either:
 

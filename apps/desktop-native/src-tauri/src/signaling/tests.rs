@@ -395,6 +395,28 @@ fn a_plain_bye_keeps_trust_and_the_no_input_stage() {
 }
 
 #[test]
+fn an_expired_spare_qr_is_replaced_silently_while_a_phone_is_connected() {
+    local(async {
+        // A resumed phone leaves a spare pending session behind; give it a
+        // one-second life and let the sweep find it expired mid-cast.
+        let timings = Timings { sweep_interval: Duration::from_millis(50), ..fast_timings() };
+        let server = start_server(timings, 1).await;
+        let key = vec![9u8; 32];
+        pairing::write_trust(&server.paths.trust, &TrustEntry { device_id: "phone-1".into(), name: "x".into(), key: key.clone() }).unwrap();
+        let mut c = Client::connect(server.addr).await;
+        let reply = c.handshake("phone-1", &key, hello(Some("phone-1"), true)).await;
+        assert_eq!(reply["type"], "auth-ok", "{reply}");
+        let staged_at_resume = server.host.sessions.borrow().len();
+
+        tokio::time::sleep(Duration::from_millis(2_300)).await;
+        let sessions = server.host.sessions.borrow();
+        let after_resume = &sessions[staged_at_resume..];
+        assert!(!after_resume.is_empty(), "the expired spare session was replaced");
+        assert!(after_resume.iter().all(|(_, announced)| !announced), "never on screen: the window is showing the cast");
+    });
+}
+
+#[test]
 fn the_sweep_replaces_an_expired_qr_and_announces_it() {
     local(async {
         let timings = Timings { sweep_interval: Duration::from_millis(50), ..fast_timings() };
