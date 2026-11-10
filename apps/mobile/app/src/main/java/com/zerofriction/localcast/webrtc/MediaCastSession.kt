@@ -276,7 +276,7 @@ class MediaCastSession(
                 }
 
             is SignalingClient.Event.SdpAnswer ->
-                if (event.pc == PC_ID) post { if (active) negotiator.applyAnswer(event.sdp) }
+                if (event.pc == PC_ID) post { if (active) onAnswer(event.sdp) }
 
             is SignalingClient.Event.IceCandidate ->
                 if (event.pc == PC_ID) post { if (active) negotiator.applyRemoteCandidate(event.candidate) }
@@ -292,6 +292,27 @@ class MediaCastSession(
             // reconnect is normal (backoff ladder) and does not stop the cast.
             else -> Unit
         }
+    }
+
+    /**
+     * The remote session id of the last answer on the current pc — reset by
+     * [negotiate]. An ICE restart answered by a *restarted* desktop (a new
+     * remote pc, a new id) leaves this pc's game-audio DataChannel dead: the
+     * channel counts as open here, so it is never re-announced, and the
+     * desktop only ever gets the mono fallback track. Such an answer rebuilds
+     * the pc instead of being applied (ADR-019).
+     */
+    private var answeredSession: String? = null
+
+    private fun onAnswer(sdp: String) {
+        val session = SdpSession.id(sdp)
+        if (SdpSession.isNewRemote(answeredSession, session)) {
+            Log.i(TAG, "answer from a new desktop session — rebuilding the media pc (game-audio channel)")
+            negotiate()
+            return
+        }
+        answeredSession = session
+        negotiator.applyAnswer(sdp)
     }
 
     /** True between [start] and teardown — guards late signaling callbacks. */
@@ -482,6 +503,7 @@ class MediaCastSession(
         // encoder threads spinning on the dead pc.
         releaseGameAudioPipeline()
         closePc()
+        answeredSession = null
         val newFactory = factory ?: return
         val newTrack = videoTrack ?: return
 
@@ -538,6 +560,9 @@ class MediaCastSession(
         scheduleRecoveryWatchdog()
         negotiator.offer()
     }
+
+    /** Debug builds only (CastService): one ICE restart now, as the recovery ladder would send it. */
+    fun debugRestartIce() = post { if (active) restartIce(0) }
 
     /**
      * One ICE restart (issue #86): fresh ICE credentials on the **same** pc —

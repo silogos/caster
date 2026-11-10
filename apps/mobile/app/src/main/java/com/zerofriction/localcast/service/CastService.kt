@@ -65,6 +65,8 @@ class CastService : Service() {
         private const val ACTION_SET_MIC_DEVICE = "com.zerofriction.localcast.service.SET_MIC_DEVICE"
         private const val EXTRA_MIC_DEVICE = "micDevice"
         private const val ACTION_RESTORE_QUALITY = "com.zerofriction.localcast.service.RESTORE_QUALITY"
+        /** Debug builds only — sent by the debug source set's DebugIceRestartReceiver. */
+        const val DEBUG_ACTION_ICE_RESTART = "com.zerofriction.localcast.service.DEBUG_ICE_RESTART"
         private const val ACTION_SET_LIVE_QUALITY = "com.zerofriction.localcast.service.SET_LIVE_QUALITY"
         private const val ACTION_TOGGLE_VIRTUAL_CAMERA = "com.zerofriction.localcast.service.TOGGLE_VIRTUAL_CAMERA"
         private const val ACTION_SET_AUDIO_ROUTING = "com.zerofriction.localcast.service.SET_AUDIO_ROUTING"
@@ -368,6 +370,12 @@ class CastService : Service() {
             }
             ACTION_RESTORE_QUALITY -> {
                 quality.restore()
+                return START_NOT_STICKY
+            }
+            // Debug builds only: an ICE restart on demand, to exercise the
+            // recovery path (ADR-019) without breaking the network.
+            DEBUG_ACTION_ICE_RESTART -> {
+                if (BuildConfig.DEBUG) session?.debugRestartIce()
                 return START_NOT_STICKY
             }
             ACTION_SET_LIVE_QUALITY -> {
