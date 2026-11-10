@@ -59,6 +59,9 @@ class PlaybackCaptureAudioSource(
     /** Fed on the ADM's recording thread alongside the silence monitor. */
     private val stereoContentProbe = StereoContentProbe()
 
+    /** Debug-only: how late a captured block reaches the app. */
+    private val readGaps = com.zerofriction.localcast.debug.GapProbe("audio read")
+
     /** Self-heal for the mono-born tap (see [MonoTapRecovery]). */
     private val monoTapRecovery = MonoTapRecovery()
 
@@ -120,7 +123,10 @@ class PlaybackCaptureAudioSource(
         })
         .setSamplesReadyCallback { samples ->
             monitor.onFrame(System.currentTimeMillis(), PcmSilence.isSilent(samples.data))
-            if (BuildConfig.DEBUG) LatencyClickProbe.onSamples(samples.data)
+            if (BuildConfig.DEBUG) {
+                LatencyClickProbe.onSamples(samples.data)
+                readGaps.onEvent()
+            }
             onEncoderInputSamples?.invoke(samples.data)
             // A capped dump steps aside so the next dump starts — a long
             // session gets successive bounded files instead of just the first.

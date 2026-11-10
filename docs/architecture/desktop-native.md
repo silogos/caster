@@ -65,7 +65,7 @@ Why the trough and not the mean depth: the phone delivers audio in bursts (one c
 
 Why rate control: a 60 ms trim (the first version) discarded the cushion that absorbs SCTP's next delivery stall — 244 trims and 195 underruns in a 274 s PUBG session. With rate control: 1 trim, ~0.24 underruns/s, median playout ~70 ms (the product owner chose fewer dropouts over draining faster to 40 ms).
 
-The 1 Hz `dc:` log line carries `underruns` (with the ms of silence played while starved), `sheds`, `depth`, `trough`, `out` (callback frames / IO buffer ms) and `side` (side-vs-mid dB of the PCM: ≈ −∞ means the wire carries L = R — a phone-side capture fold, audio.md — not a receiver bug).
+The 1 Hz `dc:` log line carries `underruns` (with the ms of silence played while starved), `sheds`, `depth`, `trough`, `out` (callback frames / IO buffer ms), `gap` (the longest pause between two arriving chunks in that second / how many pauses reached 30 ms — a starve with a long pause came from the network or the phone, not from the playout) and `side` (side-vs-mid dB of the PCM: ≈ −∞ means the wire carries L = R — a phone-side capture fold, audio.md — not a receiver bug).
 
 ## Video
 

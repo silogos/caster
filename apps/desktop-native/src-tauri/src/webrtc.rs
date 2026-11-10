@@ -37,6 +37,42 @@ static FACTORY: std::sync::OnceLock<PeerConnectionFactory> = std::sync::OnceLock
 /// The DataChannel stats line cadence: 100 chunks of 10 ms = ~1 s.
 const DC_LOG_EVERY_CHUNKS: u64 = 100;
 
+/// A pause between two audio chunks this long is more than the phone's
+/// capture block (1 024 frames, 21 ms) can explain: a chunk came late.
+const LONG_ARRIVAL_GAP: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// How unevenly the game-audio chunks arrive: the longest pause between two
+/// chunks since the last report, and how many pauses were long. The playout
+/// starves when a pause outlasts the audio it holds, so this tells a late
+/// network or phone apart from a playout that asked for too little.
+#[derive(Default)]
+struct ArrivalGaps {
+    last: Option<std::time::Instant>,
+    longest: std::time::Duration,
+    long: u32,
+}
+
+impl ArrivalGaps {
+    fn note(&mut self, now: std::time::Instant) {
+        if let Some(last) = self.last {
+            let gap = now.saturating_duration_since(last);
+            self.longest = self.longest.max(gap);
+            if gap >= LONG_ARRIVAL_GAP {
+                self.long += 1;
+            }
+        }
+        self.last = Some(now);
+    }
+
+    /// (longest pause in ms, long pauses) since the last call.
+    fn take(&mut self) -> (u128, u32) {
+        let report = (self.longest.as_millis(), self.long);
+        self.longest = std::time::Duration::ZERO;
+        self.long = 0;
+        report
+    }
+}
+
 pub fn init_factory() {
     let _ = FACTORY.set(PeerConnectionFactory::with_zero_playout_delay());
 }
@@ -161,6 +197,7 @@ impl MediaAnswerer {
             // Per-channel counters (a reconnect starts from zero).
             let mut chunks: u64 = 0;
             let mut bytes: u64 = 0;
+            let mut gaps = ArrivalGaps::default();
             dc.on_message(Some(Box::new(move |msg| {
                 if !msg.binary {
                     // The channel's text sub-protocol (announce). Deliberately
@@ -174,11 +211,13 @@ impl MediaAnswerer {
                 }
                 chunks += 1;
                 bytes += msg.data.len() as u64;
+                gaps.note(std::time::Instant::now());
                 crate::audio::feed_dc_pcm16(&msg.data);
                 if chunks % DC_LOG_EVERY_CHUNKS == 0 {
                     let st = crate::audio::stats();
+                    let (longest_gap_ms, long_gaps) = gaps.take();
                     log::info!(
-                        target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} ({}ms silent) sheds={} depth={}ms trough={}ms out={}f/{:.1}ms played={} side={:.0}dB",
+                        target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} ({}ms silent) sheds={} depth={}ms trough={}ms out={}f/{:.1}ms played={} side={:.0}dB gap={longest_gap_ms}ms/{long_gaps}",
                         bytes / 1024,
                         st.underruns,
                         st.starved_ms,
@@ -564,7 +603,27 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
 
 #[cfg(test)]
 mod tests {
-    use super::sdp_session_id;
+    use super::{sdp_session_id, ArrivalGaps};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn arrival_gaps_report_the_longest_pause_and_count_the_long_ones() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut gaps = ArrivalGaps::default();
+        // The phone's rhythm: two chunks per 21 ms capture block.
+        for t in [0, 1, 21, 22, 43, 44] {
+            gaps.note(at(t));
+        }
+        assert_eq!(gaps.take(), (21, 0), "a capture block apart is not late");
+        // One chunk held up for 55 ms, then the backlog at once.
+        for t in [99, 100, 101, 121] {
+            gaps.note(at(t));
+        }
+        assert_eq!(gaps.take(), (55, 1), "the pause across the report boundary counts");
+        gaps.note(at(142));
+        assert_eq!(gaps.take(), (21, 0), "each report starts over");
+    }
 
     const OFFER: &str = "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
 
