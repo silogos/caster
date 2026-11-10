@@ -25,7 +25,7 @@ The product owner's direction (2026-11-11): add custom profiles; with every sett
 
 | | In a profile | Not in a profile |
 |---|---|---|
-| Picture | Resolution, frame rate, bitrate window | |
+| Picture | Resolution, frame rate, bitrate range (the least and the most; the sender never goes under the least — ADR-023, revised) | |
 | Behaviour | Under network pressure, Automatic quality | |
 | Encoder | Encoder (hardware / software), video codec, H.264 profile, encoder fps limit | |
 | Audio | Game-audio transport (Low latency / Standard) | Game audio on/off, Microphone on/off, which microphone |

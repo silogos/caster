@@ -75,7 +75,7 @@ Encoder-level knobs — every default reproduces today's cast exactly:
 | Encoder | Hardware / Software | Hardware | `webrtc/CastEncoderFactory`: `DefaultVideoEncoderFactory` vs MediaCodec software-only predicate (+libwebrtc software fallback chain) |
 | Preferred video codec | H.264 / VP8 | H.264 | Offer payload order (`SdpCodecOrderer`) |
 | H.264 profile | Baseline / High | High | `enableH264HighProfile` factory flag (High profile leaves the offer when off) |
-| Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference`. **Keep frame rate** also lowers the sender's bitrate floor to 1 Mbps and starts the cast at the window's floor, so the bitrate can follow a short uplink instead of queueing ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md)); the other two keep the window's floor. |
+| Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference`. The sender's floor is the profile's least for all three; for one day **Keep frame rate** lowered it to 1 Mbps, which let the picture fall to 640×400 in a game cast ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md), revised). |
 | Encoder fps limit | Off / 15 / 30 / 60 | Off | `RTCRtpSender.encodings.maxFramerate` |
 | Bitrate mode | CBR / VBR | CBR (per-preset) | **Removed 2026-11-11 ([ADR-024](../decisions/ADR-024-custom-profiles.md)).** It was a placebo: libwebrtc hardcodes CBR (verified in the prebuilt's bytecode), and real VBR would burst on busy scenes, against smooth frames and sound. The bitrate follows the network through the profile's window instead ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md)). |
 
@@ -105,7 +105,7 @@ Supersedes the `Preset | Custom` console, the Advanced page and the single setti
 
   | Card | Settings |
   |---|---|
-  | Picture | Resolution, frame rate, bitrate ceiling (the floor is half of it) |
+  | Picture | Resolution, frame rate, bitrate range: one slider with two thumbs, the least and the most (1–20 Mbps). The sender never goes under the least, whatever the pressure choice ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md), revised) |
   | Behaviour | Under network pressure, Automatic quality |
   | Encoder | Encoder, video codec, H.264 profile, encoder fps limit |
   | Audio | Low-latency game audio (Low latency / Standard) |
@@ -126,7 +126,7 @@ Supersedes the `Preset | Custom` console, the Advanced page and the single setti
 
 ### Verification (2026-11-11)
 
-Mobile `testDebugUnitTest`: 443 tests, 0 failures, 2 skipped. New or rewritten: `CastProfilesTest` (what each profile edit does and what the next cast runs on), `CastSettingsCodecTest` (round-trips, validation, and v1–v6 documents written out as those versions stored them), `SettingsViewModelTest`, `QualityConsoleCardUiTest`, `ProfileScreensUiTest`, and the profile screens in `AccessibilityUiTest`.
+Mobile `testDebugUnitTest`: 442 tests, 0 failures, 2 skipped. New or rewritten: `CastProfilesTest` (what each profile edit does and what the next cast runs on), `CastSettingsCodecTest` (round-trips, validation, and v1–v6 documents written out as those versions stored them), `SettingsViewModelTest`, `QualityConsoleCardUiTest`, `ProfileScreensUiTest`, and the profile screens in `AccessibilityUiTest`.
 
 **Not done:** a walk on the tablet (the migration of its real stored settings, the list, edit, add, delete, a cast on the user's profile).
 

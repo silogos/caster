@@ -341,15 +341,19 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** no comparison against "Keep resolution" on the same content, no real game, no hot tablet. The late audio chunks that remain are not the video backlog's doing and are not addressed. A 4K stream ran at 38–51 fps for a reason not found. *Bitrate mode: VBR* is still a placebo.
 
-## Feature 2026-11ac — Custom profiles; no Advanced page ⏳ built and unit-tested; not walked on the tablet (2026-11-11)
+## Feature 2026-11ac — Custom profiles; no Advanced page ⏳ built, walked on the tablet; the bitrate range not yet on the device (2026-11-11)
 *(Not a numbered phase: the product owner's idea after the audio investigation — issue #165.)*
 **Scope:** a setup that started as Sharp and was changed to 60 fps showed as "Custom" and still carried Sharp's 8 Mbps floor and "Keep resolution", with nothing on screen saying so. A profile now holds every cast value (picture, behaviour, encoder, game-audio transport); four built-in profiles are fixed and the user adds their own (name, edit, duplicate, delete; up to 12). Home's quality console is one list of profiles; the `Preset | Custom` tabs, the Advanced page, the gear and Bitrate mode are gone; "Encoder in use" moved to STATUS. Stored settings v7, with every v1–v6 document migrating without losing a value — [ADR-024](../decisions/ADR-024-custom-profiles.md), [cast-settings.md](../features/cast-settings.md).
 
 **Design:** [`designs/mobile-app.figcraft`](../../designs/mobile-app.figcraft), page "Mobile design v2 · custom profiles" (the draft, accepted by the product owner); page "Mobile · as shipped" regenerated from the built UI.
 
-**Accept:** mobile `testDebugUnitTest` 443 (0 failures, 2 skipped).
+**Walked on the tablet (2026-11-11, TB321FU):** the stored v6 settings became "Custom 1" with every value kept; add from Sharp, edit (60 fps, Keep frame rate, Automatic quality off, low-latency audio, rename), duplicate, delete (selected → Balanced; other → no change of selection) all saved as expected; a cast ran on "Custom 1" (1920×1200, Keep frame rate, low-latency audio; STATUS showed the encoder). Found and fixed: the Add sheet opened at half height in landscape, hiding Create.
 
-**Not done:** no walk on the tablet. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
+**Bitrate range (same day, [ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md) revised):** in a game cast the hidden 1 Mbps floor of "Keep frame rate" let the picture fall to 640×400. The floor is now the profile's own least, set with a two-thumb slider (1–20 Mbps).
+
+**Accept:** mobile `testDebugUnitTest` 442 (0 failures, 2 skipped).
+
+**Not done:** the fixed Add sheet and the bitrate range are not installed on the tablet yet; picking a profile during a cast was not tried. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
 
 ## Definition of Done (every phase)
 

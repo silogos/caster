@@ -14,6 +14,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import com.zerofriction.localcast.config.CastSettings
@@ -127,22 +128,31 @@ class ProfileScreensUiTest {
     }
 
     @Test
-    fun `a drag of the bitrate dial saves once, on release, with its floor`() {
+    fun `the bitrate slider has two thumbs, the least and the most, and says both`() {
         showEdit()
-        val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
-        compose.onNode(slider).performScrollTo().performTouchInput {
-            down(center)
-            dragRightBy(0.3f)
-        }
-        compose.waitForIdle()
-        assertEquals("nothing is saved while the finger is down", 0, edits)
-        compose.onNode(slider).performTouchInput { up() }
-        compose.waitForIdle()
+        compose.onNodeWithText("Bitrate — 8 to 12 Mbps").assertExists()
+        assertEquals(2, compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)).fetchSemanticsNodes().size)
+    }
 
+    @Test
+    fun `moving the least saves the range once and leaves the most alone`() {
+        showEdit()
+        val thumbs = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+        thumbs[0].performSemanticsAction(SemanticsActions.SetProgress) { it(4f) }
+        compose.waitForIdle()
         assertEquals(1, edits)
-        assertTrue(profile.values.bitrateMaxBps > sharp60.bitrateMaxBps)
-        assertEquals(profile.values.bitrateMaxBps / 2, profile.values.bitrateMinBps)
-        assertEquals("only the dial moved", sharp60.fps, profile.values.fps)
+        assertEquals(4_000_000 to 12_000_000, profile.values.bitrateMinBps to profile.values.bitrateMaxBps)
+        compose.onNodeWithText("Bitrate — 4 to 12 Mbps").assertExists()
+        assertEquals("only the slider moved", sharp60.fps, profile.values.fps)
+    }
+
+    @Test
+    fun `moving the most saves the range and leaves the least alone`() {
+        showEdit()
+        val thumbs = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
+        thumbs[1].performSemanticsAction(SemanticsActions.SetProgress) { it(16f) }
+        compose.waitForIdle()
+        assertEquals(8_000_000 to 16_000_000, profile.values.bitrateMinBps to profile.values.bitrateMaxBps)
     }
 
     @Test

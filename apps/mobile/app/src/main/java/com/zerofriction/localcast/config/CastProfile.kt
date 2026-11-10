@@ -39,16 +39,20 @@ data class ProfileValues(
     /** Keep the game-audio channel on raw PCM16 (Feature 2026-11d; false = the AAC default). */
     val lowLatencyGameAudio: Boolean,
 ) {
-    /** A user-picked bitrate ceiling: clamped to the slider's range, with the floor derived from it. */
-    fun withBitrateCeiling(maxBps: Int): ProfileValues {
-        val ceiling = maxBps.coerceIn(
-            CastSettingChoices.MANUAL_BITRATE_MIN_BPS,
-            CastSettingChoices.MANUAL_BITRATE_MAX_BPS,
+    /**
+     * A user-picked bitrate range: both ends on the slider's steps and inside
+     * its ends, the most at least one step above the least. The sender never
+     * goes under the least (ADR-023, revised).
+     */
+    fun withBitrateRange(minBps: Int, maxBps: Int): ProfileValues {
+        val step = CastSettingChoices.BITRATE_STEP_BPS
+        fun onStep(bps: Int) = (bps.toDouble() / step).roundToInt() * step
+        val least = onStep(minBps).coerceIn(
+            CastSettingChoices.BITRATE_SLIDER_MIN_BPS,
+            CastSettingChoices.MANUAL_BITRATE_MAX_BPS - step,
         )
-        return copy(
-            bitrateMinBps = (ceiling * CastSettingChoices.MANUAL_BITRATE_MIN_FRACTION).roundToInt(),
-            bitrateMaxBps = ceiling,
-        )
+        val most = onStep(maxBps).coerceIn(least + step, CastSettingChoices.MANUAL_BITRATE_MAX_BPS)
+        return copy(bitrateMinBps = least, bitrateMaxBps = most)
     }
 
     /** Whether every value is one this build offers — a cast must never run on guessed values. */

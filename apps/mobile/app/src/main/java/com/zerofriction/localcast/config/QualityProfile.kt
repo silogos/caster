@@ -81,8 +81,8 @@ enum class QualityProfile(
 
 /**
  * A profile's discrete choices and bitrate bounds — named, not magic
- * (AGENTS.md). In the user's own profile the bitrate is a ceiling they pick;
- * the window's floor is a fixed fraction of it.
+ * (AGENTS.md). In the user's own profile the bitrate is a range they pick:
+ * the least and the most the video may use.
  */
 object CastSettingChoices {
     /** Capture long-edge options ("resolution"). */
@@ -91,12 +91,12 @@ object CastSettingChoices {
     /** Encoder frame-rate options. */
     val FPS_CHOICES = listOf(30, 60)
 
-    /** Manual bitrate slider bounds (bps). */
-    const val MANUAL_BITRATE_MIN_BPS = 2_000_000
+    /** The bitrate slider's ends (bps): the lowest "least" and the highest "most" a profile may have. */
+    const val BITRATE_SLIDER_MIN_BPS = 1_000_000
     const val MANUAL_BITRATE_MAX_BPS = 20_000_000
 
-    /** Floor of a manual window: [MANUAL_BITRATE_MIN_FRACTION] × the ceiling. */
-    const val MANUAL_BITRATE_MIN_FRACTION = 0.5
+    /** The slider's step, and the smallest range it allows between its two thumbs. */
+    const val BITRATE_STEP_BPS = 1_000_000
 }
 
 /**

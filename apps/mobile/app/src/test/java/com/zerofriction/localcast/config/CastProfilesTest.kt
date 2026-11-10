@@ -81,11 +81,19 @@ class CastProfilesTest {
     }
 
     @Test
-    fun `a bitrate ceiling stays inside the slider and brings its floor with it`() {
-        assertEquals(6_000_000 to 12_000_000, sharp60.withBitrateCeiling(12_000_000).window())
-        assertEquals(10_000_000 to 20_000_000, sharp60.withBitrateCeiling(99_000_000).window())
-        assertEquals(1_000_000 to 2_000_000, sharp60.withBitrateCeiling(1).window())
-        assertTrue(sharp60.withBitrateCeiling(7_000_000).isValid)
+    fun `a bitrate range keeps the least and the most the user picked`() {
+        assertEquals(4_000_000 to 12_000_000, sharp60.withBitrateRange(4_000_000, 12_000_000).window())
+        assertEquals("on the slider's steps", 4_000_000 to 12_000_000, sharp60.withBitrateRange(4_400_000, 11_600_000).window())
+        assertEquals(4_000_000, sharp60.withBitrateRange(4_000_000, 12_000_000).let { CastSettings.default().withProfileAdded("A", it).toConfig().bitrateMinBps })
+    }
+
+    @Test
+    fun `a bitrate range stays inside the slider with its two ends a step apart`() {
+        assertEquals(1_000_000 to 20_000_000, sharp60.withBitrateRange(0, 99_000_000).window())
+        assertEquals("the most cannot meet the least", 9_000_000 to 10_000_000, sharp60.withBitrateRange(9_000_000, 9_000_000).window())
+        assertEquals("nor pass it", 9_000_000 to 10_000_000, sharp60.withBitrateRange(9_000_000, 3_000_000).window())
+        assertEquals(19_000_000 to 20_000_000, sharp60.withBitrateRange(20_000_000, 20_000_000).window())
+        assertTrue(sharp60.withBitrateRange(0, 99_000_000).isValid)
     }
 
     @Test

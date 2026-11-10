@@ -1,6 +1,6 @@
 # ADR-023: "Keep frame rate" lets the video bitrate fall below the window
 
-- **Status:** accepted (2026-11-11). Built, unit-tested and measured in one cast on-device: the bitrate and resolution follow the network and the frame rate holds; **the audio benefit is not shown** (see Consequences).
+- **Status:** **revised the same day** (see *Revision* at the end): the hidden 1 Mbps floor is gone; a profile's own least is the floor. Originally: accepted (2026-11-11). Built, unit-tested and measured in one cast on-device: the bitrate and resolution follow the network and the frame rate holds; **the audio benefit is not shown** (see Consequences).
 
 ## Context
 
@@ -42,3 +42,19 @@ Under **Keep frame rate** the sender's floor is `KEEP_FRAME_RATE_FLOOR_BPS` = 1 
 - **Not addressed:** audio still shares the video's transport with no priority of its own. If the uplink is short for other reasons than the video's own volume, audio can still be late.
 - **The presets are unchanged.** Sharp still defaults to "Keep resolution"; a user who wants this behaviour picks "Keep frame rate". Whether a preset should default to it is a separate product decision.
 - **Revisit if:** the picture at the 1 Mbps floor is unusable (raise the floor), or casts start soft because the start bitrate is refused (the log line shows it).
+
+## Revision (2026-11-11, later): the floor is the profile's own
+
+**What happened.** In a game cast on the user's profile (1920 px, 60 fps, 8–12 Mbps, Keep frame rate, tablet at thermal SEVERE) libwebrtc's target fell from 8.8 to 2.2 Mbps in three minutes and the frame went 1920 → 1280 → 960 → 640×400, while the send queue was empty and the RTT 6–10 ms. The frame rate did hold (20 → 59 fps as the frame shrank). The product owner's verdict: too extreme. The profile's row still read "8–12 Mbps".
+
+**What was wrong with the decision above.** A fixed 1 Mbps floor, hidden behind a strategy name, let an estimate that looks too cautious drag the picture four steps down, and made the range on screen untrue.
+
+**Decision.** The sender's floor is the profile's least, whatever its pressure strategy. `KEEP_FRAME_RATE_FLOOR_BPS`, `SenderBitrateFloor.kt` and the start-bitrate call are removed. In the user's own profile the bitrate is one slider with two thumbs, the least and the most (1–20 Mbps in 1 Mbps steps); the rule "the floor is half the ceiling" is gone. The built-in profiles keep their ranges, so Performance (Keep frame rate, 6–10 Mbps) holds 6 Mbps again.
+
+**Consequences.**
+- How far the picture may fall is the user's choice, and the range on the profile's row is the range the sender uses.
+- A least set above what the uplink carries queues the video again, and the audio with it: the failure the original decision was about. The range is the user's trade.
+- Still libwebrtc's own: when it scales the frame or drops frames inside that range. Taking that over (steps of our own, one at a time, bounded, coming back by themselves) is the next decision; the design draft states the rule.
+- The diagnostics stay: `sender targets: <least>–<most> kbps, under pressure: <strategy>` and `(target N)` on the stats line.
+- **Not measured on-device** in this form.
+

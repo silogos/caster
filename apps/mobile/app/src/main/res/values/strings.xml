@@ -50,8 +50,8 @@
     <string name="profile_card_behaviour">Behaviour</string>
     <string name="profile_card_encoder">Encoder</string>
     <string name="profile_card_audio">Audio</string>
-    <string name="profile_bitrate_label">Bitrate — up to %1$d Mbps</string>
-    <string name="profile_bitrate_hint">The most the video may use, %1$d to %2$d Mbps.</string>
+    <string name="profile_bitrate_label">Bitrate — %1$d to %2$d Mbps</string>
+    <string name="profile_bitrate_hint">The cast stays inside this range (%1$d to %2$d Mbps on the slider). It moves within it by itself.</string>
     <string name="profile_delete_action">Delete profile</string>
     <string name="profile_video_codec">Video codec</string>
     <string name="status_zone">Status</string>

@@ -21,14 +21,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -188,7 +187,11 @@ fun ProfileEditContent(
                         onSelect = { index -> onEdit { it.copy(fps = rates[index]) } },
                     )
 
-                    BitrateCeiling(maxBps = values.bitrateMaxBps, onCommit = { bps -> onEdit { it.withBitrateCeiling(bps) } })
+                    BitrateRange(
+                        minBps = values.bitrateMinBps,
+                        maxBps = values.bitrateMaxBps,
+                        onCommit = { least, most -> onEdit { it.withBitrateRange(least, most) } },
+                    )
                 }
             }
 
@@ -352,39 +355,37 @@ fun ProfileEditContent(
 }
 
 /**
- * The bitrate ceiling. The dial applies on release — one save per gesture,
- * not one per drag tick.
+ * The bitrate range: one slider, two thumbs — the least and the most the
+ * video may use. It applies on release: one save per gesture, not one per
+ * drag tick.
  */
 @Composable
-private fun BitrateCeiling(maxBps: Int, onCommit: (Int) -> Unit) {
-    var dragBps by remember(maxBps) { mutableFloatStateOf(Float.NaN) }
-    val shownBps = if (dragBps.isNaN()) maxBps else dragBps.roundToInt()
+private fun BitrateRange(minBps: Int, maxBps: Int, onCommit: (Int, Int) -> Unit) {
+    val stored = (minBps / BPS_PER_MBPS).toFloat()..(maxBps / BPS_PER_MBPS).toFloat()
+    var drag by remember(minBps, maxBps) { mutableStateOf<ClosedFloatingPointRange<Float>?>(null) }
+    val shown = drag ?: stored
     Text(
-        text = stringResource(R.string.profile_bitrate_label, shownBps / BPS_PER_MBPS),
+        text = stringResource(R.string.profile_bitrate_label, shown.start.roundToInt(), shown.endInclusive.roundToInt()),
         fontSize = 13.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 12.dp),
     )
-    Slider(
-        value = (shownBps / BPS_PER_MBPS).toFloat(),
-        onValueChange = { mbps -> dragBps = mbps * BPS_PER_MBPS },
+    val sliderMin = CastSettingChoices.BITRATE_SLIDER_MIN_BPS / BPS_PER_MBPS
+    val sliderMax = CastSettingChoices.MANUAL_BITRATE_MAX_BPS / BPS_PER_MBPS
+    RangeSlider(
+        value = shown,
+        onValueChange = { drag = it },
         onValueChangeFinished = finished@{
-            if (dragBps.isNaN()) return@finished
-            val bps = dragBps.roundToInt()
-            dragBps = Float.NaN
-            onCommit(bps)
+            val picked = drag ?: return@finished
+            drag = null
+            onCommit(picked.start.roundToInt() * BPS_PER_MBPS, picked.endInclusive.roundToInt() * BPS_PER_MBPS)
         },
-        valueRange = (CastSettingChoices.MANUAL_BITRATE_MIN_BPS / BPS_PER_MBPS).toFloat()..
-            (CastSettingChoices.MANUAL_BITRATE_MAX_BPS / BPS_PER_MBPS).toFloat(),
-        steps = ((CastSettingChoices.MANUAL_BITRATE_MAX_BPS - CastSettingChoices.MANUAL_BITRATE_MIN_BPS) / BPS_PER_MBPS) - 1,
+        valueRange = sliderMin.toFloat()..sliderMax.toFloat(),
+        steps = (sliderMax - sliderMin) / (CastSettingChoices.BITRATE_STEP_BPS / BPS_PER_MBPS) - 1,
         modifier = Modifier.padding(top = 8.dp),
     )
     Text(
-        text = stringResource(
-            R.string.profile_bitrate_hint,
-            CastSettingChoices.MANUAL_BITRATE_MIN_BPS / BPS_PER_MBPS,
-            CastSettingChoices.MANUAL_BITRATE_MAX_BPS / BPS_PER_MBPS,
-        ),
+        text = stringResource(R.string.profile_bitrate_hint, sliderMin, sliderMax),
         fontSize = 13.sp,
         lineHeight = 19.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
