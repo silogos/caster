@@ -6,11 +6,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +58,10 @@ fun AddProfileSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        // Open at full height: at half height (the default) a landscape
+        // tablet showed the sheet without its Create button (found on the
+        // TB321FU, 2026-11-11).
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         AddProfileContent(settings = settings, onCreate = onCreate, onCancel = onDismiss)
@@ -82,6 +89,8 @@ fun AddProfileContent(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
+            // A short window (a phone on its side) scrolls to the buttons.
+            .verticalScroll(rememberScrollState())
             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
     ) {
         Text(
