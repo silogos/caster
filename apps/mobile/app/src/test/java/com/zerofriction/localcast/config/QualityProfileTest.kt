@@ -5,9 +5,9 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Phase10/11: preset → config semantics — a settings document that matches a
- * preset is labeled with it; any tweak beyond a preset is labeled "custom"
- * (the display-only label the desktop's status line shows, webrtc.md).
+ * The built-in profiles: each carries its own label into the cast (the
+ * display-only label the desktop's status line shows, webrtc.md), and a
+ * quality level that matches none of them is named "custom".
  * Phase11 adds the thermal acceptance: the three thermal profiles
  * (thermal.md) must map to measurably distinct send targets.
  */
@@ -48,19 +48,9 @@ class QualityProfileTest {
     }
 
     @Test
-    fun `every preset maps to its own label`() {
+    fun `every built-in profile maps to its own label`() {
         for (preset in QualityProfile.entries) {
-            val config = CastSettings(
-                profile = preset,
-                longEdgePx = preset.longEdgePx,
-                fps = preset.fps,
-                bitrateAuto = true,
-                bitrateMinBps = preset.bitrateMinBps,
-                bitrateMaxBps = preset.bitrateMaxBps,
-                gameAudio = true,
-                mic = false,
-                autoQuality = true,
-            ).toConfig()
+            val config = CastSettings.default().withSelection(ProfileSelection.BuiltIn(preset)).toConfig()
             assertEquals(preset.label, config.profile)
         }
     }
@@ -98,9 +88,10 @@ class QualityProfileTest {
     }
 
     @Test
-    fun `toConfig carries the auto-quality switch through`() {
+    fun `toConfig carries a profile's auto-quality choice through`() {
         assertEquals(true, CastSettings.default().toConfig().autoQuality)
-        assertEquals(false, CastSettings.default().copy(autoQuality = false).toConfig().autoQuality)
+        val off = QualityProfile.BALANCED.toValues().copy(autoQuality = false)
+        assertEquals(false, CastSettings.default().withProfileAdded("Fixed", off).toConfig().autoQuality)
     }
 
     /** Phase12: the inverse mapping — naming an auto-quality level for the user. */

@@ -16,17 +16,17 @@ package com.zerofriction.localcast.config
  * are re-tuned from Phase15 measurements; until then this table is the
  * shipped hypothesis.
  *
- * Every value stays individually tweakable after a preset — a config that
- * no longer matches any preset is labeled "custom" for the desktop's
- * display-only status line ([profileLabelFor]; session-info, webrtc.md).
+ * These are the **built-in profiles** (ADR-024): fixed, never edited. A user
+ * who wants other values adds a profile of their own, starting from a copy
+ * ([CastProfile.kt]). A quality level that matches no built-in profile is
+ * named "custom" in user-facing text ([profileLabelFor]) — an auto-quality
+ * step always lands on a built-in one.
  *
- * Each preset also carries its **Advanced defaults** (designs/mobile-app.html,
- * "presets set the Advanced defaults"): picking a template applies them, the
- * user can still override every one afterwards. Rationale: hardware encoding
- * everywhere (thermally the most efficient, thermal.md), Baseline + VBR for
- * Cool (the lightest per-frame encoder work), and the pressure strategy
- * matching each preset's promise — smooth (Cool/Balanced), motion
- * (Performance), detail (Sharp).
+ * Each also carries its H.264 profile and pressure strategy ([toValues]
+ * adds the shipped encoder defaults). Rationale: Baseline for Cool (the
+ * lightest per-frame encoder work), and the pressure strategy matching each
+ * profile's promise — smooth (Cool/Balanced), motion (Performance), detail
+ * (Sharp).
  */
 enum class QualityProfile(
     val label: String,
@@ -36,7 +36,6 @@ enum class QualityProfile(
     val bitrateMaxBps: Int,
     val h264HighProfile: Boolean,
     val degradation: DegradationStrategy,
-    val bitrateMode: EncoderBitrateMode,
 ) {
     /** thermal.md Cool: long sessions, warm devices, battery priority — the least added heat. */
     COOL(
@@ -47,7 +46,6 @@ enum class QualityProfile(
         bitrateMaxBps = 3_000_000,
         h264HighProfile = false,
         degradation = DegradationStrategy.BALANCED,
-        bitrateMode = EncoderBitrateMode.VBR,
     ),
     /** thermal.md Balanced (default): the good-enough window for most games. */
     BALANCED(
@@ -58,7 +56,6 @@ enum class QualityProfile(
         bitrateMaxBps = 6_000_000,
         h264HighProfile = true,
         degradation = DegradationStrategy.BALANCED,
-        bitrateMode = EncoderBitrateMode.CBR,
     ),
     /** thermal.md Performance: fast-motion games; measurably more heat. */
     PERFORMANCE(
@@ -69,7 +66,6 @@ enum class QualityProfile(
         bitrateMaxBps = 10_000_000,
         h264HighProfile = true,
         degradation = DegradationStrategy.MAINTAIN_FRAMERATE,
-        bitrateMode = EncoderBitrateMode.CBR,
     ),
     /** Fidelity over thermals: most detail, most heat — the user's explicit choice. */
     SHARP(
@@ -80,14 +76,13 @@ enum class QualityProfile(
         bitrateMaxBps = 12_000_000,
         h264HighProfile = true,
         degradation = DegradationStrategy.MAINTAIN_RESOLUTION,
-        bitrateMode = EncoderBitrateMode.CBR,
     ),
 }
 
 /**
- * The settings screen's discrete choices and manual-bitrate bounds — named,
- * not magic (AGENTS.md). A manual bitrate is a user-picked ceiling; the
- * window's floor is a fixed fraction of it.
+ * A profile's discrete choices and bitrate bounds — named, not magic
+ * (AGENTS.md). In the user's own profile the bitrate is a ceiling they pick;
+ * the window's floor is a fixed fraction of it.
  */
 object CastSettingChoices {
     /** Capture long-edge options ("resolution"). */
@@ -105,9 +100,8 @@ object CastSettingChoices {
 }
 
 /**
- * The display-only profile label for a config (session-info, webrtc.md):
- * the preset's name when the send targets match it exactly, "custom" the
- * moment the user tweaked anything beyond a preset.
+ * The name of a quality level in user-facing text: the built-in profile's
+ * when the send targets match it exactly, "custom" otherwise.
  */
 fun profileLabelFor(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int): String =
     matchingProfile(longEdgePx, fps, bitrateMinBps, bitrateMaxBps)?.label ?: PROFILE_CUSTOM

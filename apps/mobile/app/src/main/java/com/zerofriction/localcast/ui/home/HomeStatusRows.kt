@@ -48,6 +48,21 @@ internal fun HintText(text: String) {
 }
 
 /**
+ * What libwebrtc actually picked for the running cast — a read-only fact,
+ * shown only once it is known, never faked. It sits with the cast's other
+ * facts since the Advanced page went (ADR-024).
+ */
+@Composable
+internal fun EncoderInUseRow(encoderInUse: String?, topDivider: Boolean) {
+    if (encoderInUse === null) return
+    LedListRow(
+        text = stringResource(R.string.status_encoder_in_use, encoderInUse),
+        tone = LedTone.DIM,
+        topDivider = topDivider,
+    )
+}
+
+/**
  * The thermal read-out of a running cast (Phase11, thermal.md) as a console
  * lamp: plain words for the platform ladder — read-only diagnostics, never
  * a technical dump and never an automatic action (AGENTS.md; the numbers

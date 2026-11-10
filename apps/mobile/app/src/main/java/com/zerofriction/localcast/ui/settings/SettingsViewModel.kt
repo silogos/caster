@@ -1,33 +1,25 @@
 package com.zerofriction.localcast.ui.settings
 
 import androidx.lifecycle.ViewModel
-import com.zerofriction.localcast.config.AdvancedSettingChoices
-import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MAX_BPS
-import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_BPS
-import com.zerofriction.localcast.config.CastSettingChoices.MANUAL_BITRATE_MIN_FRACTION
 import com.zerofriction.localcast.config.CastSettings
-import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.MicDeviceSource
-import com.zerofriction.localcast.config.EncoderBitrateMode
-import com.zerofriction.localcast.config.EncoderImplementation
-import com.zerofriction.localcast.config.PreferredVideoCodec
+import com.zerofriction.localcast.config.ProfileSelection
+import com.zerofriction.localcast.config.ProfileValues
 import com.zerofriction.localcast.config.QualityProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Drives the cast settings screen (Phase10): every user action transforms
+ * The app's cast settings in memory: every user action transforms
  * [CastSettings] and persists immediately (the injected `persist` is
  * [com.zerofriction.localcast.config.CastSettingsStore.save]; the store is
  * read back at cast start — "changes take effect on the next cast").
  *
- * Semantics:
- *  - picking a preset applies all of its values and restores Auto bitrate;
- *  - tweaking resolution/fps/bitrate leaves the values custom (the
- *    desktop's display label says so via [CastSettings.toConfig]);
- *  - Auto bitrate = the chosen preset's window; manual = a user ceiling
- *    with the floor derived from it.
+ * The rules live in [CastSettings] (what a profile edit may do, what a
+ * deleted selection falls back to); this only applies them and saves. Home
+ * and the profile screens share one instance, so a profile edited on one
+ * screen is the profile the other shows.
  */
 class SettingsViewModel(
     initial: CastSettings = CastSettings.default(),
@@ -37,69 +29,43 @@ class SettingsViewModel(
     private val _settings = MutableStateFlow(initial)
     val settings: StateFlow<CastSettings> = _settings.asStateFlow()
 
-    /**
-     * A preset applies all of its values — capture targets, Auto bitrate, and
-     * its Advanced defaults (designs/mobile-app.html "presets set the Advanced
-     * defaults": [QualityProfile.h264HighProfile], its degradation strategy
-     * and bitrate mode, hardware encoding, no fps cap). The preferred *codec*
-     * is not preset-owned — an explicit user choice survives preset switches,
-     * as does the auto-quality switch.
-     */
-    fun selectProfile(profile: QualityProfile) {
-        update {
-            it.copy(
-                profile = profile,
-                longEdgePx = profile.longEdgePx,
-                fps = profile.fps,
-                bitrateAuto = true,
-                bitrateMinBps = profile.bitrateMinBps,
-                bitrateMaxBps = profile.bitrateMaxBps,
-                encoderImpl = EncoderImplementation.HARDWARE,
-                h264HighProfile = profile.h264HighProfile,
-                degradationStrategy = profile.degradation,
-                encoderFpsLimit = null,
-                bitrateMode = profile.bitrateMode,
-            )
-        }
+    // ---- Profiles (ADR-024) ----
+
+    fun selectBuiltIn(profile: QualityProfile) {
+        update { it.withSelection(ProfileSelection.BuiltIn(profile)) }
     }
 
-    fun selectLongEdge(longEdgePx: Int) {
-        update { it.copy(longEdgePx = longEdgePx) }
+    fun selectCustom(id: Int) {
+        update { it.withSelection(ProfileSelection.Custom(id)) }
     }
 
-    fun selectFps(fps: Int) {
-        update { it.copy(fps = fps) }
+    /** Adds the user's profile [name] holding [values] and selects it; the new id, or null when it was refused. */
+    fun addProfile(name: String, values: ProfileValues): Int? {
+        val before = _settings.value
+        update { it.withProfileAdded(name, values) }
+        return newProfileId(before)
     }
 
-    /** Auto restores the chosen preset's window; manual derives the floor from the current ceiling. */
-    fun setBitrateAuto(auto: Boolean) {
-        update {
-            if (auto) {
-                val preset = it.profile
-                it.copy(
-                    bitrateAuto = true,
-                    bitrateMinBps = preset.bitrateMinBps,
-                    bitrateMaxBps = preset.bitrateMaxBps,
-                )
-            } else {
-                it.copy(
-                    bitrateAuto = false,
-                    bitrateMinBps = manualMinFor(it.bitrateMaxBps),
-                )
-            }
-        }
+    /** A copy of the user's profile [id], selected; the copy's id, or null when it was refused. */
+    fun duplicateProfile(id: Int): Int? {
+        val before = _settings.value
+        update { it.withProfileDuplicated(id) }
+        return newProfileId(before)
     }
 
-    fun setManualBitrateMax(maxBps: Int) {
-        update {
-            val clamped = maxBps.coerceIn(MANUAL_BITRATE_MIN_BPS, MANUAL_BITRATE_MAX_BPS)
-            it.copy(
-                bitrateAuto = false,
-                bitrateMinBps = manualMinFor(clamped),
-                bitrateMaxBps = clamped,
-            )
-        }
+    fun renameProfile(id: Int, name: String) {
+        update { it.withProfileRenamed(id, name) }
     }
+
+    fun editProfile(id: Int, edit: (ProfileValues) -> ProfileValues) {
+        update { it.withProfileEdited(id, edit) }
+    }
+
+    fun deleteProfile(id: Int) {
+        update { it.withProfileDeleted(id) }
+    }
+
+    // ---- Audio tracks: a choice about the session, not about a profile ----
 
     fun setGameAudio(on: Boolean) {
         update { it.copy(gameAudio = on) }
@@ -114,55 +80,14 @@ class SettingsViewModel(
         update { it.copy(micDevice = device) }
     }
 
-    /** Phase12 (thermal.md): the auto-quality switch — off means the cast runs exactly at the user's settings. */
-    fun setAutoQuality(on: Boolean) {
-        update { it.copy(autoQuality = on) }
+    private fun newProfileId(before: CastSettings): Int? {
+        val known = before.customProfiles.map { it.id }.toSet()
+        return _settings.value.customProfiles.firstOrNull { it.id !in known }?.id
     }
-
-    /**
-     * Feature 2026-11d: the low-latency audio switch — on keeps the game-audio
-     * channel on raw PCM16 (ADR-012) instead of AAC (ADR-013), trading wire
-     * bitrate for the ear path's latency. Like the audio toggles, it is not
-     * preset-owned: an explicit user choice survives preset switches.
-     */
-    fun setLowLatencyGameAudio(on: Boolean) {
-        update { it.copy(lowLatencyGameAudio = on) }
-    }
-
-    // ---- Advanced (designs/mobile-app.html) — every one is a next-cast setting ----
-
-    fun setEncoderImpl(impl: EncoderImplementation) {
-        update { it.copy(encoderImpl = impl) }
-    }
-
-    fun setH264HighProfile(on: Boolean) {
-        update { it.copy(h264HighProfile = on) }
-    }
-
-    fun setPreferredCodec(codec: PreferredVideoCodec) {
-        update { it.copy(preferredCodec = codec) }
-    }
-
-    fun setDegradationStrategy(strategy: DegradationStrategy) {
-        update { it.copy(degradationStrategy = strategy) }
-    }
-
-    /** null = Off — follow the capture frame rate. */
-    fun setEncoderFpsLimit(limit: Int?) {
-        require(limit === null || limit in AdvancedSettingChoices.ENCODER_FPS_LIMIT_CHOICES) {
-            "fps limit $limit is not one of the Advanced choices"
-        }
-        update { it.copy(encoderFpsLimit = limit) }
-    }
-
-    fun setBitrateMode(mode: EncoderBitrateMode) {
-        update { it.copy(bitrateMode = mode) }
-    }
-
-    private fun manualMinFor(maxBps: Int): Int = (maxBps * MANUAL_BITRATE_MIN_FRACTION).toInt()
 
     private fun update(transform: (CastSettings) -> CastSettings) {
         val next = transform(_settings.value)
+        if (next == _settings.value) return
         _settings.value = next
         persist(next)
     }

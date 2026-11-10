@@ -11,15 +11,49 @@
     <string name="app_bar_state_on_air">On air</string>
     <string name="app_bar_state_fault">Fault</string>
 
-    <!-- The quality console (designs/mobile-app.html): one tabbed card on
-         Home in both states — idle writes the next-cast defaults, casting
-         steers the RUNNING cast (until it ends). -->
-    <string name="quality_tab_preset">Preset</string>
-    <string name="quality_tab_custom">Custom</string>
-    <string name="quality_custom_hint_live">Your values run until the cast ends.</string>
-    <string name="quality_custom_hint_next">Your values for the next cast.</string>
-    <string name="quality_foot_next_cast">Defaults for the next cast — picking also sets the Advanced defaults in settings.</string>
-    <string name="quality_bitrate_max_label">Bitrate (max %1$d Mbps)</string>
+    <!-- The profile card (ADR-024): one list on Home in both states — idle
+         picks the profile for the next cast, casting steers the RUNNING cast
+         (until it ends). Built-in profiles first, then the user's own. -->
+    <string name="profiles_zone_built_in">Built-in</string>
+    <string name="profiles_zone_yours">Your profiles</string>
+    <string name="profile_add">Add profile</string>
+    <string name="profiles_foot_next_cast">For the next cast. A profile carries all of its own settings.</string>
+    <string name="profiles_foot_live">Picking a profile steers this cast until it ends. Changes to a profile apply to the next cast.</string>
+    <string name="profiles_foot_full">%1$d profiles is the most. Delete one to add another.</string>
+    <!-- What a profile gives up first when the network is short, as a tag on its row. -->
+    <string name="profile_tag_balanced">Balanced</string>
+    <string name="profile_tag_framerate">Keep frame rate</string>
+    <string name="profile_tag_resolution">Keep resolution</string>
+    <!-- TalkBack label of a profile row's menu button. %1$s = the profile's name. -->
+    <string name="profile_more_actions">More for %1$s</string>
+    <string name="profile_action_edit">Edit</string>
+    <string name="profile_action_duplicate">Duplicate</string>
+    <string name="profile_action_delete">Delete</string>
+    <string name="profile_delete_title">Delete “%1$s”?</string>
+    <string name="profile_delete_selected">It is the selected profile. The next cast uses Balanced instead.</string>
+    <string name="profile_delete_other">This cannot be undone.</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Adding a profile: a sheet over Home. -->
+    <string name="profile_new_title">New profile</string>
+    <string name="profile_name">Name</string>
+    <string name="profile_name_counter">%1$d / %2$d</string>
+    <string name="profile_name_empty">Give the profile a name.</string>
+    <string name="profile_start_from">Start from</string>
+    <string name="profile_start_from_current">Current values</string>
+    <string name="profile_create">Create</string>
+
+    <!-- Editing one of the user's profiles: every picture setting lives here. -->
+    <string name="profile_edit_title">Edit profile</string>
+    <string name="profile_edit_note">Saved as you change it. Takes effect on the next cast.</string>
+    <string name="profile_card_picture">Picture</string>
+    <string name="profile_card_behaviour">Behaviour</string>
+    <string name="profile_card_encoder">Encoder</string>
+    <string name="profile_card_audio">Audio</string>
+    <string name="profile_bitrate_label">Bitrate — up to %1$d Mbps</string>
+    <string name="profile_bitrate_hint">The most the video may use, %1$d to %2$d Mbps.</string>
+    <string name="profile_delete_action">Delete profile</string>
+    <string name="profile_video_codec">Video codec</string>
     <string name="status_zone">Status</string>
 
     <!-- Scan / pairing screen (Phase 3; screens polished in Phase 13). -->
@@ -73,7 +107,6 @@
          (overview.md); the desktop exposes none of these. The home page's
          content: header = connection state + cast button, body = settings.
          The profile row is the thermal vocabulary (thermal.md). -->
-    <string name="settings_changes_next_cast">Changes take effect on the next cast.</string>
     <string name="profile_cool">Cool</string>
     <string name="profile_balanced">Balanced</string>
     <string name="profile_performance">Performance</string>
@@ -82,8 +115,6 @@
     <string name="profile_intent_balanced">The default — good for most games.</string>
     <string name="profile_intent_performance">Smoother motion for fast games; more heat.</string>
     <string name="profile_intent_sharp">Highest detail; the most heat.</string>
-    <string name="profile_intent_custom">Your own combination.</string>
-    <string name="profile_custom">Custom</string>
     <string name="settings_resolution">Resolution (long edge)</string>
     <string name="settings_px">%1$d px</string>
     <string name="settings_fps">Frame rate</string>
@@ -149,19 +180,15 @@
     <string name="audio_routing_cable">Cable</string>
     <string name="audio_routing_both">Both</string>
 
-    <!-- Advanced settings (designs/mobile-app.html) — Settings is Advanced
-         ONLY (the profile/share-screen sections live on Home's quality
-         console). Encoder-level knobs; defaults reproduce today's cast
-         exactly; every value is next-cast. -->
-    <string name="advanced_settings_title">Advanced</string>
-    <!-- TalkBack label of the settings screen's back chevron (it used to read the screen title). -->
+    <!-- A profile's encoder and pressure choices (they were the Advanced
+         page until ADR-024). Every value is next-cast. -->
+    <!-- TalkBack label of a screen's back chevron (it used to read the screen title). -->
     <string name="back">Back</string>
     <string name="settings_encoder">Encoder</string>
     <string name="settings_encoder_hardware">Hardware</string>
     <string name="settings_encoder_software">Software</string>
     <string name="settings_encoder_hardware_hint">Hardware encoding is the most efficient for the phone\'s heat. On some phones it can compete with a game for the chip — if a game stutters while casting, try Software.</string>
     <string name="settings_encoder_software_hint">Software encoding frees the phone\'s video hardware (more CPU used by the cast, less contention with the game). It runs hotter on the CPU, so watch the thermal status.</string>
-    <string name="settings_preferred_codec">Preferred video codec</string>
     <string name="settings_codec_h264">H.264</string>
     <string name="settings_codec_vp8">VP8</string>
     <string name="settings_h264_profile">H.264 profile</string>
@@ -176,13 +203,8 @@
     <string name="settings_encoder_fps_limit">Encoder fps limit</string>
     <string name="settings_encoder_fps_off">Off</string>
     <string name="settings_encoder_fps_hint">Caps how many frames per second the encoder works on. The effective rate is the lower of this and the capture frame rate — e.g. capture 60 fps with a 30 fps limit encodes 30. Off follows the capture frame rate.</string>
-    <string name="settings_bitrate_mode">Bitrate mode</string>
-    <string name="settings_bitrate_mode_cbr">CBR</string>
-    <string name="settings_bitrate_mode_vbr">VBR</string>
-    <string name="settings_bitrate_mode_hint">CBR keeps the output bitrate constant — the encoder works at full effort on every frame (today\'s behavior). VBR spends fewer bits on easy frames, so the encoder\'s average load is lower.</string>
-    <string name="settings_encoder_in_use">Encoder in use</string>
-    <string name="settings_encoder_in_use_none">— (visible during a cast)</string>
-    <string name="settings_advanced_note">Advanced settings — overrides here do not change which template is selected. Everything takes effect on the next cast.</string>
+    <!-- Status zone, while casting: what libwebrtc actually picked. %1$s = the encoder's name. -->
+    <string name="status_encoder_in_use">Encoder: %1$s</string>
 
     <!-- Auto-quality transitions (Phase12) — plain words for what the policy
              did (AGENTS.md); the thresholds and holds stay in the logs. -->

@@ -1,207 +1,99 @@
 package com.zerofriction.localcast.ui.settings
 
-import com.zerofriction.localcast.config.CastConfig
 import com.zerofriction.localcast.config.CastSettings
-import com.zerofriction.localcast.config.DegradationStrategy
-import com.zerofriction.localcast.config.EncoderBitrateMode
-import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.MicDeviceSource
-import com.zerofriction.localcast.config.PreferredVideoCodec
+import com.zerofriction.localcast.config.ProfileSelection
 import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.toValues
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase10 settings behaviors: preset picks apply whole values (and restore
- * Auto bitrate), tweaks go custom, manual bitrates clamp and derive their
- * floor, and every change persists immediately (the settings screen's
- * contract: the store is always current, the next cast reads it).
+ * The settings in memory: every change the user makes is applied and saved
+ * at once (the store is always current, the next cast reads it), and a
+ * refused change saves nothing. The profile rules themselves are
+ * CastProfilesTest's.
  */
 class SettingsViewModelTest {
 
     private val persisted = mutableListOf<CastSettings>()
+    private val sharp60 = QualityProfile.SHARP.toValues().copy(fps = 60)
 
     private fun viewModel(initial: CastSettings = CastSettings.default()): SettingsViewModel =
         SettingsViewModel(initial) { persisted.add(it) }
 
     @Test
-    fun `picking a preset applies all of its values and restores auto bitrate`() {
-        val vm = viewModel(CastSettings.default().copy(bitrateAuto = false))
-        vm.selectProfile(QualityProfile.SHARP)
-        val settings = vm.settings.value
-        assertEquals(QualityProfile.SHARP, settings.profile)
-        assertEquals(QualityProfile.SHARP.longEdgePx, settings.longEdgePx)
-        assertEquals(QualityProfile.SHARP.fps, settings.fps)
-        assertEquals(true, settings.bitrateAuto)
-        assertEquals(QualityProfile.SHARP.bitrateMinBps, settings.bitrateMinBps)
-        assertEquals(QualityProfile.SHARP.bitrateMaxBps, settings.bitrateMaxBps)
-        assertEquals("sharp", settings.toConfig().profile)
-    }
-
-    @Test
-    fun `tweaking a value past the preset makes the config custom`() {
+    fun `picking a built-in profile makes it the next cast's and saves it`() {
         val vm = viewModel()
-        vm.selectFps(60)
-        assertEquals("custom", vm.settings.value.toConfig().profile)
-        // The picked preset survives for the Auto bitrate restore.
-        assertEquals(QualityProfile.BALANCED, vm.settings.value.profile)
+        vm.selectBuiltIn(QualityProfile.COOL)
+        val config = vm.settings.value.toConfig()
+        assertEquals("cool", config.profile)
+        assertEquals(960, config.longEdgePx)
+        assertEquals(2_000_000, config.bitrateMinBps)
+        assertEquals(3_000_000, config.bitrateMaxBps)
+        assertEquals(vm.settings.value, persisted.single())
     }
 
     @Test
-    fun `manual bitrate clamps to the slider bounds and derives its floor`() {
+    fun `a new profile is selected, saved, and its id comes back`() {
         val vm = viewModel()
-        vm.setManualBitrateMax(25_000_000)
-        assertEquals(20_000_000, vm.settings.value.bitrateMaxBps)
-        assertEquals(10_000_000, vm.settings.value.bitrateMinBps)
-        assertEquals(false, vm.settings.value.bitrateAuto)
-
-        vm.setManualBitrateMax(1)
-        assertEquals(2_000_000, vm.settings.value.bitrateMaxBps)
-        assertEquals(1_000_000, vm.settings.value.bitrateMinBps)
+        val id = vm.addProfile("Stream 60", sharp60)
+        assertNotNull(id)
+        assertEquals(ProfileSelection.Custom(id!!), vm.settings.value.selection)
+        assertEquals(60, vm.settings.value.toConfig().fps)
+        assertEquals(vm.settings.value, persisted.single())
     }
 
     @Test
-    fun `switching back to auto restores the chosen preset's window`() {
+    fun `a refused profile changes and saves nothing`() {
         val vm = viewModel()
-        vm.setManualBitrateMax(9_000_000)
-        vm.selectProfile(QualityProfile.COOL)
-        vm.setManualBitrateMax(9_000_000)
-        vm.setBitrateAuto(true)
-        val settings = vm.settings.value
-        assertEquals(true, settings.bitrateAuto)
-        assertEquals(QualityProfile.COOL.bitrateMinBps, settings.bitrateMinBps)
-        assertEquals(QualityProfile.COOL.bitrateMaxBps, settings.bitrateMaxBps)
+        assertNull(vm.addProfile("   ", sharp60))
+        assertNull(vm.duplicateProfile(42))
+        vm.renameProfile(42, "Ghost")
+        vm.deleteProfile(42)
+        vm.selectCustom(42)
+        assertEquals(CastSettings.default(), vm.settings.value)
+        assertTrue(persisted.isEmpty())
     }
 
     @Test
-    fun `going manual keeps the current ceiling and derives the floor from it`() {
-        val vm = viewModel() // balanced: 4–6 Mbps
-        vm.setBitrateAuto(false)
-        assertEquals(6_000_000, vm.settings.value.bitrateMaxBps)
-        assertEquals(3_000_000, vm.settings.value.bitrateMinBps)
-    }
-
-    @Test
-    fun `picking the cool thermal profile applies the low-heat send targets`() {
+    fun `picking the profile that is already selected saves nothing`() {
         val vm = viewModel()
-        vm.selectProfile(QualityProfile.COOL)
-        val settings = vm.settings.value
-        assertEquals(QualityProfile.COOL.longEdgePx, settings.longEdgePx)
-        assertEquals(QualityProfile.COOL.fps, settings.fps)
-        assertEquals("cool", settings.toConfig().profile)
+        vm.selectBuiltIn(QualityProfile.BALANCED)
+        assertTrue(persisted.isEmpty())
     }
 
     @Test
-    fun `audio toggles change the next cast's defaults`() {
+    fun `edits, renames, copies and deletes are each saved as they happen`() {
+        val vm = viewModel()
+        val id = vm.addProfile("A", sharp60)!!
+        vm.editProfile(id) { it.copy(autoQuality = false) }
+        vm.renameProfile(id, "Evening")
+        val copy = vm.duplicateProfile(id)!!
+        vm.deleteProfile(id)
+        assertEquals(5, persisted.size)
+        assertEquals(vm.settings.value, persisted.last())
+        val left = vm.settings.value.customProfiles.single()
+        assertEquals(copy, left.id)
+        assertEquals("the copy took the edit with it", false, left.values.autoQuality)
+        assertEquals("the selection followed the copy", ProfileSelection.Custom(copy), vm.settings.value.selection)
+    }
+
+    @Test
+    fun `the audio switches and the microphone choice are not a profile's and survive a profile change`() {
         val vm = viewModel()
         vm.setGameAudio(false)
         vm.setMic(true)
-        assertEquals(false, vm.settings.value.gameAudio)
-        assertEquals(true, vm.settings.value.mic)
-    }
-
-    @Test
-    fun `the mic device choice reaches the config and survives preset picks`() {
-        val vm = viewModel()
         vm.setMicDevice(MicDeviceSource.USB)
-        assertEquals(MicDeviceSource.USB, vm.settings.value.micDevice)
-        assertEquals(MicDeviceSource.USB, vm.settings.value.toConfig().micDevice)
-        // Not a preset-owned value — the user's mic choice survives.
-        vm.selectProfile(QualityProfile.SHARP)
-        assertEquals(MicDeviceSource.USB, vm.settings.value.micDevice)
-    }
-
-    @Test
-    fun `the auto-quality switch toggles and persists like any setting`() {
-        val vm = viewModel()
-        assertEquals(true, vm.settings.value.autoQuality)
-        vm.setAutoQuality(false)
-        assertEquals(false, vm.settings.value.autoQuality)
-        assertEquals(false, persisted.last().autoQuality)
-        // And a preset pick must not resurrect it (whole-value semantics apply to profile values).
-        vm.selectProfile(QualityProfile.PERFORMANCE)
-        assertEquals(false, vm.settings.value.autoQuality)
-    }
-
-    @Test
-    fun `the low-latency audio switch toggles, persists, and survives preset picks`() {
-        val vm = viewModel()
-        assertEquals(false, vm.settings.value.lowLatencyGameAudio)
-        vm.setLowLatencyGameAudio(true)
-        assertEquals(true, vm.settings.value.lowLatencyGameAudio)
-        assertEquals(true, persisted.last().lowLatencyGameAudio)
-        assertEquals(true, vm.settings.value.toConfig().lowLatencyGameAudio)
-        // A preset pick is not preset-owned — the explicit audio choice survives.
-        vm.selectProfile(QualityProfile.PERFORMANCE)
-        assertEquals(true, vm.settings.value.lowLatencyGameAudio)
-    }
-
-    @Test
-    fun `every change persists immediately`() {
-        val vm = viewModel()
-        vm.selectLongEdge(1920)
-        vm.selectFps(60)
-        vm.setGameAudio(false)
-        assertEquals(3, persisted.size)
-        assertEquals(vm.settings.value, persisted.last())
-    }
-
-    // ---- Advanced (designs/mobile-app.html): presets set them, overrides persist ----
-
-    @Test
-    fun `picking a preset applies its advanced defaults`() {
-        val vm = viewModel()
-        vm.selectProfile(QualityProfile.PERFORMANCE)
-        var settings = vm.settings.value
-        assertEquals(EncoderImplementation.HARDWARE, settings.encoderImpl)
-        assertEquals(true, settings.h264HighProfile)
-        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE, settings.degradationStrategy)
-        assertEquals(null, settings.encoderFpsLimit)
-        assertEquals(EncoderBitrateMode.CBR, settings.bitrateMode)
-
-        vm.selectProfile(QualityProfile.COOL)
-        settings = vm.settings.value
-        assertEquals(false, settings.h264HighProfile)
-        assertEquals(DegradationStrategy.BALANCED, settings.degradationStrategy)
-        assertEquals(EncoderBitrateMode.VBR, settings.bitrateMode)
-    }
-
-    @Test
-    fun `a preset pick keeps the user's preferred codec and auto-quality choice`() {
-        val vm = viewModel()
-        vm.setPreferredCodec(PreferredVideoCodec.VP8)
-        vm.setAutoQuality(false)
-        vm.selectProfile(QualityProfile.SHARP)
-        val settings = vm.settings.value
-        assertEquals(PreferredVideoCodec.VP8, settings.preferredCodec)
-        assertEquals(false, settings.autoQuality)
-        // …but the preset does own its Advanced defaults.
-        assertEquals(DegradationStrategy.MAINTAIN_RESOLUTION, settings.degradationStrategy)
-        assertEquals(true, settings.h264HighProfile)
-    }
-
-    @Test
-    fun `advanced overrides persist and map into the config`() {
-        val vm = viewModel()
-        vm.setEncoderImpl(EncoderImplementation.SOFTWARE)
-        vm.setH264HighProfile(false)
-        vm.setDegradationStrategy(DegradationStrategy.MAINTAIN_FRAMERATE)
-        vm.setEncoderFpsLimit(30)
-        vm.setBitrateMode(EncoderBitrateMode.VBR)
-        assertEquals(5, persisted.size)
+        vm.selectBuiltIn(QualityProfile.SHARP)
+        vm.addProfile("A", sharp60)
         val config = vm.settings.value.toConfig()
-        assertEquals(EncoderImplementation.SOFTWARE, config.encoderImpl)
-        assertEquals(false, config.h264HighProfile)
-        assertEquals(CastConfig.DEGRADATION_FRAMERATE, config.degradationPreference)
-        assertEquals(30, config.encoderFpsLimit)
-        assertEquals(EncoderBitrateMode.VBR, config.bitrateMode)
-    }
-
-    @Test
-    fun `clearing the fps limit returns to off`() {
-        val vm = viewModel()
-        vm.setEncoderFpsLimit(15)
-        vm.setEncoderFpsLimit(null)
-        assertEquals(null, vm.settings.value.encoderFpsLimit)
+        assertEquals(false, config.gameAudio)
+        assertEquals(true, config.mic)
+        assertEquals(MicDeviceSource.USB, config.micDevice)
+        assertEquals(5, persisted.size)
     }
 }
