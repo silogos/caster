@@ -297,6 +297,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** each read still pins one frame (3.5 MB) — one per stream and per size change. The leak itself is in webrtc-sys.
 
+## Fix 2026-11z — No QR on screen while a phone is casting ✅ tested; not yet confirmed on screen in a ten-minute cast (2026-11-10)
+*(Not a numbered phase: found live by the product owner — the video window kept playing while the main window showed the QR.)*
+**Scope:** a phone that reconnects with its trust key bypasses the QR session, and the receiver stages a spare one. Ten minutes later that spare session expired, the 1 s sweep replaced it, and it announced the new QR to the window, which switched from the deck to the QR hero mid-cast. The sweep still replaces the expired session, but announces it only while no phone is connected. A QR-paired phone was never affected (its own session outlives the TTL).
+
+**Accept:** desktop `cargo test` 84 (+1: an expired spare QR is replaced silently while a phone is connected; the test fails without the fix).
+
+**Not done:** not watched on screen through a full ten-minute cast.
+
 ## Definition of Done (every phase)
 
 ```text
