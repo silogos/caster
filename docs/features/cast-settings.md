@@ -73,7 +73,7 @@ Encoder-level knobs — every default reproduces today's cast exactly:
 | Encoder | Hardware / Software | Hardware | `webrtc/CastEncoderFactory`: `DefaultVideoEncoderFactory` vs MediaCodec software-only predicate (+libwebrtc software fallback chain) |
 | Preferred video codec | H.264 / VP8 | H.264 | Offer payload order (`SdpCodecOrderer`) |
 | H.264 profile | Baseline / High | High | `enableH264HighProfile` factory flag (High profile leaves the offer when off) |
-| Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference` |
+| Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference`. **Keep frame rate** also lowers the sender's bitrate floor to 1 Mbps and starts the cast at the window's floor, so the bitrate can follow a short uplink instead of queueing ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md)); the other two keep the window's floor. |
 | Encoder fps limit | Off / 15 / 30 / 60 | Off | `RTCRtpSender.encodings.maxFramerate` |
 | Bitrate mode | CBR / VBR | CBR (per-preset) | **Placebo until Phase "forked encoder"**: libwebrtc hardcodes CBR (verified in the prebuilt's bytecode); the setting persists and maps into `CastConfig`, but VBR needs the copied `HardwareVideoEncoder` source to reach the MediaFormat. The UI states CBR as today's behavior. |
 

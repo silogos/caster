@@ -331,6 +331,16 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the real stall has not been reproduced, and its cause (heat is the suspect) is not addressed. A codec hung inside the vendor driver, where release may wait out libwebrtc's 5 s timeout, is untested. There is no user-facing notice.
 
+## Feature 2026-11ab — "Keep frame rate" follows the network ⏳ built and measured in one cast; the audio benefit is not shown (2026-11-11)
+*(Not a numbered phase: the product owner's priority after the audio investigation — smooth audio and frame rate first, picture quality may drop for a while.)*
+**Scope:** game audio starved on the desktop whenever the video sender was backed up, and the 8 Mbps floor of the Sharp window kept libwebrtc from backing the video off ([latency-measurement.md](latency-measurement.md)). Under *Under network pressure → Keep frame rate* the sender's floor is now 1 Mbps and the window's floor is the start bitrate; Balanced and Keep resolution are unchanged — [ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md). The sender logs its targets, and the stats line carries libwebrtc's current target bitrate. Gap probes for late audio chunks on both ends came with the investigation.
+
+**Accept:** mobile `testDebugUnitTest` 425 (+4 floor and start per strategy, +3 gap probe); desktop `cargo test` 94 (+1 arrival gaps).
+
+**On-device (2026-11-11, TB321FU → MacBook Pro M1 Pro, one 14-minute cast of a streamed video, tablet cool):** the target fell to 2.3 Mbps and the frame to 1280×800 and both came back; 60 fps content held 59–60 fps in the 111 seconds under the old 8 Mbps floor; no frame refused by the encoder. The product owner judged the cast good on screen. The audio still starved 5.7 times a minute, with the video queue empty as often as with it backed up ([latency-measurement.md](latency-measurement.md)).
+
+**Not done:** no comparison against "Keep resolution" on the same content, no real game, no hot tablet. The late audio chunks that remain are not the video backlog's doing and are not addressed. A 4K stream ran at 38–51 fps for a reason not found. *Bitrate mode: VBR* is still a placebo.
+
 ## Definition of Done (every phase)
 
 ```text

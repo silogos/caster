@@ -216,4 +216,36 @@ The same cast in half-minute steps, against the video sender's own queue (libweb
 
 **Not settled:** whether the video backlog delays the audio, or one cause (a slow Wi-Fi uplink at that moment) delays both. Either way the audio shares the video's transport and has no priority on it. The first experiment is a lower video bitrate floor (the Sharp preset holds 8 Mbps), which lets libwebrtc back the video off when the uplink cannot carry it.
 
+### With "Keep frame rate" below the window (2026-11-11, [ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md))
+
+One 14-minute cast, same devices and settings (1920×1200, 60 fps, 8–12 Mbps), with *Under network pressure → Keep frame rate*. Not a game and not a hot tablet: a video streamed on the tablet (4K for the first seven minutes, then a 60 fps one), thermal status NONE throughout. It shows what the lower floor does; it is not a like-for-like comparison with the game cast above.
+
+| | Streamed 4K video (7.4 min) | 60 fps video (6.0 min) |
+|---|---|---|
+| Sent bitrate p10 / p50 / p90 | 2.9 / 4.9 / 7.9 Mbps | 5.3 / 9.6 / 12.1 Mbps |
+| libwebrtc's target, lowest | 2.3 Mbps | 5.5 Mbps |
+| Seconds with the target under the old 8 Mbps floor | 351 of 438 | 111 of 359 |
+| Frame rate p10 / p50 / p90 | 38 / 43 / 51 fps | 59 / 60 / 61 fps |
+| Frame rate in the seconds under 8 Mbps, p10 / p50 | 36 / 44 fps | 59 / 60 fps |
+| Seconds at 1280×800 | 30 | 149 |
+| Seconds with a pacer wait ≥ 60 ms / longest wait | 75 / 2089 ms | 35 / 258 ms |
+| Underruns / silence | 42 / 0.69 s (5.7 a minute) | 34 / 0.61 s (5.7 a minute) |
+
+The three probes over the whole cast:
+
+| Point | Longest pause per second: p50 / p90 / p99 / max | Seconds with a pause ≥ 30 ms |
+|---|---|---|
+| Capture → app | 23 / 24 / 27 / 29 ms | 0 of 833 |
+| App → channel | 24 / 27 / 33 / 64 ms | 20 of 832 |
+| Arrival on the Mac | 27 / 48 / 114 / 158 ms | 273 of 816 |
+
+- **The floor does what it was built for.** The target went down to 2.3 Mbps, the frame went to 1280×800 and came back, and the encoder refused no frame. In the 60 fps video, the 111 seconds under 8 Mbps still ran at 59–60 fps.
+- **The frame rate of the first half is not explained, and it is not the bitrate.** It was 40–47 fps in the 87 seconds with the target at 8 Mbps or more too, and it rose to 60 while the target was still 4–5 Mbps, within seconds of the content changing. The content itself or the tablet's work on a 4K stream; not measured. During that half the tablet's Wi-Fi was downloading 36.7 Mbps beside the cast's 7.1 Mbps up (one 5 s sample; 0.1 Mbps down in the second half).
+- **The audio still starves, and it does not follow the video queue.** 80 underruns in 13.9 minutes (1.46 s of silence), at the same rate in the seconds near a pacer wait of 60 ms or more (22 in 215 s) as in the seconds with the queue under 10 ms (41 in 427 s). Every one of them fell in a second with an arrival pause of 30 ms or more; the 543 seconds without such a pause had none.
+- **The pauses appear after the hand-over.** The phone captured and handed over on time (late in 0 and 20 seconds); the Mac saw a late chunk in a third of all seconds, against one in seven on an idle tablet.
+
+**What this settles:** the video backlog is not the only thing that delays the audio. With the queue empty and the tablet cool, a pause of a capture block (21 ms) plus a little jitter still exceeds the 15 ms playout margin about six times a minute. Left to look at: the link carrying 5–12 Mbps of video beside the audio, and the margin itself.
+
+**Not measured:** the same content under "Keep resolution" (no A/B), a real game, a hot tablet. The lower underrun rate than the game cast's 20 a minute cannot be credited to the floor.
+
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.
