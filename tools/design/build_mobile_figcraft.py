@@ -484,8 +484,13 @@ def build(node, parent_id, parent_node, parent_auto):
     decorate(fid, frame, node)
     for t in texts:
         text_node(fid, t, t["x"] - ox, t["y"] - oy, "fill" if h == "fill" else "hug")
+    # Several drawings in one node are drawn over each other (a Slider's
+    # track: its active and inactive halves share one box). Auto layout would
+    # stack them, so each is an absolute layer where it is drawn.
+    overlaid = len(vectors) > 1
     for vec in vectors:
-        icon(fid, vec, vec["x"] - ox, vec["y"] - oy, child_layout() if auto else None)
+        icon(fid, vec, vec["x"] - ox, vec["y"] - oy,
+             (child_layout(absolute=True) if overlaid else child_layout()) if auto else None)
     for c in kids:
         build(c, fid, node, auto)
     # Nothing in the flow (only drawings or absolute layers): hugging would

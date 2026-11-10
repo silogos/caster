@@ -37,7 +37,7 @@
    ```
 
    This produces three pages (one measured, then one per `--spec`):
-   - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Settings · Advanced plus Scan: camera permission, pairing, and failed.
+   - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Profile · Edit (one of the user's profiles, ADR-024) plus Scan: camera permission, pairing, and failed.
    - **Group F · UX & a11y:** the accessibility spec, copied in. It comes from `build_group_f_spec.py`, which writes `designs/mobile-ux-a11y.figcraft`. Its layers are auto layout too, placed by `autolayout.solve()`, so nothing is hand-placed; only the annotations (badges, 48dp outlines) are absolute.
    - **Mobile design v2 · custom profiles (draft, #165):** a proposal, not the shipped UI: the profile list on Home, editing and adding a profile, the row menu, and Home without an Advanced page (a profile holds every picture setting; “Under network pressure” and “Automatic quality” are drawn as one field). Its last frame lists the issue's open questions and what the draft assumes for each. It comes from `build_custom_profiles_spec.py` and lives only as a page of this file.
 

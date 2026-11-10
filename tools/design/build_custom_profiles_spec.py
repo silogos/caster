@@ -6,9 +6,11 @@ A proposal, not the shipped UI: nothing here is measured from the app. The
 frames are auto layout (spec_dsl.py), placed by autolayout.solve(). The last
 frame lists the issue's open questions and what this draft assumes for each.
 
-Second draft (2026-11-11): a profile holds every picture setting, so the
-Advanced page is gone, and "Under network pressure" and "Automatic quality"
-are drawn as one field, "When the cast struggles".
+Second draft (2026-11-11): a profile holds every cast setting (the game-audio
+transport included), so the Advanced page is gone, and "Under network
+pressure" and "Automatic quality" are drawn as one field, "When the cast
+struggles". The app as built (ADR-024, page "Mobile · as shipped") keeps
+those two apart until the rule the single field needs exists.
 
 The output is a one-page FigCraft file that build_mobile_figcraft.py copies in
 with --spec; it is not kept in designs/ by itself.
@@ -188,17 +190,11 @@ def home_top(parent, annunciator="STANDBY"):
 
 
 def audio_card(parent):
-    """Home's Audio card, with the audio transport that used to sit in Advanced under the game audio it belongs to."""
+    """Home's Audio card: one switch per track, nothing else (how the game audio travels is the profile's)."""
     mono(parent, "AUDIO", 11, VARIANT, "Medium", spacing=1.1, line=14)
     audio = card(parent, "card · audio")
-
-    def transport(texts):
-        chips = hstack(texts, "transport", gap=8, pad=(6, 0, 0, 0))
-        chip(chips, "Low latency", False)
-        chip(chips, "Standard", True)
-
     switch_row(audio, "Game audio", "Off silences the game audio, but its track stays part of the cast.", True,
-               glyph="gamepad", footer=transport)
+               glyph="gamepad")
     hairline(audio, CONTENT_W)
     switch_row(audio, "Microphone", "Off removes the microphone from the cast and frees it for the game's own "
                                     "voice chat.", False)
@@ -295,6 +291,11 @@ field(enc, "Video codec", [("H.264", True), ("VP8", False)])
 field(enc, "H.264 profile", [("Baseline", False), ("High", True)])
 field(enc, "Encoder fps limit", [("Off", True), ("15 fps", False), ("30 fps", False), ("60 fps", False)],
       hint="Off follows the frame rate above.")
+audio = card(p2, "card · audio")
+aud = vstack(audio, "audio", gap=16, pad=(14, 16, 16, 16), h="fill")
+mono(aud, "AUDIO", 11, VARIANT, "Medium", spacing=1.1, line=14)
+field(aud, "Low-latency game audio", [("Low latency", False), ("Standard", True)],
+      hint="Low latency sends raw sound: the smallest delay for headphones, at a higher Wi-Fi bitrate.")
 actions = hstack(p2, "actions", main="spaceBetween", cross="center", h="fill")
 text_button(actions, "Duplicate")
 text_button(actions, "Delete profile", BAD)
@@ -361,7 +362,7 @@ for setting, home in (
     ("Automatic quality + Under network pressure", "One field in the profile: When the cast struggles (P2)"),
     ("Encoder, H.264 profile, encoder fps limit", "The profile's Encoder card (P2)"),
     ("Preferred video codec", "The profile's Encoder card (P2)"),
-    ("Low-latency game audio", "Under Game audio, in the Audio card (above)"),
+    ("Low-latency game audio", "The profile's Audio card (P2)"),
     ("Encoder in use", "Status, while casting (above)"),
     ("Bitrate mode", "Removed"),
 ):
@@ -400,7 +401,7 @@ for number, (question, drawn) in enumerate([
     ("NEW · “Under network pressure” and “Automatic quality” as one field?",
      "Drawn as one (P2). It needs a new rule, not built and not measured: quality drops when the cast really "
      "struggles (the encoder cannot keep up, frames are dropped), the temperature alone is only an emergency "
-     "brake, and quality comes back by itself."),
+     "brake, and quality comes back by itself. Built 2026-11-11 as two settings until that rule exists."),
     ("NEW · Does the Advanced page go?",
      "Drawn as gone: no gear on Home (P1), and P5 shows where each of its settings went."),
     ("NEW · Today's “Automatic quality: Off” on upgrade?",
@@ -430,12 +431,13 @@ for f, title, lines in (
     (p1, "P1", ["The Preset | Custom tabs are gone: one list, built-in first, then your own.",
                 "Every row says in words what it gives up when the cast struggles.",
                 "No gear in the app bar: it only led to Advanced.",
-                "Game audio carries its transport (Low latency / Standard), which was in Advanced."]),
+                "The Audio card is only its switches."]),
     (p2, "P2", ["Picture, behaviour and encoder live together: a profile is the whole answer to “what will this "
                 "cast do”.",
                 "One field replaces “Under network pressure” and “Automatic quality”. “Don't adjust” is the "
                 "old Automatic quality: Off, and says what it costs.",
                 "The codec joins the H.264 profile it belongs with. No Bitrate mode: removed.",
+                "How the game audio travels (Low latency / Standard) is the profile's too.",
                 "The fps choices are the app's own (30 / 60)."]),
     (p3, "P3", ["Starts from the values on screen, or from any profile.",
                 "The strip shows what will be copied before it is created."]),
