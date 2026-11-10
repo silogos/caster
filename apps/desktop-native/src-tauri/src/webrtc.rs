@@ -492,6 +492,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
                 // The window's own close button: silence the sound, update the UI.
                 if crate::video::refresh_visibility() {
                     crate::audio::set_output_enabled(false);
+                    crate::tray::sync_dock_icon(&poll_app);
                     let _ = poll_app.emit("video:window", json!({ "open": false }));
                 }
             });

@@ -34,7 +34,7 @@ The Electron path does not carry over. It read each frame back from a canvas to 
 ## Consequences
 
 **Verified, 2026-11-10 (Lenovo TB321FU → MacBook Pro M1 Pro):**
-- `cargo test`: 87 passed (+6). One test goes end to end through the bridge: an NV12 frame in, the BGRA frame the Syphon server offers out — right size, bottom row first, video-range white ≥ 250 and black ≤ 5.
+- `cargo test`: 90 passed (+6). One test goes end to end through the bridge: an NV12 frame in, the BGRA frame the Syphon server offers out — right size, bottom row first, video-range white ≥ 250 and black ≤ 5.
 - An independent Syphon client (not the receiver) lists the server by name and receives the 1920×1080 "No input video" still.
 - **A live cast** (the 60 fps latency test pattern), read by that client for 15 s:
 

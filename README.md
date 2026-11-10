@@ -53,7 +53,7 @@ There are two desktop apps in the tree. Only one is being developed.
 | Audio routing | **Not yet** (speaks protocol version 1) | Yes (protocol version 2) |
 | Launch at login, frameless window | **Not yet** | Yes |
 | Game audio after an ICE restart | Stays on the stereo channel ([ADR-019](docs/decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md)) | Not checked; the fix was made in the native receiver only |
-| Tests | 90 `cargo test` tests, **run locally only** | Vitest suite, run by the CI `desktop` job |
+| Tests | 93 `cargo test` tests, **run locally only** | Vitest suite, run by the CI `desktop` job |
 
 Things to know before touching either:
 

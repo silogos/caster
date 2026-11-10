@@ -313,6 +313,16 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the conversion's CPU cost is not measured cleanly (the tablet was in use during the comparison); TikTok LIVE Studio through window capture is untried.
 
+## Fix 2026-11y — The video window is listed in the Dock ⏳ built and tested; Dock behaviour not confirmed by the product owner yet (2026-11-10)
+*(Not a numbered phase: found live by the product owner — "render video harus independent window".)*
+**Scope:** the frameless video window was missing from the Dock: AppKit treats a window that cannot become main as a helper panel. It is now an `NSWindow` subclass that can become main and key (listed in the Dock icon's window list and the Window menu, Cmd+M and Cmd+W work, still no frame drawn). A minimized window counts as open, not as closed by the user. The Dock icon stays while the video window is open, also after the main window is closed to the tray.
+
+**Follow-up, same day** (product owner: "ketika di-click pada dock yang muncul bukan render videonya"): a Dock click always raised the main window. It now goes to the video window while that is open (restored from the Dock if minimized) and to the main window only when the video window is closed; the main window stays reachable from the tray's *Open window*.
+
+**Accept:** desktop `cargo test` 93 (+3: a minimized window is open but shows nothing; the Dock icon follows either window; a Dock click goes to the video window while it is open). Scripted run on the Mac with the reopen Apple event a Dock click sends (not a real click): video open + main hidden → video stays, main stays hidden; video minimized → restored, main stays hidden; video closed → main window shown.
+
+**Not done:** the Dock list, minimize, the kept Dock icon and a real Dock click have not been confirmed on screen by the product owner.
+
 ## Definition of Done (every phase)
 
 ```text

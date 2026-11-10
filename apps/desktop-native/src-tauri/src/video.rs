@@ -24,8 +24,8 @@
 //! after arrival when Wi-Fi bunched it (ADR-017), never on raw arrival.
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{class, msg_send};
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{class, msg_send, sel};
 use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber, CFNumberType,
     CFRetained, CFString,
@@ -156,10 +156,11 @@ const PTS_TIMESCALE: i32 = 1_000_000_000;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
 const WINDOW_TITLE: &str = "Zero-Friction Cast";
 /// Frameless (product choice, 2026-11-09 — the Electron receiver's
-/// frameless spec): NSWindowStyleMaskBorderless | Resizable — no title
-/// bar, no traffic lights, square corners; OBS captures pure video. Moved
-/// by dragging the video, resized from the edges, closed from the deck.
-const WINDOW_STYLE: u64 = 1 << 3;
+/// frameless spec): no title bar, no traffic lights, square corners; OBS
+/// captures pure video. Moved by dragging the video, resized from the
+/// edges. Closable | Miniaturizable | Resizable without Titled draws no
+/// chrome, but lets the Window menu's Minimize and Close apply to it.
+const WINDOW_STYLE: u64 = (1 << 1) | (1 << 2) | (1 << 3);
 const NS_BACKING_STORE_BUFFERED: usize = 2;
 /// NSWindowOcclusionStateVisible.
 const OCCLUSION_VISIBLE: u64 = 1 << 1;
@@ -197,6 +198,11 @@ static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 /// "Close video" or the window's own close button. A closed window renders
 /// nothing (and the app keeps its audio silent — lib.rs).
 static VIDEO_OPEN: AtomicBool = AtomicBool::new(false);
+/// The user closed the window itself (Cmd+W / the Window menu), noticed by
+/// the next [`refresh_visibility`]. Being off screen is not enough to
+/// conclude that: a window on its way into the Dock, or one whose app is
+/// hidden, is off screen too.
+static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// A stream is delivering frames. While false the window shows the
 /// "no input" card, like a capture card with nothing plugged in — OBS
 /// records that card, never a frozen last frame.
@@ -388,6 +394,7 @@ pub fn is_open() -> bool {
 /// Main thread: "Open video" — creates the window on first use and shows it.
 pub fn open_video_window() {
     VIDEO_OPEN.store(true, Ordering::Relaxed);
+    CLOSE_REQUESTED.store(false, Ordering::Relaxed);
     create_video_window();
     log::info!(target: "video", "video window opened");
 }
@@ -405,6 +412,45 @@ pub fn close_video_window() {
     log::info!(target: "video", "video window closed");
 }
 
+/// The video window's class: an `NSWindow` that may become main and key.
+///
+/// A window without a title bar answers NO to both by default, and AppKit
+/// then treats it as a helper panel: it is left out of the app's Window
+/// menu and of the Dock icon's window list, and cannot be minimized
+/// (found live 2026-11-10: the open video window was missing from the
+/// Dock). With these answers it is an ordinary window of the app that
+/// merely draws no frame. Minimize and Close are routed to the calls that
+/// work without title-bar buttons.
+fn video_window_class() -> &'static AnyClass {
+    static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
+    extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
+        Bool::YES
+    }
+    extern "C-unwind" fn minimize(this: &AnyObject, _: Sel, sender: Id) {
+        unsafe {
+            let _: () = msg_send![this, miniaturize: sender];
+        }
+    }
+    extern "C-unwind" fn close(this: &AnyObject, _: Sel, sender: Id) {
+        // Hidden, not destroyed; `refresh_visibility` then reports it as
+        // closed by the user, exactly like "Close video".
+        CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+        unsafe {
+            let _: () = msg_send![this, orderOut: sender];
+        }
+    }
+    CLASS.get_or_init(|| {
+        let mut builder = ClassBuilder::new(c"ZFVideoWindow", class!(NSWindow)).expect("ZFVideoWindow is registered once");
+        unsafe {
+            builder.add_method(sel!(canBecomeMainWindow), yes as extern "C-unwind" fn(_, _) -> _);
+            builder.add_method(sel!(canBecomeKeyWindow), yes as extern "C-unwind" fn(_, _) -> _);
+            builder.add_method(sel!(performMiniaturize:), minimize as extern "C-unwind" fn(_, _, _));
+            builder.add_method(sel!(performClose:), close as extern "C-unwind" fn(_, _, _));
+        }
+        builder.register()
+    })
+}
+
 /// Main thread: creates the video window (idempotent) and shows it.
 fn create_video_window() {
     if VIDEO_WINDOW.get().is_none() {
@@ -418,7 +464,7 @@ fn create_video_window() {
             let gravity = NSString::from_str("AVLayerVideoGravityResizeAspect");
             let _: () = msg_send![layer, setVideoGravity: &*gravity];
             attach_host_timebase(layer);
-            let window: Id = msg_send![class!(NSWindow), alloc];
+            let window: Id = msg_send![video_window_class(), alloc];
             let window: Id = msg_send![
                 window,
                 initWithContentRect: frame,
@@ -431,8 +477,9 @@ fn create_video_window() {
             // Layer attached BEFORE the view enters the window — attaching
             // after display left the window blank once (live M3).
             let _: () = msg_send![view, setLayer: layer];
-            // The title still names the window in Mission Control and OBS's
-            // window list, though no title bar shows it.
+            // The title names the window in the Dock's window list, the
+            // Window menu, Mission Control and OBS's window list, though no
+            // title bar shows it.
             let title = NSString::from_str(WINDOW_TITLE);
             let _: () = msg_send![window, setTitle: &*title];
             let _: () = msg_send![window, setMovableByWindowBackground: true];
@@ -465,19 +512,36 @@ pub fn show_video_window() {
     }
 }
 
+/// Main thread: a Dock click — the open window comes back out of the Dock
+/// if it was minimized, and to the front.
+pub fn restore_video_window() {
+    if let Some(vw) = VIDEO_WINDOW.get() {
+        guarded("restore video window", || unsafe {
+            let minimized: bool = msg_send![vw.window, isMiniaturized];
+            if minimized {
+                let _: () = msg_send![vw.window, deminiaturize: std::ptr::null::<AnyObject>()];
+            }
+        });
+    }
+    show_video_window();
+}
+
 /// Main thread: publishes whether the window is actually composited.
 /// Returns `true` when it found the user closed an open window with its
 /// own close button (the caller silences the audio and tells the UI).
 pub fn refresh_visibility() -> bool {
     let Some(vw) = VIDEO_WINDOW.get() else { return false };
-    let (mut on_screen, mut visible) = (false, false);
+    let (mut on_screen, mut unoccluded) = (false, false);
     guarded("read window state", || unsafe {
         on_screen = msg_send![vw.window, isVisible];
         let occlusion: u64 = msg_send![vw.window, occlusionState];
-        visible = occlusion & OCCLUSION_VISIBLE != 0;
+        unoccluded = occlusion & OCCLUSION_VISIBLE != 0;
     });
-    let closed_by_user = !on_screen && VIDEO_OPEN.swap(false, Ordering::Relaxed);
-    let visible = visible && on_screen && is_open();
+    let close_requested = CLOSE_REQUESTED.swap(false, Ordering::Relaxed);
+    let (closed_by_user, visible) = window_state(is_open(), close_requested, on_screen, unoccluded);
+    if closed_by_user {
+        VIDEO_OPEN.store(false, Ordering::Relaxed);
+    }
     if WINDOW_VISIBLE.swap(visible, Ordering::Relaxed) != visible {
         log::info!(target: "video", "window {}", if visible { "visible — rendering" } else { "hidden — frames dropped at the live edge" });
     }
@@ -485,6 +549,16 @@ pub fn refresh_visibility() -> bool {
         log::info!(target: "video", "video window closed by the user");
     }
     closed_by_user
+}
+
+/// What the window's state means: (the user closed it, frames should be
+/// composited). Only an explicit close closes it. A window minimized to
+/// the Dock, or hidden with its app, is still open — its sound keeps
+/// playing and it comes back — it just shows nothing.
+fn window_state(open: bool, close_requested: bool, on_screen: bool, unoccluded: bool) -> (bool, bool) {
+    let closed_by_user = open && close_requested;
+    let visible = open && !closed_by_user && on_screen && unoccluded;
+    (closed_by_user, visible)
 }
 
 // ---- the frame path (one renderer per video stream) ------------------------
@@ -1000,4 +1074,14 @@ mod tests {
         assert_eq!(reads.get(), 2, "back on the hardware decoder: asked once more");
     }
 
+    #[test]
+    fn a_minimized_window_is_open_but_shows_nothing() {
+        // (open, close requested, on screen, unoccluded) → (closed by the user, composited)
+        assert_eq!(window_state(true, false, true, true), (false, true), "in front: rendering");
+        assert_eq!(window_state(true, false, true, false), (false, false), "covered: open, nothing composited");
+        assert_eq!(window_state(true, false, false, false), (false, false), "in the Dock or app hidden: still open — the sound stays on");
+        assert_eq!(window_state(true, true, false, false), (true, false), "Cmd+W: the user closed it");
+        assert_eq!(window_state(true, true, true, true), (true, false), "closing wins even if the window is still on screen this instant");
+        assert_eq!(window_state(false, true, false, false), (false, false), "already closed: nothing to report");
+    }
 }
