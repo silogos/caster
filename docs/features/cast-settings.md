@@ -1,5 +1,7 @@
 # Feature: Mobile Cast Settings
 
+> **Superseded in part (2026-11-11, [ADR-024](../decisions/ADR-024-custom-profiles.md)).** The sections below record Phase10 and the 2026-09/10 redesigns as they were built. What is true today is the last section, *Profiles*: the `Preset | Custom` tabs, the Advanced page, the gear and Bitrate mode are gone; a profile holds every cast value.
+
 Implemented in: **Phase10** (see [roadmap](../development/roadmap.md)). Status: **implemented; mobile JVM 83/83 green, build green; UI + persistence verified on an emulator** — the live-cast acceptance item (settings visibly changing the sent stream in stats, on the real device) needs the phone in hand; see *Verification*.
 
 ## What is implemented
@@ -75,7 +77,7 @@ Encoder-level knobs — every default reproduces today's cast exactly:
 | H.264 profile | Baseline / High | High | `enableH264HighProfile` factory flag (High profile leaves the offer when off) |
 | Under network pressure | Balanced / Keep frame rate / Keep resolution | Balanced (per-preset) | `RTCRtpSender.degradationPreference`. **Keep frame rate** also lowers the sender's bitrate floor to 1 Mbps and starts the cast at the window's floor, so the bitrate can follow a short uplink instead of queueing ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md)); the other two keep the window's floor. |
 | Encoder fps limit | Off / 15 / 30 / 60 | Off | `RTCRtpSender.encodings.maxFramerate` |
-| Bitrate mode | CBR / VBR | CBR (per-preset) | **Placebo until Phase "forked encoder"**: libwebrtc hardcodes CBR (verified in the prebuilt's bytecode); the setting persists and maps into `CastConfig`, but VBR needs the copied `HardwareVideoEncoder` source to reach the MediaFormat. The UI states CBR as today's behavior. |
+| Bitrate mode | CBR / VBR | CBR (per-preset) | **Removed 2026-11-11 ([ADR-024](../decisions/ADR-024-custom-profiles.md)).** It was a placebo: libwebrtc hardcodes CBR (verified in the prebuilt's bytecode), and real VBR would burst on busy scenes, against smooth frames and sound. The bitrate follows the network through the profile's window instead ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md)). |
 
 Presets set the Advanced defaults (user decision): Cool → Baseline + VBR + Balanced; Balanced → High + CBR + Balanced; Performance → High + CBR + **Keep frame rate**; Sharp → High + CBR + **Keep resolution** — all Hardware. The preferred codec and auto-quality switch survive preset picks; everything else advanced resets with the preset. A read-only **"Encoder in use"** readout shows the active cast's actual `encoderImplementation` (getStats, ~1 Hz, via `CastService`) — "visible during a cast" when unknown, never a faked value.
 
@@ -86,3 +88,51 @@ Presets set the Advanced defaults (user decision): Cool → Baseline + VBR + Bal
 ### Verification (2026-09-23)
 
 Mobile JVM **147/147** (codec v4 migration + advanced round-trips/validation; preset→advanced defaults; setters), `assembleDebug` green. Lint reports 4 **pre-existing** errors in `MicRecordSubstituter`, `PlaybackCaptureAudioSource`, `ThermalSource`, and the manifest (`MissingPermission`/`NewApi`/camera-feature) — present before this phase, untouched by it, flagged for their owning phases. **Remaining (needs the device in hand):** the live A/B of Hardware vs Software on the Y700 (the original PUBG contention investigation this UI exists for), and a device walk of the new flow (scan → hub → share/stop/disconnect), including session-expiry falling back to the scanner.
+
+
+## Profiles (2026-11-11, [ADR-024](../decisions/ADR-024-custom-profiles.md))
+
+Supersedes the `Preset | Custom` console, the Advanced page and the single settings document above. Design: [`designs/mobile-app.figcraft`](../../designs/mobile-app.figcraft), page "Mobile design v2 · custom profiles".
+
+### What the user sees
+
+- **Home's quality console is one list of profiles** (`ui/home/QualityConsoleCard.kt`): the four built-in ones, then the user's own, then *Add profile*.
+  - Every row shows the profile's name, a tag saying what it gives up when the network is short (BALANCED / KEEP FRAME RATE / KEEP RESOLUTION), and its real numbers (`1920 px · 60 fps · 6–12 Mbps`). A built-in also keeps its intent line.
+  - Only the user's own rows have a `⋯` menu: Edit, Duplicate, Delete. Delete asks first.
+  - Idle, a pick selects the profile for the next cast. Casting, a pick steers the running cast to that profile's picture and leaves the stored selection alone; the lit row is the one the running picture matches.
+- **Add profile** (`ui/profiles/AddProfileSheet.kt`): a sheet with a name (the next free "Custom N" is suggested), *Start from* (the values on screen, or any profile), and a strip showing what will be copied.
+- **Edit profile** (`ui/profiles/ProfileEditScreen.kt`): the name, then four cards.
+
+  | Card | Settings |
+  |---|---|
+  | Picture | Resolution, frame rate, bitrate ceiling (the floor is half of it) |
+  | Behaviour | Under network pressure, Automatic quality |
+  | Encoder | Encoder, video codec, H.264 profile, encoder fps limit |
+  | Audio | Low-latency game audio (Low latency / Standard) |
+
+  Every change saves at once and applies to the next cast. A name saves as it is typed, as long as it is not empty; typing past 20 characters is ignored.
+- **No gear and no Advanced page.** "Encoder in use" is a row in the STATUS zone while casting.
+- **Home's Audio card is unchanged**: the two switches and the microphone picker.
+
+### The model
+
+- `config/CastProfile.kt`: `ProfileValues` (what a profile fixes), `CustomProfile` (id, name, values), `ProfileSelection` (a built-in or one of the user's), and the limits (`CustomProfileRules`: 20 characters, 12 profiles, Balanced as the fallback).
+- `config/CastSettings.kt` holds the selection, the user's profiles and the audio switches. The cast's values are the selected profile's (`active`); nothing duplicates them. The profile edits (`withProfileAdded`, `withProfileEdited`, …) return the settings unchanged when an edit is not allowed, and `toConfig()` is still the single conversion into `CastConfig`.
+- `session-info.profile` carries a built-in's label or the user's profile name.
+
+### Persistence (v6 → v7)
+
+`CastSettingsCodec` v7 stores the selection, the profiles and the audio switches. Every older document migrates: values that equal a built-in profile select it; anything else becomes "Custom 1", selected, with every value kept. `bitrateAuto` and `bitrateMode` are dropped. A document that breaks a rule (two profiles with one id, an empty name, a selection that names no profile, a value this build does not offer) decodes to null and the store falls back to defaults.
+
+### Verification (2026-11-11)
+
+Mobile `testDebugUnitTest`: 443 tests, 0 failures, 2 skipped. New or rewritten: `CastProfilesTest` (what each profile edit does and what the next cast runs on), `CastSettingsCodecTest` (round-trips, validation, and v1–v6 documents written out as those versions stored them), `SettingsViewModelTest`, `QualityConsoleCardUiTest`, `ProfileScreensUiTest`, and the profile screens in `AccessibilityUiTest`.
+
+**Not done:** a walk on the tablet (the migration of its real stored settings, the list, edit, add, delete, a cast on the user's profile).
+
+### Known limitations
+
+- A built-in profile cannot be changed in place; the user copies it first.
+- The live dials are gone: during a cast the picture is steered by picking a profile.
+- "Under network pressure" and "Automatic quality" stay two settings. The design draft merges them into one; that needs a new automatic-quality rule first (ADR-024, Consequences).
+

@@ -22,7 +22,7 @@ The cast's goal: **keep added thermal load small enough that the cast is not wha
 
 ## Initial profiles (tuned in Phase11; to be re-tuned from Phase15 measurements)
 
-Phase11 shipped these as the app's named profiles (`config/QualityProfile.kt`) — the settings screen's one-tap presets, applied at cast start from the config module. `light`/`smooth` from Phase10 were relabeled into the thermal vocabulary; the values are the tuned windows the app shipped with (codec v2 translates stored v1 documents). "540p/720p" name the *short* edge of a 16:9 frame; the capture target in the settings is the long edge in px.
+Phase11 shipped these as the app's named profiles (`config/QualityProfile.kt`) — Home's built-in profiles, applied at cast start from the config module. `light`/`smooth` from Phase10 were relabeled into the thermal vocabulary; the values are the tuned windows the app shipped with (codec v2 translates stored v1 documents). "540p/720p" name the *short* edge of a 16:9 frame; the capture target in the settings is the long edge in px.
 
 | Profile | Capture (long edge) | FPS | Bitrate window | Intent |
 |---|---|---|---|---|
