@@ -323,6 +323,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the Dock list, minimize, the kept Dock icon and a real Dock click have not been confirmed on screen by the product owner.
 
+## Fix 2026-11aa — A stalled video encoder is re-created ✅ verified on-device with an injected stall (2026-11-10)
+*(Not a numbered phase: found live by the product owner — the picture froze 37 minutes into a cast while the sound carried on.)*
+**Scope:** the tablet's hardware encoder stopped emitting frames at thermal status SEVERE. libwebrtc refuses every frame once three wait for output, so the freeze was permanent until the cast was restarted by hand. Each MediaCodec encoder is now wrapped: after 3 s of refused frames with nothing out it is released and initialized again with the same settings and rates, and the next frame is a key frame — [ADR-022](../decisions/ADR-022-video-encoder-stall-recovery.md).
+
+**Accept:** mobile `testDebugUnitTest` 418 (+7: a healthy encoder, a briefly slow one and a quiet screen are left alone; a silent one is re-created as libwebrtc configured it; the first frame after is a key frame; failed and repeated re-creations ask for the software encoder). **On-device (TB321FU):** an injected stall reproduced the incident's log signature; the encoder was re-created 3.0 s later in ~0.1 s and both ends returned to 60 fps, the Mac's picture frozen 3–4 s. Held for 32 s, it kept re-creating every 3 s and recovered within a second of release.
+
+**Not done:** the real stall has not been reproduced, and its cause (heat is the suspect) is not addressed. A codec hung inside the vendor driver, where release may wait out libwebrtc's 5 s timeout, is untested. There is no user-facing notice.
+
 ## Definition of Done (every phase)
 
 ```text
