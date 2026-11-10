@@ -43,6 +43,7 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 - One authorized connection at a time (QR or resume) — another gets `busy`.
 - Expiry enforced; an authorized session with its socket attached outlives the TTL (a live cast); a pending QR regenerates when the machine's IPv4 set changes.
 - Resume (`hello.resume`, sid = deviceId) verifies against the stored trustKey and invalidates the bypassed QR; `unknown-device` when the phone is not trusted.
+- The spare QR session a resume leaves behind expires after its TTL like any pending session. The sweep replaces it, but **never puts a QR on screen while a phone is connected** (fix 2026-11-10: ten minutes into a resumed phone's cast the window flipped from the deck to the QR while the video kept playing).
 - `bye forget` deletes the trust; any `bye` closes both PeerConnections and stages a fresh QR (shown only when no trusted phone remains).
 - After `hello`, every envelope's `sid` must match. Envelopes > 256 KiB close the socket.
 - `auth-ok {name, proto: 1, desktopId, hosts}` — proto 1 because `vc-*`/`audio-routing-*` are not implemented (they are answered `bad-message`).
