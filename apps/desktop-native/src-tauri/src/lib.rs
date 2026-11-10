@@ -63,6 +63,7 @@ fn open_video(app: tauri::AppHandle) -> Result<(), String> {
     app.run_on_main_thread(move || {
         video::open_video_window();
         audio::set_output_enabled(true);
+        tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
     })
     .map_err(|e| e.to_string())
@@ -75,6 +76,7 @@ fn close_video(app: tauri::AppHandle) -> Result<(), String> {
     app.run_on_main_thread(move || {
         video::close_video_window();
         audio::set_output_enabled(false);
+        tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": false }));
     })
     .map_err(|e| e.to_string())

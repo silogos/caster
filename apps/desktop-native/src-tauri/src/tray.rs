@@ -184,10 +184,25 @@ pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.hide();
     }
-    // A menu-bar app while hidden: no Dock icon, no Cmd+Tab entry.
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    sync_dock_icon(app);
     log::info!(target: "tray", "window closed — still listening from the menu bar");
+}
+
+/// The Dock icon (and the Cmd+Tab entry) follows the app's windows: shown
+/// while the main window or the video window is open, hidden when both are
+/// closed and only the menu-bar item is left. Call after either changes.
+pub fn sync_dock_icon(app: &AppHandle) {
+    let main_shown = app.get_webview_window(MAIN_WINDOW).and_then(|window| window.is_visible().ok()).unwrap_or(false);
+    let in_dock = wants_dock_icon(main_shown, crate::video::is_open());
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(if in_dock { tauri::ActivationPolicy::Regular } else { tauri::ActivationPolicy::Accessory });
+    #[cfg(not(target_os = "macos"))]
+    let _ = in_dock;
+}
+
+/// A menu-bar-only app has no Dock icon; an app with a window has one.
+fn wants_dock_icon(main_window_shown: bool, video_window_open: bool) -> bool {
+    main_window_shown || video_window_open
 }
 
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -254,4 +269,12 @@ mod tests {
         let info = json!({ "profile": "performance", "width": 1280, "height": 720, "fps": 30, "gameAudio": true, "mic": true });
         assert_eq!(session_info_line("TB321FU", &info), "Connected to TB321FU — 1280×720 · 30 fps · performance · game audio · mic");
     }
+    #[test]
+    fn the_dock_icon_follows_either_window() {
+        assert!(wants_dock_icon(true, false), "main window shown");
+        assert!(wants_dock_icon(false, true), "only the video window open: still an app with a window");
+        assert!(wants_dock_icon(true, true));
+        assert!(!wants_dock_icon(false, false), "both closed: menu-bar only");
+    }
+
 }
