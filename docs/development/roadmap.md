@@ -331,6 +331,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the real stall has not been reproduced, and its cause (heat is the suspect) is not addressed. A codec hung inside the vendor driver, where release may wait out libwebrtc's 5 s timeout, is untested. There is no user-facing notice.
 
+## Feature 2026-11ab — "Keep frame rate" follows the network ⏳ built and unit-tested; not measured on-device (2026-11-11)
+*(Not a numbered phase: the product owner's priority after the audio investigation — smooth audio and frame rate first, picture quality may drop for a while.)*
+**Scope:** game audio starved on the desktop whenever the video sender was backed up, and the 8 Mbps floor of the Sharp window kept libwebrtc from backing the video off ([latency-measurement.md](latency-measurement.md)). Under *Under network pressure → Keep frame rate* the sender's floor is now 1 Mbps and the window's floor is the start bitrate; Balanced and Keep resolution are unchanged — [ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md). The sender logs its targets, and the stats line carries libwebrtc's current target bitrate. Gap probes for late audio chunks on both ends came with the investigation.
+
+**Accept:** mobile `testDebugUnitTest` 425 (+4 floor and start per strategy, +3 gap probe); desktop `cargo test` 94 (+1 arrival gaps).
+
+**Not done:** no cast has run with it. The measurement that decides it: a game cast under "Keep frame rate", read with the gap probes. *Bitrate mode: VBR* is still a placebo.
+
 ## Definition of Done (every phase)
 
 ```text

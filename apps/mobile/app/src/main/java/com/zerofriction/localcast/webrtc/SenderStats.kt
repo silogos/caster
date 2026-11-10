@@ -40,6 +40,8 @@ data class SenderSample(
      */
     val totalPacketSendDelaySeconds: Double? = null,
     val packetsSent: Long? = null,
+    /** What libwebrtc currently asks the encoder for (`targetBitrate`), bps; null while not reported. */
+    val targetBitrateBps: Long? = null,
 )
 
 /**
@@ -92,6 +94,7 @@ object SenderStats {
             retransmittedPacketsSent = (video["retransmittedPacketsSent"] as? Number)?.toLong(),
             totalPacketSendDelaySeconds = (video["totalPacketSendDelay"] as? Number)?.toDouble(),
             packetsSent = (video["packetsSent"] as? Number)?.toLong(),
+            targetBitrateBps = (video["targetBitrate"] as? Number)?.toLong(),
         )
     }
 

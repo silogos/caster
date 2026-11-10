@@ -202,6 +202,9 @@ class MediaCastSession(
     private var liveBitrateMinBps = config.bitrateMinBps
     private var liveBitrateMaxBps = config.bitrateMaxBps
 
+    /** The start bitrate last handed to libwebrtc: once per window, not per renegotiation. */
+    private var appliedStartBitrateBps: Int? = null
+
     /**
      * Live format state. `liveLongEdgePx`/`liveFps` are the quality *rung*
      * target (moved by [changeQuality]); `captureWidth`/`captureHeight` are
@@ -592,8 +595,10 @@ class MediaCastSession(
         val sender = currentPc.senders.firstOrNull { it.track()?.kind() == "video" } ?: return
         val parameters = sender.parameters
         if (parameters.encodings.isEmpty()) return
+        val floorBps = effectiveBitrateFloorBps(liveBitrateMinBps, config.degradationPreference)
         parameters.encodings.first().apply {
-            minBitrateBps = liveBitrateMinBps
+            // "Keep frame rate" may fall below the window (ADR-023).
+            minBitrateBps = floorBps
             maxBitrateBps = liveBitrateMaxBps
             // Phase16: the encoder cap makes the profile's (or an adaptive
             // step's) fps real — screencast capture cannot throttle it (the
@@ -610,7 +615,20 @@ class MediaCastSession(
         val result = sender.setParameters(parameters)
         if (!result) {
             Log.w(TAG, "setParameters rejected — bitrate/degradation targets may not be applied")
+            return
         }
+        // With the floor out of the way the estimate would start at
+        // libwebrtc's default and climb; start it at the window instead.
+        val startBps = startBitrateBps(liveBitrateMinBps, config.degradationPreference)
+        if (startBps != null && startBps != appliedStartBitrateBps) {
+            if (currentPc.setBitrate(null, startBps, null)) appliedStartBitrateBps = startBps
+        }
+        Log.i(
+            TAG,
+            "sender targets: ${floorBps / 1_000}–${liveBitrateMaxBps / 1_000} kbps" +
+                (startBps?.let { ", start ${it / 1_000} kbps" } ?: "") +
+                ", under pressure: ${config.degradationPreference}",
+        )
     }
 
     /**
@@ -788,7 +806,9 @@ class MediaCastSession(
                     val pacerPart = pacerMs?.let { String.format(", pacer %.1f ms/pkt", it) } ?: ""
                     Log.i(
                         TAG,
-                        "stats: ${bitrateBps / 1_000} kbps, ${sample.framesEncoded} encoded" +
+                        "stats: ${bitrateBps / 1_000} kbps" +
+                            (sample.targetBitrateBps?.let { " (target ${it / 1_000})" } ?: "") +
+                            ", ${sample.framesEncoded} encoded" +
                             ", ${sample.framesDropped} dropped, ${sample.framesPerSecond} fps" +
                             ", ${sample.frameWidth}x${sample.frameHeight}" +
                             ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}" + encodePart + pacerPart,
