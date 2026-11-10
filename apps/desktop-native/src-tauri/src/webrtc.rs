@@ -447,6 +447,7 @@ fn spawn_receive_stats(receiver: livekit::webrtc::rtp_receiver::RtpReceiver) {
 async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_track::RtcVideoTrack) {
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
+    let mut range_tracker = crate::video::RangeTracker::new();
     let generation = crate::video::begin_stream();
     let mut frames: u64 = 0;
     let mut window_requested = false;
@@ -495,8 +496,11 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         let followup = match renderer.drop_if_hidden() {
             Some(followup) => followup,
             None => {
-                // Read before the conversion: the decoder's own buffer states it.
-                let range = crate::video::range_of_frame(frame.buffer.as_ref());
+                // The decoder's own buffer states the range — asked once per
+                // stream and size, because asking pins the frame (RangeTracker).
+                let range = range_tracker.range(w, h, frame.buffer.as_native().is_some(), || {
+                    crate::video::read_range_of_frame(frame.buffer.as_ref())
+                });
                 let i420 = frame.buffer.to_i420();
                 let (y, u, v) = i420.data();
                 let (sy, su, sv) = i420.strides();

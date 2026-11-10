@@ -75,7 +75,9 @@ The 1 Hz `dc:` log line carries `underruns` (with the ms of silence played while
 - VideoToolbox's H.264 decoder writes its own CVPixelBuffer format. On the TB321FU stream that format is full range.
 - libwebrtc's software decoders emit the stream's nominal video range.
 
-So `range_of_frame` reads the decoder buffer's pixel format before the I420 copy (`'420f'` and the other full-range formats → full), and the pool and format description are keyed by range. Limitation: a software-decoded frame carries no range the Rust API exposes, so it is taken as video range.
+So the decoder buffer's pixel format is read before the I420 copy (`'420f'` and the other full-range formats → full), and the pool and format description are keyed by range.
+
+**That read is rationed (fix 2026-11-10).** `read_range_of_frame` goes through webrtc-sys' `get_cv_pixel_buffer`, which leaves a reference on the decoded surface on every call. Called per frame, as the first version did, it pinned every decoded frame: 3.5 MB each at 1920×1200, about 180 MB a second in `VTDecoderXPCService`, until macOS ran out of memory after ~16 500 shown frames (57 GB) and killed the receiver. `RangeTracker` reads the range once per stream and once more when the dimensions change (a new encoder session), and remembers it; a software-decoded frame is answered without a read. Measured after the fix: the decoder service stays at 42 MB over a minute of shown frames. Limitation: a software-decoded frame carries no range the Rust API exposes, so it is taken as video range.
 
 - **Why the copy:** webrtc-sys's zero-copy `get_cv_pixel_buffer` leaks an ObjC wrapper + a native ref per call (every decoded IOSurface pinned — 9 GB in 2 min).
 - **Bounded memory:** the pool allocation threshold (10 buffers — paced samples wait in the layer) drops a frame rather than grow; a layer not ready drops at the live edge (enqueueing anyway reached 20 GB); a hidden window (not composited — each queued sample pins a surface, 8.8 GB in 7 min) drops frames and flushes.

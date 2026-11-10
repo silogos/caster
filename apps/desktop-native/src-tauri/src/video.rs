@@ -87,11 +87,54 @@ pub fn range_of_decoder_format(format: u32) -> VideoRange {
     if FULL_RANGE_FORMATS.contains(&format) { VideoRange::Full } else { VideoRange::Limited }
 }
 
-/// The range of one decoded frame. A VideoToolbox frame states it in its
-/// pixel format; a software decoder's I420 carries no tag the Rust API
-/// exposes, and libwebrtc's software decoders (libvpx, FFmpeg) emit the
-/// stream's nominal video range.
-pub fn range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
+/// Remembers a stream's range, so it is read from a frame only when it can
+/// have changed.
+///
+/// Reading it costs a frame: the only place a VideoToolbox frame states its
+/// range is its pixel buffer's format, and webrtc-sys' `get_cv_pixel_buffer`
+/// leaves a reference on the decoded surface on every call (the module doc).
+/// Called per frame it pinned every decoded frame — 3.5 MB each at
+/// 1920×1200, about 12 GB a minute — until the Mac ran out of memory after
+/// ~16 500 frames (found live 2026-11-10; the per-frame call came in with
+/// the colour-range fix the day before). The range belongs to the encoder
+/// session, so one read per stream, and one more when the dimensions change
+/// (a new encoder session), is enough.
+pub struct RangeTracker {
+    known: Option<((u32, u32), VideoRange)>,
+}
+
+impl RangeTracker {
+    pub fn new() -> Self {
+        Self { known: None }
+    }
+
+    /// The range for a frame of these dimensions. `read` — the costly look
+    /// at the frame ([`read_range_of_frame`]) — runs only when the answer
+    /// is not known yet. A software-decoded frame (`native == false`) has
+    /// no surface and no tag: libwebrtc's software decoders emit the
+    /// stream's nominal video range.
+    pub fn range(&mut self, width: u32, height: u32, native: bool, read: impl FnOnce() -> VideoRange) -> VideoRange {
+        if !native {
+            // A switch back to the hardware decoder reads again.
+            self.known = None;
+            return VideoRange::Limited;
+        }
+        match self.known {
+            Some((dims, range)) if dims == (width, height) => range,
+            _ => {
+                let range = read();
+                self.known = Some(((width, height), range));
+                range
+            }
+        }
+    }
+}
+
+/// The range one decoded frame states in its pixel format.
+///
+/// **Pins the frame's decoded surface for the life of the process** (the
+/// webrtc-sys leak above) — call it through [`RangeTracker`], never per frame.
+pub fn read_range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
     let Some(native) = buffer.as_native() else { return VideoRange::Limited };
     let pixel_buffer = native.get_cv_pixel_buffer() as *const CVPixelBuffer;
     if pixel_buffer.is_null() {
@@ -892,4 +935,41 @@ mod tests {
         assert!(set_live(false), "live → no input: show the card");
         assert!(!is_live());
     }
+    #[test]
+    fn the_range_is_read_once_per_stream_and_again_when_the_size_changes() {
+        let reads = std::cell::Cell::new(0);
+        let read = |range: VideoRange| {
+            let reads = &reads;
+            move || {
+                reads.set(reads.get() + 1);
+                range
+            }
+        };
+        let mut tracker = RangeTracker::new();
+        // A minute of frames at one size: one read, not 3 600.
+        for _ in 0..3_600 {
+            assert_eq!(tracker.range(1920, 1200, true, read(VideoRange::Full)), VideoRange::Full);
+        }
+        assert_eq!(reads.get(), 1, "every read pins a decoded frame — it must not happen per frame");
+        // The quality ladder or a rotation starts a new encoder session.
+        assert_eq!(tracker.range(1280, 800, true, read(VideoRange::Limited)), VideoRange::Limited);
+        assert_eq!(tracker.range(1280, 800, true, read(VideoRange::Full)), VideoRange::Limited, "remembered, not re-read");
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn software_frames_are_video_range_without_a_read() {
+        let reads = std::cell::Cell::new(0);
+        let mut tracker = RangeTracker::new();
+        let mut read = || {
+            reads.set(reads.get() + 1);
+            VideoRange::Full
+        };
+        assert_eq!(tracker.range(1920, 1200, true, &mut read), VideoRange::Full);
+        assert_eq!(tracker.range(1920, 1200, false, &mut read), VideoRange::Limited, "a software frame has no surface to ask");
+        assert_eq!(reads.get(), 1);
+        assert_eq!(tracker.range(1920, 1200, true, &mut read), VideoRange::Full);
+        assert_eq!(reads.get(), 2, "back on the hardware decoder: asked once more");
+    }
+
 }

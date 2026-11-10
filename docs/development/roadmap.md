@@ -289,6 +289,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the 8 ms from the IO buffer is computed from buffer sizes, not measured acoustically.
 
+## Fix 2026-11w — The receiver no longer pins every decoded frame ✅ verified on-device (2026-11-10)
+*(Not a numbered phase: found live — the receiver died after about five minutes with the video window showing.)*
+**Scope:** the colour-range fix of 2026-11-09 asked each frame for its pixel format through webrtc-sys' `get_cv_pixel_buffer`, which leaks a reference to the decoded surface per call. Every shown frame stayed pinned in `VTDecoderXPCService` (about 180 MB a second at 1920×1200 and 60 fps) until macOS ran out of memory: 57 GB after 16 517 frames, then the receiver was killed. `RangeTracker` now reads the range once per stream and again when the dimensions change, and remembers it — [desktop-native.md](../architecture/desktop-native.md).
+
+**Accept:** desktop `cargo test` 83 (+2: one read per stream and size, not per frame; software frames need no read). **On-device:** with a cast running and the video window showing, the decoder service grew from 383 MB to 4 GB in 21 s before the fix and stayed at 42 MB for 60 s (~3 300 frames) after it; the range is still detected (`'420f'`, full).
+
+**Not done:** each read still pins one frame (3.5 MB) — one per stream and per size change. The leak itself is in webrtc-sys.
+
 ## Definition of Done (every phase)
 
 ```text
