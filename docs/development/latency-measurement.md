@@ -114,4 +114,29 @@ The 40 ms ring (the product owner's choice, desktop-native.md) stands: 30 ms sav
 
 Reproduced on purpose in cast K. **Fixed by [ADR-019](../decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md)**, which also covers the more common case it shares a cause with: every ICE restart lost the channel, because the receiver built a new pc per offer.
 
+## Where the audio delay sits inside Android (2026-11-10, later)
+
+`adb shell dumpsys media.audio_flinger` during a cast shows the buffers a captured sound crosses after the phone's mixer has it. All of them belong to the system audio server, not to this app:
+
+| Stage (TB321FU, Android 16) | Size | Measured |
+|---|---|---|
+| Tee buffer (`PatchTrack` on the remote-submix output thread) | 6 976 frames | holds **2 944–4 096 frames, ~73 ms on average**, the whole time |
+| Remote-submix output mixer | 1 024 frames | one 21 ms period |
+| Remote-submix pipe | 4 096 frames | about one period standing (~21 ms) |
+| Capture input thread | 1 024 frames | one 21 ms read |
+| App record buffer | 3 072 frames | empty (the ADM drains it) |
+
+- The tee buffer is the largest single item. It starts playing only once it is about half full, and that fill then stays for the life of the game's track. Its level differs per track by start timing (40–85 ms).
+- The speaker path is slow too (click → speaker ~102 ms, 80 ms of it the test track's own full buffer). That is why the capture trails the speaker by ~120 ms and not by the full ~220 ms.
+- **Experiment: a second capture record at 96 kHz and at 192 kHz** (debug build, same clicks, both records read at once). The buffers above are sized in frames, so a higher rate would have shortened them. The system accepted both records, but kept the submix threads at 48 kHz / 1 024 frames and resampled for the client:
+
+| Probe record | Click → captured (48 kHz record / probe record) |
+|---|---|
+| 96 kHz | 221 / 208 ms |
+| 192 kHz | 224 / 221 ms |
+
+The 13 ms at 96 kHz was that probe's tee buffer happening to start lower (1 920–2 816 frames in the dump); 192 kHz showed no gain. Reverted.
+
+**What this leaves:** on this device nothing in the Android half is reachable through public APIs. A capture that bypasses the tee needs a system-only routing permission. The app-side remainder is the 10 ms ADM read, ~4 ms of Wi-Fi, the 40 ms Mac ring, and the Mac's output device buffer (cpal default, not measured).
+
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.
