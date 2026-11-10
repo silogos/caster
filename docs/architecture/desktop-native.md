@@ -17,6 +17,7 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `audio.rs` | The game-audio ear path: source selection, ring, CPAL playout. | CoreAudio |
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
 | `pacing.rs` | When each frame shows: a schedule with a bounded 50 ms delay that evens out Wi-Fi delivery jitter (ADR-017). Pure — no I/O. | — |
+| `latency_probe.rs` | Measurement only, off unless `ZFC_LATENCY_PROBE=1`: marks when the latency test pattern's flips are decoded and its clicks arrive ([latency-measurement.md](../development/latency-measurement.md)). | — |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
 | `settings.rs` | The receiver's own persisted controls (game volume, mute) — `native-receiver.json` beside the trust store. | filesystem |
 | `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |

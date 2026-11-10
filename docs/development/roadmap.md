@@ -249,6 +249,24 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
+## Tool 2026-11s — Glass-to-glass latency measurement ✅ measured on-device (2026-11-10)
+*(Not a numbered phase: the baseline before low-latency work, after comparing caster with scrcpy, Moonlight, Parsec and Steam Remote Play.)*
+**Scope:** a debug-only test pattern on the phone (flips + clicks), a receiver probe behind `ZFC_LATENCY_PROBE=1`, a phone-side click probe in the ADM samples callback (debug builds), and `tools/latency/measure.py`, which aligns the clocks over adb and pairs the marks — [latency-measurement.md](latency-measurement.md).
+
+**Accept:** desktop `cargo test` 73 (+4 probe), mobile `testDebugUnitTest` 400, debug and release builds. **On-device (three casts):**
+- video phone screen → Mac screen 63 / 67 / 117 ms (median per cast);
+- audio click → Mac playout ~250 ms, of which ~218 ms is inside the phone's playback-capture path (a drain experiment ruled out a start-up backlog).
+
+---
+
+## Fix 2026-11t — Low-latency encoder keys ✅ applied on-device, no measured gain (2026-11-10)
+*(Not a numbered phase: the first item from the game-streaming comparison.)*
+**Scope:** the hardware encoder is configured with `KEY_LATENCY = 1` and `KEY_PRIORITY = 0`, the keys scrcpy sets. A wrapper replaces the pinned `HardwareVideoEncoder`'s codec-factory field, and libwebrtc is otherwise unchanged — [ADR-018](../decisions/ADR-018-low-latency-encoder-keys.md). The latency test pattern now asks for the display's highest refresh rate (`--ef refresh N` to choose one) and logs the rate in use.
+
+**Accept:** mobile `testDebugUnitTest` 403 (+3: keys reach configure, other calls pass through, and a mirror guard on the pinned field). **On-device:** the codec reports `latency=1, priority=0`. Video latency across five measured passes was 46–113 ms, against 63–117 ms stock, so no gain is demonstrated. Passes differed by up to ~60 ms even within one cast. Follow-up the same day: per-segment probes and SurfaceFlinger's present times traced it to the test app's own 2–4 frame queue on the phone, not the cast. Against the phone's actual screen, video on the Mac is at ~0 ms. Game audio trails the phone speaker by ~150 ms, almost all of it in Android's playback capture. Experiments on the Mac ring, the capture buffer and the send cap were reverted. A receiver restart leaves game audio on the fallback track (bug, open) — [latency-measurement.md](latency-measurement.md).
+
+---
+
 ## Definition of Done (every phase)
 
 ```text

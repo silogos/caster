@@ -1,4 +1,5 @@
 mod audio;
+mod latency_probe;
 mod logging;
 mod pacing;
 mod pairing;

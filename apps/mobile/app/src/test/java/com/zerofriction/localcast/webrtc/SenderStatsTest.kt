@@ -169,4 +169,26 @@ class SenderStatsTest {
         // Re-auth rebuilt the pc: bytesSent restarted near 0.
         assertEquals(0L, sendBitrateBps(9_000_000, 12_000, 5_000, 6_000))
     }
+
+    @Test
+    fun `reads the pacer's cumulative send delay and packet count`() {
+        val sample = SenderStats.sampleVideoSend(
+            listOf(mapOf("type" to "outbound-rtp", "kind" to "video", "totalPacketSendDelay" to 1.5, "packetsSent" to 3_000L)),
+        )!!
+        assertEquals(1.5, sample.totalPacketSendDelaySeconds!!, 1e-9)
+        assertEquals(3_000L, sample.packetsSent)
+    }
+
+    @Test
+    fun `per-unit delay is the delta of the totals over the delta of the count`() {
+        // 0.25 s of pacer wait spread over 500 packets = 0.5 ms per packet.
+        assertEquals(0.5, perDelta(1.75, 1.5, 3_500L, 3_000L)!!, 1e-9)
+    }
+
+    @Test
+    fun `per-unit delay is null without a previous sample, new units, or after a reset`() {
+        assertNull(perDelta(1.0, null, 10L, null))
+        assertNull(perDelta(1.0, 1.0, 10L, 10L))
+        assertNull(perDelta(0.1, 1.0, 5L, 10L))
+    }
 }

@@ -32,6 +32,14 @@ data class SenderSample(
     val framesSent: Long? = null,
     /** Cumulative retransmitted packets; null while not reported (Phase16). */
     val retransmittedPacketsSent: Long? = null,
+    /**
+     * Cumulative seconds packets waited in libwebrtc's pacer before going on
+     * the wire (`totalPacketSendDelay`) and the packets it counts over — a
+     * standing pacer queue shows as a steady per-packet delay. Null while
+     * not reported.
+     */
+    val totalPacketSendDelaySeconds: Double? = null,
+    val packetsSent: Long? = null,
 )
 
 /**
@@ -82,6 +90,8 @@ object SenderStats {
             totalEncodeTimeSeconds = (video["totalEncodeTime"] as? Number)?.toDouble(),
             framesSent = (video["framesSent"] as? Number)?.toLong(),
             retransmittedPacketsSent = (video["retransmittedPacketsSent"] as? Number)?.toLong(),
+            totalPacketSendDelaySeconds = (video["totalPacketSendDelay"] as? Number)?.toDouble(),
+            packetsSent = (video["packetsSent"] as? Number)?.toLong(),
         )
     }
 
@@ -113,6 +123,18 @@ object SenderStats {
  * re-auth path) restarts `bytesSent` at 0, and the plain delta reported a
  * large negative bitrate into the stats log and the `onVideoStats` consumer (mobile review, group B).
  */
+/**
+ * Milliseconds per unit from two cumulative samples (`total` seconds over a
+ * `count`): null until both pairs exist, on a counter reset, or with no new
+ * units.
+ */
+fun perDelta(total: Double?, previousTotal: Double?, count: Long?, previousCount: Long?): Double? {
+    if (total == null || previousTotal == null || count == null || previousCount == null) return null
+    val units = count - previousCount
+    val seconds = total - previousTotal
+    return if (units > 0 && seconds >= 0) seconds * MS_PER_SECOND / units else null
+}
+
 fun sendBitrateBps(previousBytes: Long, bytes: Long, previousAtMs: Long, nowMs: Long): Long =
     if (previousAtMs <= 0 || bytes < previousBytes) {
         0L

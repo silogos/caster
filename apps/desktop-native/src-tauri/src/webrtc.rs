@@ -155,6 +155,7 @@ impl MediaAnswerer {
 
         let frame_app = self.app.clone();
         pc.on_track(Some(Box::new(move |event: TrackEvent| {
+            let receiver = event.receiver;
             let track = event.track;
             match track {
                 // The mic pc's track: separate from game audio end to end
@@ -164,6 +165,9 @@ impl MediaAnswerer {
                 }
                 MediaStreamTrack::Video(video) => {
                     log::info!(target: "webrtc", "video track arrived — consuming frames");
+                    if crate::latency_probe::enabled() {
+                        spawn_receive_stats(receiver);
+                    }
                     let app = frame_app.clone();
                     // Its own thread (not the shared Tauri runtime): the
                     // per-frame copy + layer calls must not stall signaling
@@ -324,6 +328,54 @@ fn announce_input(app: &tauri::AppHandle, live: bool) {
     }
 }
 
+/// Latency probe: libwebrtc's own receive-side timing for the video stream,
+/// once a second — decode time, packet-to-decoded processing delay and the
+/// jitter buffer's hold, per frame. Splits "Mac decoded" into network/assembly
+/// vs decoder (docs/development/latency-measurement.md). Ends when the
+/// stream stops decoding frames.
+fn spawn_receive_stats(receiver: livekit::webrtc::rtp_receiver::RtpReceiver) {
+    use livekit::webrtc::stats::RtcStats;
+    const IDLE_POLLS_BEFORE_EXIT: u32 = 10;
+    let spawned = std::thread::Builder::new().name("video-stats".into()).spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
+        runtime.block_on(async move {
+            let mut last: Option<(u32, f64, f64, f64, u64)> = None;
+            let mut idle = 0;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let Ok(stats) = receiver.get_stats().await else { break };
+                let Some(v) = stats.iter().find_map(|s| match s {
+                    RtcStats::InboundRtp(i) if i.stream.kind == "video" => Some(i.inbound.clone()),
+                    _ => None,
+                }) else { continue };
+                let now = (v.frames_decoded, v.total_decode_time, v.total_processing_delay, v.jitter_buffer_delay, v.jitter_buffer_emitted_count);
+                if let Some(prev) = last {
+                    let frames = now.0.saturating_sub(prev.0);
+                    if frames == 0 {
+                        idle += 1;
+                        if idle >= IDLE_POLLS_BEFORE_EXIT { break }
+                    } else {
+                        idle = 0;
+                        let per = |d: f64| d / f64::from(frames) * 1000.0;
+                        let emitted = now.4.saturating_sub(prev.4).max(1) as f64;
+                        log::info!(
+                            target: "latency",
+                            "rx stats decode {:.1} ms/f, processing {:.1} ms/f, jitter buffer {:.1} ms/f",
+                            per(now.1 - prev.1),
+                            per(now.2 - prev.2),
+                            (now.3 - prev.3) / emitted * 1000.0
+                        );
+                    }
+                }
+                last = Some(now);
+            }
+        });
+    });
+    if let Err(e) = spawned {
+        log::warn!(target: "webrtc", "video stats thread: {e}");
+    }
+}
+
 /// The video frame loop for one stream (one cast): renders into the native
 /// window while the user has it open, keeps its visibility fresh from the
 /// main thread, and tells the UI when the cast goes live / ends.
@@ -339,6 +391,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     // Per-frame cost of convert + copy + enqueue (rendered frames only).
     let mut render_cost = std::time::Duration::ZERO;
     let mut rendered: u32 = 0;
+    let mut marker = crate::latency_probe::LumaMarker::default();
     loop {
         if !crate::video::is_current_stream(generation) {
             log::info!(target: "webrtc", "video stream replaced or closed — frame loop exits");
@@ -383,6 +436,17 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
                 let (y, u, v) = i420.data();
                 let (sy, su, sv) = i420.strides();
                 let followup = renderer.render_i420(w, h, range, y, u, v, sy, su, sv);
+                if crate::latency_probe::enabled() {
+                    let decoded_ms = crate::latency_probe::wall_ms();
+                    if let Some(white) = marker.observe(crate::latency_probe::mean_luma(y, sy, w, h)) {
+                        log::info!(
+                            target: "latency",
+                            "video {} decoded_ms={decoded_ms:.1} hold_ms={:.1}",
+                            if white { "white" } else { "black" },
+                            renderer.last_hold_ms()
+                        );
+                    }
+                }
                 render_cost += started.elapsed();
                 rendered += 1;
                 followup

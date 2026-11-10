@@ -1,5 +1,7 @@
 package com.zerofriction.localcast.capture
 
+import com.zerofriction.localcast.BuildConfig
+import com.zerofriction.localcast.debug.CaptureAgeProbe
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -149,6 +151,7 @@ class ScreenCapturer(
 
     /** Runs on the SurfaceTextureHelper's internal looper thread. */
     override fun onFrame(frame: VideoFrame) {
+        if (BuildConfig.DEBUG) CaptureAgeProbe.onFrame(frame.timestampNs)
         capturerObserver?.onFrameCaptured(frame)
     }
 

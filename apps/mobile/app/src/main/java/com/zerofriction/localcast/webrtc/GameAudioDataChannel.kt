@@ -1,5 +1,6 @@
 package com.zerofriction.localcast.webrtc
 
+import com.zerofriction.localcast.BuildConfig
 import android.util.Log
 import org.webrtc.DataChannel
 import org.webrtc.PeerConnection
@@ -118,6 +119,25 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
         }
     }
 
+    // Debug-only latency probe: how full the SCTP send buffer runs. A buffer
+    // pinned near MAX_BUFFERED_BYTES is a standing queue of that much audio.
+    private var bufferedSum = 0L
+    private var bufferedMax = 0L
+    private var bufferedSamples = 0
+    private var bufferedWindowStartMs = 0L
+
+    private fun noteBuffered(bytes: Long) {
+        val now = System.currentTimeMillis()
+        if (bufferedWindowStartMs == 0L) bufferedWindowStartMs = now
+        bufferedSum += bytes
+        bufferedMax = maxOf(bufferedMax, bytes)
+        bufferedSamples += 1
+        if (now - bufferedWindowStartMs >= 1_000L) {
+            Log.i("LatencyTest", "dc buffered avg=${bufferedSum / bufferedSamples} max=$bufferedMax bytes, backpressure drops=${droppedByBackpressure.get()}")
+            bufferedSum = 0; bufferedMax = 0; bufferedSamples = 0; bufferedWindowStartMs = now
+        }
+    }
+
     private fun drain() {
         while (!closed.get()) {
             val chunk = try {
@@ -136,6 +156,7 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
                 negotiator?.pollAnnounce()?.let { text ->
                     current.send(DataChannel.Buffer(ByteBuffer.wrap(text.toByteArray()), false))
                 }
+                if (BuildConfig.DEBUG) noteBuffered(current.bufferedAmount())
                 if (current.bufferedAmount() > MAX_BUFFERED_BYTES) {
                     droppedByBackpressure.incrementAndGet()
                     continue
