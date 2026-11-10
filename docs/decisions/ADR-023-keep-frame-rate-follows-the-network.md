@@ -1,6 +1,6 @@
 # ADR-023: "Keep frame rate" lets the video bitrate fall below the window
 
-- **Status:** accepted (2026-11-11). Built and unit-tested; **not yet measured on-device** (see Consequences).
+- **Status:** accepted (2026-11-11). Built, unit-tested and measured in one cast on-device: the bitrate and resolution follow the network and the frame rate holds; **the audio benefit is not shown** (see Consequences).
 
 ## Context
 
@@ -33,7 +33,12 @@ Under **Keep frame rate** the sender's floor is `KEEP_FRAME_RATE_FLOOR_BPS` = 1 
 ## Consequences
 
 - **Diagnostics:** `sender targets: <floor>–<ceiling> kbps, start <n> kbps, under pressure: <strategy>` on every apply, and the 1 Hz stats line carries libwebrtc's current target (`(target N)`), so a cast that backed off is visible.
-- **Not verified on-device.** The claim to test, with the gap probes: under "Keep frame rate", in the stretches where the uplink is short, the pacer wait stays low, the frame rate holds and the audio does not starve, while the sent bitrate and resolution fall.
+- **Measured in one cast (2026-11-11, 14 minutes, a streamed video on a cool tablet;** [latency-measurement.md](../development/latency-measurement.md), "With 'Keep frame rate' below the window"**).** The claim was: where the uplink is short, the sent bitrate and resolution fall, the frame rate holds, the pacer wait stays low and the audio does not starve.
+  - *Bitrate and resolution fall:* yes. The target went down to 2.3 Mbps and the frame to 1280×800, and both came back.
+  - *The frame rate holds:* yes for 60 fps content: 59–60 fps in the 111 seconds under the old 8 Mbps floor. A 4K stream ran at 38–51 fps whatever the bitrate; that is not explained.
+  - *The pacer wait stays low:* partly. It still reached 60 ms or more in 110 of 797 seconds.
+  - *The audio does not starve:* **no.** 5.7 underruns a minute, at the same rate with the video queue empty as with it backed up. The video backlog is not the only thing that delays the audio.
+- **Not compared:** no cast of the same content under "Keep resolution", no real game, no hot tablet.
 - **Not addressed:** audio still shares the video's transport with no priority of its own. If the uplink is short for other reasons than the video's own volume, audio can still be late.
 - **The presets are unchanged.** Sharp still defaults to "Keep resolution"; a user who wants this behaviour picks "Keep frame rate". Whether a preset should default to it is a separate product decision.
 - **Revisit if:** the picture at the 1 Mbps floor is unusable (raise the floor), or casts start soft because the start bitrate is refused (the log line shows it).
