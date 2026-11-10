@@ -139,8 +139,8 @@ def struggle_field(parent, selected):
         texts = vstack(option, "texts", gap=1, h="fill")
         text(texts, title, 14, ON, "Medium", line=20)
         text(texts, meaning, 12.5, VARIANT, width=CARD_INNER_W - 24 - 20 - 12, line=18)
-    text(f, "One answer for a slow network, a hot phone and an overloaded encoder. Quality comes back by itself.",
-         13, VARIANT, width=CARD_INNER_W, line=19)
+    text(f, "One answer for a slow network, a hot phone and an overloaded encoder. One step at a time, at most "
+            "two steps down, and it comes back by itself.", 13, VARIANT, width=CARD_INNER_W, line=19)
     return f
 
 
@@ -217,7 +217,7 @@ nodes[PAGE] = {"id": PAGE, "name": "Mobile design v2 · custom profiles (draft, 
                "background": hexc(PAGE_BG), "flows": [],
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
-page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 2, NOT BUILT (AMBER CONSOLE TOKENS) · NO ADVANCED PAGE", 40, 30,
+page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 3 (AMBER CONSOLE TOKENS) · PROFILES BUILT; RANGE SLIDER, ONE FIELD AND ITS RULE NOT YET", 40, 30,
              13, "Bold", ON)
 COLUMN = PHONE_W + PHONE_GAP
 X = [40 + i * COLUMN for i in range(6)]
@@ -225,6 +225,7 @@ for x, label in zip(X, ("P1 · HOME — PICK A PROFILE", "P2 · EDIT A PROFILE",
                         "P4 · ROW MENU & DELETE", "P5 · WHERE ADVANCED WENT",
                         "OPEN QUESTIONS — WHAT THIS DRAFT ASSUMES")):
     page_caption(PAGE, label, x, 78)
+page_caption(PAGE, "THE RULE — WHO LOWERS WHAT, AND WHEN", X[5] + 560 + PHONE_GAP, 78)
 
 # ======== P1 · Home: the profile list ========
 p1 = phone(PAGE, "P1 Home · profile list", X[0], TOP, grow=True)
@@ -247,7 +248,7 @@ for i, (name, spec, struggle, intent) in enumerate(BUILT_IN):
     profile_row(profiles, name, spec, struggle, intent)
 hairline(profiles, CONTENT_W)
 zone(profiles, "YOUR PROFILES")
-profile_row(profiles, "Stream 60", "1920 px · 60 fps · 6–12 Mbps", "smooth", selected=True, more=True)
+profile_row(profiles, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "smooth", selected=True, more=True)
 hairline(profiles, CONTENT_W)
 profile_row(profiles, "Custom 1", "1920 px · 60 fps · 8–12 Mbps", "sharp", more=True)
 hairline(profiles, CONTENT_W)
@@ -272,13 +273,19 @@ mono(pic, "PICTURE", 11, VARIANT, "Medium", spacing=1.1, line=14)
 field(pic, "Resolution", [("1920 px", True), ("1280 px", False), ("960 px", False)])
 field(pic, "Frame rate", [("60 fps", True), ("30 fps", False)])
 bitrate = vstack(pic, "field · Bitrate", gap=8, h="fill")
-text(bitrate, "Bitrate — up to 12 Mbps", 13, VARIANT, line=18)
-slider = hstack(bitrate, "slider", cross="center", h="fill", v="fixed", height=32)
-SLIDER_ON_W = 173  # (12 − 2) / (20 − 2) of the track left of the thumb
+text(bitrate, "Bitrate — 4 to 12 Mbps", 13, VARIANT, line=18)
+# One slider, two thumbs: the least and the most the video may use (1–20 Mbps).
+slider = hstack(bitrate, "range slider", cross="center", h="fill", v="fixed", height=32)
+TRACK_W = CARD_INNER_W - 2 * 20  # the track between and beside the two 20dp thumbs
+SLIDER_LOW_W = round(TRACK_W * (4 - 1) / (20 - 1))
+SLIDER_ON_W = round(TRACK_W * (12 - 4) / (20 - 1))
+rect(slider, "track-below", SLIDER_LOW_W, 4, ON, opacity=0.14, radius=2)
+ellipse(slider, "thumb · least", 20, PRIMARY)
 rect(slider, "track-on", SLIDER_ON_W, 4, PRIMARY, radius=2)
-ellipse(slider, "thumb", 20, PRIMARY)
-rect(slider, "track-off", CARD_INNER_W - SLIDER_ON_W - 20, 4, ON, opacity=0.14, radius=2)
-text(bitrate, "The most the video may use, 2 to 20 Mbps.", 13, VARIANT, width=CARD_INNER_W, line=19)
+ellipse(slider, "thumb · most", 20, PRIMARY)
+rect(slider, "track-above", TRACK_W - SLIDER_LOW_W - SLIDER_ON_W, 4, ON, opacity=0.14, radius=2)
+text(bitrate, "The cast stays inside this range, 1 to 20 Mbps. It moves within it by itself, second by second.",
+     13, VARIANT, width=CARD_INNER_W, line=19)
 behaviour = card(p2, "card · behaviour")
 beh = vstack(behaviour, "behaviour", gap=16, pad=(14, 16, 16, 16), h="fill")
 mono(beh, "BEHAVIOUR", 11, VARIANT, "Medium", spacing=1.1, line=14)
@@ -314,7 +321,7 @@ text(sheet, "New profile", 20, ON, "SemiBold", line=26)
 name_field(sheet, "Stream 60", focused=True)
 field(sheet, "Start from", [[("Current values", True), ("Cool", False), ("Balanced", False)],
                             [("Performance", False), ("Sharp", False), ("Custom 1", False)]], width=CONTENT_W)
-readout(sheet, ["1920 px · 60 fps · 6–12 Mbps", "Keep it smooth · Hardware · H.264 High"])
+readout(sheet, ["1920 px · 60 fps · 4–12 Mbps", "Keep it smooth · Hardware · H.264 High"])
 buttons = hstack(sheet, "buttons", gap=12, main="max", cross="center", h="fill")
 text_button(buttons, "Cancel", ON)
 create = hstack(buttons, "button · Create", pad=(0, 24, 0, 24), main="center", cross="center", v="fixed", height=48,
@@ -329,7 +336,7 @@ text(head, "Only your own profiles have one. Built-in profiles are read-only: co
      VARIANT, width=CONTENT_W, line=19)
 menu_card = card(p4, "card · profile")
 nodes[menu_card]["clip"] = True
-profile_row(menu_card, "Stream 60", "1920 px · 60 fps · 6–12 Mbps", "smooth", selected=True, more=True)
+profile_row(menu_card, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "smooth", selected=True, more=True)
 anchor = hstack(p4, "menu anchor", main="max", h="fill")
 menu = vstack(anchor, "menu", pad=(6, 0, 6, 0), h="fixed", width=200, fill=MENU_BG, radius=14, stroke=OUTLINE)
 for label, color in (("Edit", ON), ("Duplicate", ON), ("Delete", BAD)):
@@ -352,9 +359,23 @@ text_button(dialog_buttons, "Delete", BAD)
 p5 = phone(PAGE, "P5 Home · on air, no Advanced", X[4], TOP, grow=True)
 home_top(p5, "ON AIR")
 status = card(p5, "card · status")
-zone(status, "STATUS · CASTING ONLY")
-lamps = vstack(status, "lamps", gap=8, pad=(0, 16, 14, 16), h="fill")
-readout(lamps, ["Encoder in use: c2.qti.avc.encoder"])
+head_row = hstack(status, "status head", main="spaceBetween", cross="center", pad=(14, 16, 8, 16), h="fill")
+mono(head_row, "STATUS", 11, VARIANT, "Medium", spacing=1.1, line=14)
+live = hstack(head_row, "live readout", gap=8, cross="center")
+mono(live, "00:12:41", 12, PRIMARY, "Medium", spacing=0.2, line=16)
+mono(live, "720p60 · 6.2M", 12, VARIANT, "Medium", spacing=0.2, line=16)
+lamps = vstack(status, "lamps", gap=10, pad=(4, 16, 14, 16), h="fill")
+lowered = hstack(lamps, "lamp · lowered", gap=10, h="fill")
+ellipse(lowered, "led", 9, PRIMARY)
+lowered_text = vstack(lowered, "texts", gap=2, h="fill")
+text(lowered_text, "Lowered to 1280 px: the encoder couldn't keep up.", 13, ON, width=CARD_INNER_W - 19, line=19)
+text(lowered_text, "Comes back by itself.", 13, VARIANT, width=CARD_INNER_W - 19, line=19)
+restore = hstack(lowered_text, "restore", pad=(2, 0, 0, 0))
+text_button(restore, "Restore now")
+for lamp, tone in (("Phone temperature: hot.", PRIMARY), ("Encoder: c2.qti.avc.encoder", VARIANT)):
+    row = hstack(lamps, f"lamp · {lamp}", gap=10, cross="center", h="fill")
+    ellipse(row, "led", 9, tone, opacity=1.0 if tone == PRIMARY else 0.5)
+    text(row, lamp, 13, ON, line=19)
 audio_card(p5)
 moved = vstack(p5, "where each setting went", gap=10, h="fill")
 text(moved, "Where each Advanced setting went", 15, ON, "SemiBold", line=20)
@@ -399,9 +420,8 @@ for number, (question, drawn) in enumerate([
     ("Should a new profile start with “Keep frame rate”?",
      "A new profile always copies something, “Current values” by default (P3), so it has no default of its own."),
     ("NEW · “Under network pressure” and “Automatic quality” as one field?",
-     "Drawn as one (P2). It needs a new rule, not built and not measured: quality drops when the cast really "
-     "struggles (the encoder cannot keep up, frames are dropped), the temperature alone is only an emergency "
-     "brake, and quality comes back by itself. Built 2026-11-11 as two settings until that rule exists."),
+     "Drawn as one (P2), with the rule beside this list. Agreed 2026-11-11; not built and not measured. Until "
+     "it is, the app keeps two settings."),
     ("NEW · Does the Advanced page go?",
      "Drawn as gone: no gear on Home (P1), and P5 shows where each of its settings went."),
     ("NEW · Today's “Automatic quality: Off” on upgrade?",
@@ -423,8 +443,46 @@ text(removed, "Decided 2026-11-11: the setting goes. VBR never took effect (libw
               "follows the network through the range and “When the cast struggles”. A profile has no such field "
               "(P2).", 12.5, VARIANT, width=QUESTIONS_W - 40, line=18)
 
+# ======== The rule behind "When the cast struggles" ========
+RULE_W = 560
+rule = vstack(PAGE, "The rule · when the cast struggles", gap=12, pad=(20, 20, 20, 20), h="fixed", width=RULE_W,
+              fill=SURFACE, radius=18, stroke=OUTLINE)
+nodes[rule]["child_layout"]["absolute"] = False
+text(rule, "The rule behind the one field", 20, ON, "SemiBold", line=26)
+text(rule, "Agreed with the product owner 2026-11-11. Every number is a starting guess to be measured in a real "
+           "game cast.", 13, VARIANT, width=RULE_W - 40, line=19)
+for heading, lines in (
+    ("Who moves what",
+     ["Bitrate: WebRTC, by itself and within seconds, inside the profile's range.",
+      "Resolution and frame rate: the app, one step at a time. WebRTC no longer changes either."]),
+    ("The steps (at most two below the profile)",
+     ["Keep it smooth: resolution down, then resolution down again.",
+      "Keep it sharp: 60 → 30 fps, then resolution down.",
+      "Balanced: resolution down, then 60 → 30 fps.",
+      "Don't adjust: none.",
+      "Resolution steps are the app's own: 1920 → 1280 → 960 px."]),
+    ("Down one step, when one of these holds for about 10 s",
+     ["The encoder cannot keep up (95% of the time it has).",
+      "A tenth of the frames are dropped.",
+      "Video packets wait 60 ms or more to be sent.",
+      "The bitrate sits at the profile's least."]),
+    ("Up one step",
+     ["After 30 s with none of those, and the bitrate clear of the least."]),
+    ("Guards",
+     ["20 s between two steps, either way.",
+      "Temperature alone does nothing until CRITICAL: then one step down, and no step up while it lasts.",
+      "“Restore now” and a profile pick go back to the profile's values and start over."]),
+):
+    block = vstack(rule, f"rule · {heading}", gap=3, h="fill")
+    text(block, heading, 13, ON, "Medium", width=RULE_W - 40, line=18)
+    for line in lines:
+        text(block, "• " + line, 12.5, VARIANT, width=RULE_W - 40, line=18)
+
 for f in (p1, p2, p3, p4, p5, questions):
     autolayout.solve(nodes, f, text_height)
+nodes[rule]["transform"][4] = float(X[5] + QUESTIONS_W + PHONE_GAP)
+nodes[rule]["transform"][5] = float(TOP)
+autolayout.solve(nodes, rule, text_height)
 
 # Notes sit under each phone, so they are placed once the phones' heights are known.
 for f, title, lines in (
@@ -434,6 +492,8 @@ for f, title, lines in (
                 "The Audio card is only its switches."]),
     (p2, "P2", ["Picture, behaviour and encoder live together: a profile is the whole answer to “what will this "
                 "cast do”.",
+                "The bitrate is one slider with two thumbs: the least and the most. The sender never goes under "
+                "the least, whatever the choice below (there was a hidden 1 Mbps floor).",
                 "One field replaces “Under network pressure” and “Automatic quality”. “Don't adjust” is the "
                 "old Automatic quality: Off, and says what it costs.",
                 "The codec joins the H.264 profile it belongs with. No Bitrate mode: removed.",
@@ -444,6 +504,8 @@ for f, title, lines in (
     (p4, "P4", ["Rename is the Name field in Edit, not a separate item.",
                 "Deleting the selected profile falls back to Balanced, the app's default."]),
     (p5, "P5", ["Home while casting. The encoder readout moves to Status, where the cast's other facts are.",
+                "A step down says what was lowered and why, and that it comes back. “Restore now” is for not "
+                "waiting.",
                 "The list under the cards is an annotation, not part of the screen."]),
 ):
     n = notes(PAGE, title, lines, nodes[f]["transform"][4], TOP + nodes[f]["height"] + NOTES_GAP)
