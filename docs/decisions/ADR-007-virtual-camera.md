@@ -1,5 +1,6 @@
 # ADR-007: Virtual camera output — re-publishing the cast as a webcam (Windows first)
 
+- **Amended by [ADR-021](ADR-021-native-syphon-output.md) (2026-11-10):** the native receiver publishes Syphon from inside the app (no helper process, no CPU copy), switched on the receiver only.
 - **Status:** accepted (2026-10-30) — accepts the draft [proposal](../proposals/virtual-camera.md) with user refinements recorded here. Tracking: issue #69.
 
 ## Context

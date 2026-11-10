@@ -7,6 +7,7 @@ mod power;
 mod protocol;
 mod settings;
 mod signaling;
+mod syphon;
 mod tray;
 mod video;
 mod webrtc;
@@ -94,12 +95,25 @@ fn set_game_audio(
     persist: bool,
 ) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
-    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted };
+    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted, ..*current };
     audio::set_game_gain(current.effective_game_gain());
     if persist {
         if let Err(e) = settings::save(&controls.path, &current) {
             log::warn!(target: "settings", "not saved: {e}");
         }
+    }
+    Ok(*current)
+}
+
+/// The Syphon output for OBS (ADR-021) — a receiver control. The saved
+/// value is what was asked for; the returned one is what is running (a Mac
+/// without a Metal device cannot start it).
+#[tauri::command]
+fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
+    let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
+    current.syphon_output = syphon::set_enabled(enabled);
+    if let Err(e) = settings::save(&controls.path, &current) {
+        log::warn!(target: "settings", "not saved: {e}");
     }
     Ok(*current)
 }
@@ -186,6 +200,7 @@ pub fn run() {
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
             audio::set_game_gain(saved.effective_game_gain());
+            let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && syphon::set_enabled(true), ..saved };
             app.manage(ReceiverControls { path: settings_path, current: Mutex::new(saved) });
             // The first session exists before the window can ask for it.
             let mut store = pairing::SessionStore::new(pairing::SESSION_TTL_SECONDS);
@@ -233,6 +248,7 @@ pub fn run() {
             regenerate_pairing,
             receiver_settings,
             set_game_audio,
+            set_syphon_output,
             open_video,
             close_video
         ])

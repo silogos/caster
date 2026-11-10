@@ -235,7 +235,7 @@ extern "C" {
 }
 
 /// The host clock now, in seconds — the pacer's and the layer's time line.
-fn host_now() -> f64 {
+pub(crate) fn host_now() -> f64 {
     unsafe { CMClock::host_time_clock().time().seconds() }
 }
 
@@ -550,6 +550,11 @@ impl Renderer {
     /// `Some(followup)` when it was dropped, `None` when it should render.
     /// Saves the decoder-buffer → I420 conversion for every hidden frame.
     pub fn drop_if_hidden(&mut self) -> Option<Followup> {
+        // The Syphon output is being read: it needs the frame even when
+        // the window does not (ADR-021).
+        if crate::syphon::wants_frames() {
+            return None;
+        }
         // Closed (or never opened): nothing to render, nothing to raise.
         let Some(vw) = VIDEO_WINDOW.get().filter(|_| is_open()) else { return Some(Followup::None) };
         if WINDOW_VISIBLE.load(Ordering::Relaxed) {
@@ -568,16 +573,19 @@ impl Renderer {
         self.pacer.take_window()
     }
 
-    /// Copies one I420 frame into a pooled NV12 buffer and enqueues it, due
-    /// when the pacer says.
+    /// Copies one I420 frame into a pooled NV12 buffer, due when the pacer
+    /// says: enqueued on the window's layer while it is visible, handed to
+    /// the Syphon output while that is being read — the same buffer for both.
     #[allow(clippy::too_many_arguments)]
     pub fn render_i420(&mut self, width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
-        let Some(vw) = VIDEO_WINDOW.get() else { return Followup::None };
         if width == 0 || height == 0 {
             return Followup::None;
         }
-        if !WINDOW_VISIBLE.load(Ordering::Relaxed) {
-            return self.drop_hidden(vw);
+        let window = VIDEO_WINDOW.get();
+        let visible = window.is_some() && WINDOW_VISIBLE.load(Ordering::Relaxed);
+        let syphon = crate::syphon::wants_frames();
+        if !visible && !syphon {
+            return window.map_or(Followup::None, |vw| self.drop_hidden(vw));
         }
         let arrival = host_now();
         let due = self.pacer.due(arrival);
@@ -587,9 +595,21 @@ impl Renderer {
             return Followup::None;
         };
         copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
-        let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) else { return Followup::None };
-        self.enqueue(vw, &sample);
-        Followup::None
+        if syphon {
+            crate::syphon::submit(&pixel_buffer, width, height, due);
+        }
+        match window {
+            Some(vw) if visible => {
+                if let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) {
+                    self.enqueue(vw, &sample);
+                }
+                Followup::None
+            }
+            // Syphon only: an open but covered window still gets its
+            // hidden-frame housekeeping (flush, raise once).
+            Some(vw) if is_open() => self.drop_hidden(vw),
+            _ => Followup::None,
+        }
     }
 
     /// A hidden window is not composited: enqueued samples would pin their
@@ -792,6 +812,14 @@ fn copy_i420_to_nv12(pb: &CVPixelBuffer, width: u32, height: u32, y: &[u8], u: &
         }
         CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags::empty());
     }
+}
+
+/// One NV12 buffer filled from I420 planes, as the frame thread makes them.
+#[cfg(test)]
+pub(crate) fn test_nv12_buffer(width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8]) -> Option<CFRetained<CVPixelBuffer>> {
+    let buffer = Renderer::new().pixel_buffer(width, height, range)?;
+    copy_i420_to_nv12(&buffer, width, height, y, u, v, width, width.div_ceil(2), width.div_ceil(2));
+    Some(buffer)
 }
 
 fn create_pool(width: u32, height: u32, range: VideoRange) -> Option<CFRetained<CVPixelBufferPool>> {

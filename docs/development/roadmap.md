@@ -305,6 +305,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** not watched on screen through a full ten-minute cast.
 
+## Feature 2026-11x — Syphon output on the native receiver ⏳ built and tested; live cast and OBS not verified yet (2026-11-10)
+*(Not a numbered phase: the first Electron-only feature ported for issue #152.)*
+**Scope:** "Output to OBS → Syphon" in the receiver's window publishes the cast as a Syphon server from inside the app: the frame's own pixel buffer is converted on the GPU and published at the pacer's due time, only while a client reads it, also with the video window closed; a "No input video" still between casts — [ADR-021](../decisions/ADR-021-native-syphon-output.md). The framework is vendored under `apps/desktop-native/vendor/syphon/`.
+
+**Accept:** desktop `cargo test` 87 (+6: publisher ordering and due times, late frame, full queue, tick, on/read gate, and one end-to-end bridge test through the GPU). An independent Syphon client sees the server and the idle still.
+
+**Not done:** a live cast through the output and OBS's own Syphon Client source have not been checked.
+
 ## Definition of Done (every phase)
 
 ```text

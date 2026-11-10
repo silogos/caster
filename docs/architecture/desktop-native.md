@@ -16,10 +16,11 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `webrtc.rs` | One `MediaAnswerer` **per pc** (`media`, `mic`): answer, ICE both ways, the `game-audio` DataChannel, the fallback track, the video frame loop. | `audio`, `video` |
 | `audio.rs` | The game-audio ear path: source selection, ring, CPAL playout. | CoreAudio |
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
+| `syphon.rs` + `native/syphon_bridge.m` | The Syphon output for OBS: a publisher thread that releases each frame at its due time, and the Objective-C bridge that converts the frame's pixel buffer on the GPU and publishes it (ADR-021). | `video`, Metal, Core Image, `Syphon.framework` |
 | `pacing.rs` | When each frame shows: a schedule with a bounded 50 ms delay that evens out Wi-Fi delivery jitter (ADR-017). Pure — no I/O. | — |
 | `latency_probe.rs` | Measurement only, off unless `ZFC_LATENCY_PROBE=1`: marks when the latency test pattern's flips are decoded and its clicks arrive ([latency-measurement.md](../development/latency-measurement.md)). | — |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
-| `settings.rs` | The receiver's own persisted controls (game volume, mute) — `native-receiver.json` beside the trust store. | filesystem |
+| `settings.rs` | The receiver's own persisted controls (game volume, mute, the Syphon output) — `native-receiver.json` beside the trust store. | filesystem |
 | `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |
 | `power.rs` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected. | IOKit |
 
@@ -70,6 +71,8 @@ The 1 Hz `dc:` log line carries `underruns` (with the ms of silence played while
 
 `NativeVideoStream` → `to_i420()` → CPU copy into a pooled NV12 `'420v'` or `'420f'` (the decoded range, below) CVPixelBuffer → `CMSampleBuffer` (pts = the pacer's due time on the host clock) → `AVSampleBufferDisplayLayer` (`resizeAspect`, on a host-clock timebase) in its own NSWindow.
 
+**Syphon output (2026-11-10, [ADR-021](../decisions/ADR-021-native-syphon-output.md)).** With "Output to OBS → Syphon" on, the cast is also a Syphon server named "Zero-Friction Local Cast". The frame thread hands the NV12 buffer it made for the window to `syphon.rs` together with the pacer's due time; a publisher thread releases it then, and the bridge converts it to a BGRA texture on the GPU. Frames are taken only while a client is connected, and then also while the video window is closed or covered. Between casts the server shows a "No input video" still. The `syphon` log scope reports clients coming and going, frames published and dropped, and the average publish time.
+
 **Frame pacing (2026-11-09, [ADR-017](../decisions/ADR-017-receiver-frame-pacing.md)).** libwebrtc runs with zero playout delay (ADR-015), so frames leave the decoder as unevenly as Wi-Fi delivered them. During PUBG at 60 fps that meant bursts 2–5 ms apart, then 50–160 ms gaps, while the phone sent evenly. Shown on arrival, that was the stutter. `pacing.rs` gives each frame a slot one estimated frame interval after the previous one: never before the frame arrives, never more than 50 ms after it. The schedule drains 0.5 % faster than the stream, so it returns to the live edge when Wi-Fi is calm. The layer's timebase is the host clock, so the pts is the moment of display. libwebrtc's own jitter buffer was smoother, but its delay was felt; our cap keeps the delay at ~30 ms on average. Gaps longer than 50 ms still show. The `video:` log line reports `pacing delay avg/max`, `late` and `capped`.
 
 **Colour range, per stream (2026-11-09).** The display layer takes the YCbCr range from the pool's pixel format, and a wrong guess is visible. Full-range data read as video range crushes dark tones to black and clips highlights: the phone app's `#161b22` background showed as near black, with a measured luma of 27 where video range would be 39. Video-range data read as full range turns blacks grey. Neither range can be assumed:
@@ -110,7 +113,8 @@ Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` 
 ## Known limitations
 
 - macOS only (the video module).
-- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), virtual camera and audio routing (proto 2), launch at login, frameless window / session-info window.
+- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), audio routing (proto 2), launch at login, frameless window / session-info window.
+- The virtual camera is Syphon only (OBS on the same Mac) and is switched on the receiver; the phone's proto-2 `vc-*` messages are not answered ([ADR-021](../decisions/ADR-021-native-syphon-output.md)).
 - ~0.7 % of video frames dropped at the pool bound (open).
 - The video abort fix held a 6.4-minute run with the window hidden most of the time (the aborts' trigger); longer sessions are still worth watching.
 - A mic pc the phone tears down is noticed only by its ICE failing; it is closed when the next mic offer arrives.
