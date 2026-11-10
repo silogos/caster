@@ -187,6 +187,33 @@ What the existing log settles:
 - 3 underruns (10 ms of silence), each in a second whose longest arrival pause was 31–43 ms: a pause of a capture block (21 ms) plus the 15 ms margin starves the ring.
 - Even idle, the network and the Mac's receive path add up to ~10 ms to the phone's rhythm.
 
-**Not done:** the same three numbers with a game running, which is the measurement that places the lateness (Android's capture, the app's send thread, or Wi-Fi / the Mac).
+**With a game running (same devices, 6.4 minutes, 1920×1200 60 fps, 8–12 Mbps, tablet at thermal SEVERE):** 128 underruns, 1.8 s of silence.
+
+| Point | Longest pause per second: p50 / p90 / p99 / max | Seconds with a pause ≥ 30 ms |
+|---|---|---|
+| Capture → app | 24 / 28 / 33 / 42 ms | 19 of 382 |
+| App → channel | 29 / 34 / 59 / 705 ms | 140 of 381 |
+| Arrival on the Mac | 32 / 65 / 149 / 749 ms | 258 of 381 |
+
+The same cast in half-minute steps, against the video sender's own queue (libwebrtc's pacer wait per packet, from the phone's stats line):
+
+| Half minute | Video | Pacer wait | Arrival pause p90 / max | Underruns |
+|---|---|---|---|---|
+| 00:55:30 – 00:56:30 | 1.6 Mbps, ~40 fps | 0 ms | 27–28 / 38 ms | 0 |
+| 00:56:30 | 3.4 Mbps, 16 fps | 294 ms | 100 / 138 ms | 6 |
+| 00:57:00 | 6.7 Mbps, 28 fps | 61 ms | 104 / 251 ms | 9 |
+| 00:57:30 | 7.7 Mbps, 28 fps | 206 ms | 84 / 749 ms | 67 |
+| 00:58:00 | 8.2 Mbps, 37 fps | 590 ms | 95 / 435 ms | 38 |
+| 00:58:30 | 9.1 Mbps, 59 fps | 90 ms | 86 / 93 ms | 3 |
+| 00:59:00 – 01:01:30 (five steps) | 10.2–10.8 Mbps, 59 fps | 2–7 ms | 33–41 / 37–46 ms | 0 |
+| 01:01:30 | 10.0 Mbps, 58 fps | 2 ms | 55 / 149 ms | 2 |
+| 01:02:00 | 6.7 Mbps, 32 fps | 226 ms | 59 / 122 ms | 3 |
+
+- **Android's capture is not the source.** Blocks reach the app almost as evenly as on an idle tablet (p90 28 vs 25 ms).
+- **A game at full quality is not the source either:** two and a half minutes at 10–11 Mbps and 59 fps had no underrun.
+- **The audio is late when the video sender is backed up.** Every half minute with a pacer wait over 50 ms had underruns; of the eight under 10 ms, seven had none. In the worst minute the phone's DataChannel send buffer filled to its cap and the app dropped 106 chunks (1.06 s of audio) by backpressure, so the audio was already waiting on the phone, behind the same uplink as the video.
+- A small part shows in the app's own send call (p90 34 ms, with two calls blocked for 319 and 705 ms in that minute); most of it appears after the hand-over.
+
+**Not settled:** whether the video backlog delays the audio, or one cause (a slow Wi-Fi uplink at that moment) delays both. Either way the audio shares the video's transport and has no priority on it. The first experiment is a lower video bitrate floor (the Sharp preset holds 8 Mbps), which lets libwebrtc back the video off when the uplink cannot carry it.
 
 **Limitations:** one device, one network; the phone vsync and Mac refresh terms are assumed, not measured; audio stops at the ring, before the Mac's output device.
