@@ -39,7 +39,7 @@ extern "C" {
 
 /// The name OBS lists. The same as the Electron receiver's, so a scene
 /// made for one keeps working with the other.
-pub const SERVER_NAME: &str = "Zero-Friction Local Cast";
+pub const SERVER_NAME: &str = "Caster";
 const NO_INPUT_TEXT: &str = "No input video";
 /// Frames waiting for their due time. The pacer holds a frame at most
 /// 50 ms (three frames at 60 fps); a fuller queue means publishing is

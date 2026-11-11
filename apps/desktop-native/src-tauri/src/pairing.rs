@@ -24,6 +24,7 @@ const QR_PAYLOAD_VERSION: u32 = 1;
 const QR_APP_TAG: &str = "zfc";
 
 /// The Electron app's userData directory — shared on purpose (see above).
+// The folder keeps the product's first name: renaming it would lose every saved pairing.
 const APP_SUPPORT_DIR: &str = "Library/Application Support/Zero-Friction Local Cast";
 const TRUST_FILE: &str = "trust.json";
 const DESKTOP_ID_FILE: &str = "desktop-id";

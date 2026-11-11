@@ -156,7 +156,7 @@ def home_top(parent, annunciator="STANDBY"):
     bar = hstack(parent, "app bar", gap=10, cross="center", h="fill", v="fixed", height=40)
     brand = hstack(bar, "brand", gap=8, cross="center", h="fill")
     rect(brand, "brand-mark", 24, 24, ON, opacity=0.08, radius=8)
-    mono(brand, "LOCAL CAST", 13, ON, "Medium", spacing=1.4, line=16)
+    mono(brand, "Caster", 13, ON, "Medium", spacing=1.4, line=16)
     ann = hstack(bar, "annunciator", pad=(5, 14, 5, 14), cross="center", fill=ON, opacity=0.06, radius=13)
     mono(ann, annunciator, 11, VARIANT, "Bold", spacing=1.0, line=16)
     desktop = hstack(parent, "desktop", main="spaceBetween", cross="center", h="fill")
@@ -453,11 +453,89 @@ for heading, lines in (
     for line in lines:
         text(block, "• " + line, 12.5, VARIANT, width=RULE_W - 40, line=18)
 
+# ======== The name and the icon ========
+# The three marks the product already draws, each in the two colours on the table.
+LAUNCHER_PATHS = (  # apps/mobile ic_launcher_foreground.xml, viewport 108, drawn at its 0.75 group scale
+    "M28,24 h52 a5,5 0 0 1 5,5 v30 a5,5 0 0 1 -5,5 h-52 a5,5 0 0 1 -5,-5 v-30 a5,5 0 0 1 5,-5 z",
+    "M20,68 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z",
+    "M23,64 a7,7 0 0 1 7,7 h-3 a4,4 0 0 0 -4,-4 z",
+    "M23,58 a13,13 0 0 1 13,13 h-3 a10,10 0 0 0 -10,-10 z",
+    "M23,52 a19,19 0 0 1 19,19 h-3 a16,16 0 0 0 -16,-16 z",
+)
+CAST_GLYPH_PATH = (  # apps/mobile ic_cast.xml, viewport 24: the notification and in-app glyph
+    "M21,3H3c-1.1,0-2,0.9-2,2v3h2V5h18v14h-9v2h9c1.1,0,2-0.9,2-2V5c0-1.1-0.9-2-2-2z M1,18v3h3C4,19.34,2.66,18,1,18z "
+    "M1,14v2c2.76,0,5,2.24,5,5h2C8,17.13,4.87,14,1,14z M1,10v2c4.97,0,9,4.03,9,9h2C12,14.92,7.07,10,1,10z"
+)
+DESKTOP_MARK_PATHS = (  # apps/desktop-native ui/index.html .brand-tile, viewBox 24, stroked
+    "M5,5 H19 A2,2 0 0 1 21,7 V17 A2,2 0 0 1 19,19 H5 A2,2 0 0 1 3,17 V7 A2,2 0 0 1 5,5 Z",
+    "M3,15 a4,4 0 0 1 4,4",
+    "M3,11 a8,8 0 0 1 8,8",
+)
+ICON_ORANGE, ICON_BLUE, ICON_BLUE_TILE = "#F0603F", "#A8C7FA", "#3B82F6"
+TILE = 96
+
+
+def icon_tile(parent, kind, colour, chosen=False):
+    """One candidate: the launcher tile as the phone and the Dock would show it, and what it is."""
+    col = vstack(parent, f"icon · {kind} · {colour}", gap=8, cross="center")
+    dark = kind != "desktop"
+    tint = {"orange": PRIMARY if dark else ICON_ORANGE, "blue": ICON_BLUE if dark else ICON_BLUE_TILE}[colour]
+    tile = frame(col, "tile", h="fixed", v="fixed", width=TILE, height=TILE, fill=BG if dark else tint, radius=22,
+                 stroke=PRIMARY if chosen else OUTLINE, stroke_weight=2.0 if chosen else 1.0, clip=True)
+    if kind == "launcher":
+        for j, d in enumerate(LAUNCHER_PATHS):  # the launcher shows the centre 72 of the 108 viewport
+            glyph(tile, f"path-{j}", d, TILE * 108 * 0.75 / 72, 108, fill=tint, shift=(-6.0, -6.0))
+    elif kind == "glyph":
+        glyph(tile, "cast", CAST_GLYPH_PATH, 56, 24, fill=tint, absolute_at=(20, 20))
+    else:
+        for j, d in enumerate(DESKTOP_MARK_PATHS):  # 22 px in a 40 px tile on the receiver
+            glyph(tile, f"path-{j}", d, TILE * 22 / 40, 24, stroke="#FFFFFF", stroke_weight=2.0,
+                  absolute_at=(TILE * 9 / 40, TILE * 9 / 40))
+    mono(col, colour.upper(), 10, PRIMARY if chosen else VARIANT, "Bold", spacing=1.0, line=14)
+    if chosen:
+        tag(col, "PROPOSED", "amber")
+    return col
+
+
+NAME_W = 600
+name = vstack(PAGE, "The name and the icon", gap=14, pad=(20, 20, 20, 20), h="fixed", width=NAME_W, fill=SURFACE,
+              radius=18, stroke=OUTLINE)
+nodes[name]["child_layout"]["absolute"] = False
+text(name, "The name and the icon", 20, ON, "SemiBold", line=26)
+text(name, "The name is the product owner's decision of 2026-11-11, before v0.2.0: the product is called Caster, on the phone and "
+           "on the Mac, with one icon.", 13, VARIANT, width=NAME_W - 40, line=19)
+names = vstack(name, "name · where it shows", gap=3, h="fill")
+text(names, "Where the name shows", 13, ON, "Medium", width=NAME_W - 40, line=18)
+for line in (
+    "Phone: the launcher label “Caster”, the app bar's “Caster”, the notification.",
+    "Mac: the app “Caster” (was “Zero-Friction Local Cast Native”), the window and tray, the nameplate “CASTER”, "
+    "the video window, the Syphon source in OBS (pick it again once).",
+    "Unchanged: the app's ids, the signing key and the receiver's data folder, so updates install and saved "
+    "pairings stay.",
+):
+    text(names, "• " + line, 12.5, VARIANT, width=NAME_W - 40, line=18)
+for label, kind, why in (
+    ("A · the phone's launcher icon today", "launcher", "The waves run into the screen; drawn as a placeholder."),
+    ("B · the phone's cast glyph (notification, app bar)", "glyph", "The stock Material glyph: every cast app's."),
+    ("C · the mark beside the Mac's nameplate", "desktop", "Already the product's own mark, and reads at 16 px."),
+):
+    block = vstack(name, f"candidate · {kind}", gap=8, h="fill")
+    text(block, label, 13, ON, "Medium", width=NAME_W - 40, line=18)
+    row = hstack(block, "tiles", gap=20, cross="min")
+    icon_tile(row, kind, "orange", chosen=kind == "desktop")
+    icon_tile(row, kind, "blue")
+    text(row, why, 12.5, VARIANT, width=NAME_W - 40 - 2 * (TILE + 20), line=18)
+text(name, "Proposed: C in orange, the Mac's own tile, on both apps (launcher, Dock, disk image). The phone's "
+           "notification keeps a one-colour glyph, as Android requires.", 12.5, ON, width=NAME_W - 40, line=18)
+
 for f in (p1, p2, p3, p4, p5, questions):
     autolayout.solve(nodes, f, text_height)
 nodes[rule]["transform"][4] = float(X[5] + QUESTIONS_W + PHONE_GAP)
 nodes[rule]["transform"][5] = float(TOP)
 autolayout.solve(nodes, rule, text_height)
+nodes[name]["transform"][4] = float(X[5] + QUESTIONS_W + PHONE_GAP + RULE_W + PHONE_GAP)
+nodes[name]["transform"][5] = float(TOP)
+autolayout.solve(nodes, name, text_height)
 
 # Notes sit under each phone, so they are placed once the phones' heights are known.
 for f, title, lines in (

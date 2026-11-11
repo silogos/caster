@@ -16,6 +16,8 @@ use tauri::{AppHandle, Manager, Wry};
 
 /// The main (UI) window's label.
 pub const MAIN_WINDOW: &str = "main";
+/// The menu-bar image: the mark alone, black on nothing (designs/app-icon.figcraft, "tray template").
+const TRAY_TEMPLATE_PNG: &[u8] = include_bytes!("../icons/tray-template.png");
 const MENU_OPEN: &str = "open-window";
 const MENU_FORGET: &str = "forget-phone";
 const MENU_QUIT: &str = "quit";
@@ -152,7 +154,7 @@ pub fn install(
         ],
     )?;
     let mut builder = TrayIconBuilder::with_id("receiver")
-        .tooltip("Zero-Friction Cast")
+        .tooltip("Caster")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id().as_ref() {
@@ -161,8 +163,17 @@ pub fn install(
             MENU_QUIT => quit(app, &goodbye),
             _ => {}
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone()).icon_as_template(true);
+    // The mark alone, as a template image: the app icon is a filled tile,
+    // which a template would draw as a plain square.
+    match image::load_from_memory(TRAY_TEMPLATE_PNG) {
+        Ok(decoded) => {
+            let rgba = decoded.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            builder = builder
+                .icon(tauri::image::Image::new_owned(rgba.into_raw(), width, height))
+                .icon_as_template(true);
+        }
+        Err(e) => log::warn!(target: "tray", "tray image unreadable: {e}"),
     }
     builder.build(app)?;
     Ok(Tray { model: Mutex::new(model), status, forget: forget_item })

@@ -395,3 +395,9 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 **Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk", `Info.plist` reports 0.2.0, and the packaged app starts, listens and loads Syphon from inside the bundle.
 
 **Not checked:** a cast received by the packaged app; the `.dmg` on another Mac (Gatekeeper); signing the release APK with the release key and updating over an installed v0.1.0.
+
+## Chore 2026-11ag — The product is called Caster, with one icon ⏳ built; the icon awaits the product owner's confirmation (2026-11-11)
+
+**Why:** three names on screen ("Local Cast", "Zero-Friction Cast", "Zero-Friction Local Cast Native"), a placeholder launcher icon and an empty Mac icon, with the second release next ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)).
+
+**What:** every name a person reads is "Caster" on both apps; ids, the signing key and the receiver's data folder are unchanged. One icon, the receiver's mark on an orange tile, drawn in `designs/app-icon.figcraft` and used for the Mac app, the menu-bar template and the phone's adaptive icon. Drawn first in the design file ("The name and the icon", with the other candidates in orange and blue).

@@ -239,3 +239,140 @@ def page_caption(page, chars, x, y, size=11, style="Regular", color=CAPTION):
     nodes[t]["transform"][4], nodes[t]["transform"][5] = float(x), float(y)
     nodes[t]["child_layout"]["absolute"] = False
     return t
+
+
+# ---- vector glyphs (an SVG / Android vector path, drawn as one FigCraft vector) ----
+
+def _arc_cubics(x0, y0, rx, ry, large, sweep, x1, y1):
+    """An SVG elliptical arc (no rotation) as cubic segments: (c1, c2, end) triples."""
+    import math
+    if rx == 0 or ry == 0 or (x0 == x1 and y0 == y1):
+        return [((x0, y0), (x1, y1), (x1, y1))]
+    dx, dy = (x0 - x1) / 2, (y0 - y1) / 2
+    lam = dx * dx / (rx * rx) + dy * dy / (ry * ry)
+    if lam > 1:
+        rx, ry = rx * math.sqrt(lam), ry * math.sqrt(lam)
+    num = max(rx * rx * ry * ry - rx * rx * dy * dy - ry * ry * dx * dx, 0.0)
+    den = rx * rx * dy * dy + ry * ry * dx * dx
+    k = (-1 if large == sweep else 1) * math.sqrt(num / den) if den else 0.0
+    cx, cy = k * rx * dy / ry + (x0 + x1) / 2, -k * ry * dx / rx + (y0 + y1) / 2
+    a0 = math.atan2((y0 - cy) / ry, (x0 - cx) / rx)
+    a1 = math.atan2((y1 - cy) / ry, (x1 - cx) / rx)
+    da = a1 - a0
+    if sweep and da < 0:
+        da += 2 * math.pi
+    if not sweep and da > 0:
+        da -= 2 * math.pi
+    pieces = max(1, math.ceil(abs(da) / (math.pi / 2) - 1e-9))
+    step = da / pieces
+    t = 4 / 3 * math.tan(step / 4)
+    out = []
+    for i in range(pieces):
+        b0, b1 = a0 + i * step, a0 + (i + 1) * step
+        p0 = (cx + rx * math.cos(b0), cy + ry * math.sin(b0))
+        p1 = (cx + rx * math.cos(b1), cy + ry * math.sin(b1))
+        out.append(((p0[0] - t * rx * math.sin(b0), p0[1] + t * ry * math.cos(b0)),
+                    (p1[0] + t * rx * math.sin(b1), p1[1] - t * ry * math.cos(b1)), p1))
+    return out
+
+
+def svg_network(d, scale=1.0, dx=0.0, dy=0.0):
+    """Path data (M L H V C A Z, either case) → FigCraft vector network: vertices, segments, fill loops."""
+    import re
+    tokens = re.findall(r"[MmLlHhVvCcAaZz]|-?\d*\.?\d+(?:e-?\d+)?", d)
+    vertices, segs, loops, loop = [], [], [], []
+    pos = [0.0, 0.0]
+    start = cur = None
+    i = 0
+    cmd = None
+
+    def vertex(x, y):
+        vertices.append({"x": round((x + dx) * scale, 3), "y": round((y + dy) * scale, 3), "radius": 0.0})
+        return len(vertices) - 1
+
+    def segment(end, c1=None, c2=None):
+        nonlocal cur
+        a = vertices[cur]
+        b = vertex(*end)
+        vb = vertices[b]
+        ta = [round((c1[0] + dx) * scale - a["x"], 3), round((c1[1] + dy) * scale - a["y"], 3)] if c1 else [0.0, 0.0]
+        tb = [round((c2[0] + dx) * scale - vb["x"], 3), round((c2[1] + dy) * scale - vb["y"], 3)] if c2 else [0.0, 0.0]
+        segs.append({"a": cur, "b": b, "ta": ta, "tb": tb})
+        loop.append(len(segs) - 1)
+        cur = b
+        pos[0], pos[1] = end
+
+    def flush():
+        nonlocal loop
+        if loop:
+            loops.append(loop)
+        loop = []
+
+    def num():
+        nonlocal i
+        i += 1
+        return float(tokens[i - 1])
+
+    while i < len(tokens):
+        if tokens[i].isalpha():
+            cmd = tokens[i]
+            i += 1
+        rel = cmd.islower()
+        ox, oy = (pos[0], pos[1]) if rel else (0.0, 0.0)
+        c = cmd.upper()
+        if c == "M":
+            flush()
+            pos[0], pos[1] = ox + num(), oy + num()
+            start = cur = vertex(*pos)
+            cmd = "l" if rel else "L"
+        elif c == "L":
+            segment((ox + num(), oy + num()))
+        elif c == "H":
+            segment((ox + num(), pos[1]))
+        elif c == "V":
+            segment((pos[0], oy + num()))
+        elif c == "C":
+            c1 = (ox + num(), oy + num())
+            c2 = (ox + num(), oy + num())
+            segment((ox + num(), oy + num()), c1, c2)
+        elif c == "A":
+            rx, ry, _rot, large, sweep = num(), num(), num(), num(), num()
+            end = (ox + num(), oy + num())
+            for c1, c2, p in _arc_cubics(pos[0], pos[1], rx, ry, int(large), int(sweep), *end):
+                segment(p, c1, c2)
+        elif c == "Z":
+            if cur != start:
+                a, b = vertices[cur], vertices[start]
+                if segs and abs(a["x"] - b["x"]) < 0.01 and abs(a["y"] - b["y"]) < 0.01 and cur == len(vertices) - 1:
+                    segs[-1]["b"] = start  # already back at the start: weld, no zero-length edge
+                    vertices.pop()
+                else:
+                    segs.append({"a": cur, "b": start, "ta": [0.0, 0.0], "tb": [0.0, 0.0]})
+                    loop.append(len(segs) - 1)
+            cur = start
+            pos[0], pos[1] = (vertices[start]["x"] / scale - dx, vertices[start]["y"] / scale - dy)
+            flush()
+    flush()
+    return vertices, segs, loops
+
+
+def glyph(parent, name, d, size, viewport, fill=None, stroke=None, stroke_weight=2.0, absolute_at=(0.0, 0.0),
+          shift=(0.0, 0.0)):
+    """One path of an icon, [viewport] units wide, drawn [size] wide; filled, or stroked with round caps."""
+    scale = size / viewport
+    vertices, segs, loops = svg_network(d, scale, *shift)
+    n = {"name": name, "type": "vector", "blend": "normal",
+         "transform": [1.0, 0.0, 0.0, 1.0, float(absolute_at[0]), float(absolute_at[1])],
+         "width": float(size), "height": float(size),
+         "network": {"vertices": vertices, "segments": segs, "regions": []},
+         "child_layout": child_layout("fixed", "fixed", absolute=True)}
+    if stroke:
+        n["fills"] = []
+        n["strokes"] = [solid(stroke)]
+        spec = stroke_spec(round(stroke_weight * scale, 3), align="center")
+        spec.update({"cap_start": "round", "cap_end": "round", "join": "round"})
+        n["stroke"] = spec
+    else:
+        n["fills"] = [solid(fill)]
+        n["network"]["regions"] = [{"loops": loops, "winding": "nonZero"}]
+    return add(parent, n)

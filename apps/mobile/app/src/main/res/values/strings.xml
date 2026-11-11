@@ -1,6 +1,6 @@
 <resources>
     <!-- Launcher label stays short; it is also the app bar's nameplate. -->
-    <string name="app_name">Local Cast</string>
+    <string name="app_name">Caster</string>
     <string name="home_not_connected">Not connected</string>
 
     <!-- App-bar annunciator (designs/mobile-app.html): the machine's state
@@ -231,7 +231,7 @@
       User-facing failure messages per docs/architecture/pairing.md §Failure modes.
       Technical detail (error codes) stays in logs — never shown here.
     -->
-    <string name="pairing_error_not_zfc_qr">This isn\'t a Zero-Friction Cast QR code.</string>
+    <string name="pairing_error_not_zfc_qr">This isn\'t a Caster QR code.</string>
     <string name="pairing_error_unsupported_version">The desktop app is newer or older than this app. Please update.</string>
     <string name="pairing_error_connect_unreachable">Couldn\'t reach the desktop. Make sure both devices are on the same Wi-Fi network.</string>
     <string name="pairing_error_expired">This QR code has expired. Generate a new one on the desktop.</string>

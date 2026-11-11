@@ -1,6 +1,6 @@
 # Release Guide
 
-How to cut a release of Zero-Friction Local Cast. Rewritten for v0.2.0 (2026-11-11): the desktop app is the native Mac receiver (`apps/desktop-native`, [ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)), and the product has one version number. The v0.1.0 process (Electron installers for macOS and Windows) is in this file's git history.
+How to cut a release of Caster (called Zero-Friction Local Cast until v0.2.0, [ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)). Rewritten for v0.2.0 (2026-11-11): the desktop app is the native Mac receiver (`apps/desktop-native`, [ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)), and the product has one version number. The v0.1.0 process (Electron installers for macOS and Windows) is in this file's git history.
 
 A release is: **an annotated git tag on `main` + a GitHub release carrying two assets** — the Android APK and the Mac receiver's disk image.
 
@@ -52,7 +52,7 @@ cd apps/desktop-native/src-tauri
 npx --yes @tauri-apps/cli@2 build
 ```
 
-Output: `target/release/bundle/dmg/Zero-Friction Local Cast Native_<ver>_aarch64.dmg` (about 10 MB), and the `.app` beside it under `bundle/macos/`.
+Output: `target/release/bundle/dmg/Caster_<ver>_aarch64.dmg` (about 10 MB), and the `.app` beside it under `bundle/macos/`.
 
 What the bundle settings do, and why:
 
@@ -62,7 +62,7 @@ What the bundle settings do, and why:
 Check before shipping:
 
 ```bash
-APP="target/release/bundle/macos/Zero-Friction Local Cast Native.app"
+APP="target/release/bundle/macos/Caster.app"
 codesign --verify --deep --strict -v "$APP"        # "valid on disk"
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
 open "$APP"                                         # it starts, pairs and plays a cast
@@ -88,14 +88,14 @@ $SDK/build-tools/<latest>/apksigner sign \
   --ks keystore/release.keystore \
   --ks-key-alias <alias> \
   --ks-pass pass:<storePassword> --key-pass pass:<keyPassword> \
-  --out app/build/outputs/apk/release/Zero-Friction-LocalCast-v<ver>.apk \
+  --out app/build/outputs/apk/release/Caster-v<ver>.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 
-$SDK/build-tools/<latest>/apksigner verify --print-certs app/build/outputs/apk/release/Zero-Friction-LocalCast-v<ver>.apk
-$SDK/build-tools/<latest>/aapt2 dump badging app/build/outputs/apk/release/Zero-Friction-LocalCast-v<ver>.apk | head -1
+$SDK/build-tools/<latest>/apksigner verify --print-certs app/build/outputs/apk/release/Caster-v<ver>.apk
+$SDK/build-tools/<latest>/aapt2 dump badging app/build/outputs/apk/release/Caster-v<ver>.apk | head -1
 ```
 
-- `verify --print-certs` must print the `CN=Zero-Friction Local Cast` certificate — same key every release, or Android refuses the update over an installed previous version.
+- `verify --print-certs` must print the `CN=Zero-Friction Local Cast` certificate (the key keeps the product's first name) — same key every release, or Android refuses the update over an installed previous version.
 - `dump badging` must print the release's `versionName` and the `versionCode` derived from it.
 - A phone carrying a **debug** build (a developer's device) cannot update to the release APK: the signatures differ. Uninstall first; the stored profiles go with it.
 
@@ -115,10 +115,10 @@ Annotated tags only (they carry the message and the tagger). Never move or re-pu
 
 ```bash
 gh release create v<ver> \
-  --title "v<ver> — Zero-Friction Local Cast" \
+  --title "v<ver> — Caster" \
   --notes-file release-notes-v<ver>.md \
-  "apps/desktop-native/src-tauri/target/release/bundle/dmg/Zero-Friction Local Cast Native_<ver>_aarch64.dmg" \
-  "apps/mobile/app/build/outputs/apk/release/Zero-Friction-LocalCast-v<ver>.apk"
+  "apps/desktop-native/src-tauri/target/release/bundle/dmg/Caster_<ver>_aarch64.dmg" \
+  "apps/mobile/app/build/outputs/apk/release/Caster-v<ver>.apk"
 ```
 
 Release notes template:

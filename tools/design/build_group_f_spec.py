@@ -73,7 +73,7 @@ f2 = phone(PAGE, "F2 TalkBack · announcements", 492, 112)
 appbar = hstack(f2, "app bar", gap=10, cross="center", h="fill")
 brand = hstack(appbar, "brand", gap=8, cross="center", h="fill")
 rect(brand, "brand-mark", 24, 24, ON, opacity=0.08, radius=8)
-text(brand, "LOCAL CAST", 13, ON, "Medium", family=MONO, spacing=1.4, line=16)
+text(brand, "Caster", 13, ON, "Medium", family=MONO, spacing=1.4, line=16)
 ann = hstack(appbar, "annunciator", pad=(5, 14, 5, 14), cross="center", fill=ON, opacity=0.06, radius=13)
 text(ann, "STANDBY", 11, VARIANT, "Bold", family=MONO, spacing=1.0, line=16)
 gear = hstack(appbar, "gear", main="center", cross="center", h="fixed", v="fixed", width=40, height=40, radius=12,

@@ -175,7 +175,7 @@ let syphonOutput = false
 function renderSyphon() {
   $('syphon-switch').classList.toggle('on', syphonOutput)
   $('syphon-sub').textContent = syphonOutput
-    ? 'On. In OBS add a Syphon Client source named "Zero-Friction Local Cast". It keeps working with the video window closed.'
+    ? 'On. In OBS add a Syphon Client source named "Caster". It keeps working with the video window closed.'
     : 'Off. OBS can still capture the video window.'
 }
 $('syphon-switch').addEventListener('click', () => {

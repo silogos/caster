@@ -248,7 +248,7 @@ class PairingClient(
 
 /** All user-facing failures of the pairing flow — the UI maps these to strings. */
 enum class PairingError {
-    /** "This isn't a Zero-Friction Cast QR code." */
+    /** "This isn't a Caster QR code." */
     NOT_ZFC_QR,
 
     /** "Desktop app is newer/older — please update." */

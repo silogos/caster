@@ -55,6 +55,21 @@
    - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`; `ui.screenshot` returns the window as a PNG, to look at a page that has no exported render).
    - **Visual.** Compare the frames with the exported PNGs.
 
+## The app icon
+
+`build_app_icon.py` draws Caster's icon once (ADR-027): the receiver's mark on the orange tile, as a Mac icon on Apple's grid, and the mark alone as the menu-bar template.
+
+```bash
+python3 -I tools/design/build_app_icon.py designs/app-icon.figcraft          # prints each frame's id
+FigCraft --control PORT --automation-read-root DIR --automation-write-root DIR designs/app-icon.figcraft
+#   ui.render {path: DIR/mac-1024.png, scale: 1, ids: [<mac icon 1024>]}
+#   ui.render {path: DIR/tray.png,     scale: 2, ids: [<tray template>]}
+cd apps/desktop-native/src-tauri && npx --yes @tauri-apps/cli@2 icon DIR/mac-1024.png -o icons   # keep the png and icns files
+cp DIR/tray.png icons/tray-template.png
+```
+
+The phone's launcher icon is the same mark written as a vector (`ic_launcher_foreground.xml`) on the same orange (`ic_launcher_background`); change the three together.
+
 ## Known simplifications
 
 - **Text font.** Text uses **Roboto**, the Android default; FigCraft falls back if Roboto isn't installed. Monospace becomes Liberation Mono. A single measured line is set to no-wrap, so a slightly wider fallback font can't break it.

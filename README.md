@@ -1,4 +1,6 @@
-# Zero-Friction Local Cast
+# Caster
+
+(Called Zero-Friction Local Cast until v0.2.0.)
 
 Cast your **Android screen**, **game audio**, and **microphone** to a desktop over the local Wi-Fi network — no USB cable, no ADB, no Developer Options.
 

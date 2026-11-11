@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Zero-Friction Local Cast Native",
+  "productName": "Caster",
   "identifier": "app.zerofriction.desktopnative",
   "build": {
     "frontendDist": "../ui"
@@ -9,7 +9,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Zero-Friction Local Cast",
+        "title": "Caster",
         "width": 960,
         "height": 640,
         "minWidth": 800,
@@ -27,6 +27,10 @@
       "dmg"
     ],
     "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
       "icons/icon.png"
     ],
     "category": "Utility",
