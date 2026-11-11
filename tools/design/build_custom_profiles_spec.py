@@ -493,7 +493,7 @@ def icon_tile(parent, kind, colour, chosen=False):
                   absolute_at=(TILE * 9 / 40, TILE * 9 / 40))
     mono(col, colour.upper(), 10, PRIMARY if chosen else VARIANT, "Bold", spacing=1.0, line=14)
     if chosen:
-        tag(col, "PROPOSED", "amber")
+        tag(col, "CHOSEN", "amber")
     return col
 
 
@@ -525,7 +525,7 @@ for label, kind, why in (
     icon_tile(row, kind, "orange", chosen=kind == "desktop")
     icon_tile(row, kind, "blue")
     text(row, why, 12.5, VARIANT, width=NAME_W - 40 - 2 * (TILE + 20), line=18)
-text(name, "Proposed: C in orange, the Mac's own tile, on both apps (launcher, Dock, disk image). The phone's "
+text(name, "Chosen by the product owner 2026-11-11: C in orange, the Mac's own tile, on both apps (launcher, Dock, disk image). The phone's "
            "notification keeps a one-colour glyph, as Android requires.", 12.5, ON, width=NAME_W - 40, line=18)
 
 for f in (p1, p2, p3, p4, p5, questions):

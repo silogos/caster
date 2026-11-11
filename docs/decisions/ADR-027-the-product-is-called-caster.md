@@ -1,6 +1,6 @@
 # ADR-027: The product is called Caster, with one icon
 
-- **Status:** accepted (2026-11-11): the name is the product owner's decision; the icon is the proposal drawn in the design file (`designs/mobile-app.figcraft`, "The name and the icon"), built and awaiting the product owner's confirmation. Unit-tested and built; see Consequences for what was seen running.
+- **Status:** accepted (2026-11-11): the name is the product owner's decision, and so is the icon, chosen from the candidates drawn in the design file (`designs/mobile-app.figcraft`, "The name and the icon"). Unit-tested and built; see Consequences for what was seen running.
 
 ## Context
 
