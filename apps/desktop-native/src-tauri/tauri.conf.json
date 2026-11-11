@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Zero-Friction Local Cast Native",
-  "version": "0.1.0",
   "identifier": "app.zerofriction.desktopnative",
   "build": {
     "frontendDist": "../ui"
@@ -19,6 +18,24 @@
     ],
     "security": {
       "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "macOS": {
+      "frameworks": [
+        "../vendor/syphon/Syphon.framework"
+      ],
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
     }
   }
 }
