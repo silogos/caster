@@ -1,6 +1,6 @@
 # ADR-026: One version for the product, in one file
 
-- **Status:** accepted (2026-11-11). Built and checked on the build machine: the Android app reports 0.2.0 / 200, the packaged receiver reports 0.2.0. No release has been cut with it yet.
+- **Status:** accepted (2026-11-11). Built and checked on the build machine: the Android app reports 0.2.0 / 200, the packaged receiver reports 0.2.0. Used to cut v0.2.0 the same day.
 
 (ADR-024 and ADR-025 belong to the custom-profiles work, open at the time of writing.)
 

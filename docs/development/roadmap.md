@@ -341,7 +341,7 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** no comparison against "Keep resolution" on the same content, no real game, no hot tablet. The late audio chunks that remain are not the video backlog's doing and are not addressed. A 4K stream ran at 38–51 fps for a reason not found. *Bitrate mode: VBR* is still a placebo.
 
-## Feature 2026-11ac — Custom profiles; no Advanced page ⏳ built, walked on the tablet; the bitrate range not yet on the device (2026-11-11)
+## Feature 2026-11ac — Custom profiles; no Advanced page ✅ shipped in v0.2.0; walked on the tablet, the bitrate range seen in casts (`sender targets: 8000–12000 kbps`) (2026-11-11)
 *(Not a numbered phase: the product owner's idea after the audio investigation — issue #165.)*
 **Scope:** a setup that started as Sharp and was changed to 60 fps showed as "Custom" and still carried Sharp's 8 Mbps floor and "Keep resolution", with nothing on screen saying so. A profile now holds every cast value (picture, behaviour, encoder, game-audio transport); four built-in profiles are fixed and the user adds their own (name, edit, duplicate, delete; up to 12). Home's quality console is one list of profiles; the `Preset | Custom` tabs, the Advanced page, the gear and Bitrate mode are gone; "Encoder in use" moved to STATUS. Stored settings v7, with every v1–v6 document migrating without losing a value — [ADR-024](../decisions/ADR-024-custom-profiles.md), [cast-settings.md](../features/cast-settings.md).
 
@@ -355,7 +355,7 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the fixed Add sheet and the bitrate range are not installed on the tablet yet; picking a profile during a cast was not tried. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
 
-## Feature 2026-11ae — Automatic quality acts on a thermal emergency only ⏳ built and unit-tested; the emergency has never occurred on the device (2026-11-11)
+## Feature 2026-11ae — Automatic quality acts on a thermal emergency only ⏳ shipped in v0.2.0, unit-tested; the emergency has never occurred on the device (2026-11-11)
 *(Not a numbered phase: follows the game casts of 2026-11-11.)*
 **Scope:** Automatic quality used to step on a temperature reading (MODERATE for minutes), down to the lowest preset, without coming back. It now acts only at thermal CRITICAL: one step down, a second if the emergency lasts a minute, in the order of the profile's pressure strategy, and back up 30 s after it ends; STATUS says so, with "Restore now". "Under network pressure" stays libwebrtc's, inside the profile's bitrate range. Dropped frames and encoder utilization are no longer inputs: 14,000 s of recorded casts disprove both — [ADR-025](../decisions/ADR-025-automatic-quality-acts-on-a-thermal-emergency.md).
 
@@ -365,7 +365,7 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** CRITICAL has never been reached on the tablet, so the rule has not run in a cast. Nothing reacts to an overloaded encoder short of the stall recovery (ADR-022).
 
-## Fix 2026-11ad — The receiver's readout shows the picture that arrives ⏳ built; not seen on the Mac in this form yet (2026-11-11)
+## Fix 2026-11ad — The receiver's readout shows the picture that arrives ⏳ shipped in v0.2.0 and running; the two lines not yet confirmed on screen by the product owner (2026-11-11)
 *(Not a numbered phase: reported by the product owner during a cast.)*
 **Scope:** the deck showed the phone's announced size and frame rate in both places. Under "Keep frame rate" the sender scales the frame inside the encoder, so 640×400 arrived under `1920×1200 · 60 fps`. The product owner's split: the **pill** (`Casting · …`) and the tray keep the cast's settings; the **readout** beside the timecode shows the size and frame rate that arrive, measured once a second — [desktop-native.md](../architecture/desktop-native.md).
 
@@ -386,7 +386,7 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 - Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`, `features/thermal.md`, `features/adaptive-quality.md`, `features/obs-streaming.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.
 
-## Chore 2026-11af — One product version; the release process for the native receiver ⏳ built and checked on the build machine; no release cut yet (2026-11-11)
+## Chore 2026-11af — One product version; the release process for the native receiver ✅ used to cut v0.2.0 (2026-11-11)
 
 **Why:** preparing the second release showed every version string still at `0.1.0` (Android `versionCode` 1, so an update would be refused), four hand-kept copies, and a release guide for the obsolete Electron receiver ([ADR-026](../decisions/ADR-026-one-product-version.md)).
 
@@ -394,10 +394,18 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk" and `Info.plist` reports 0.2.0. **Corrected the same day:** the signed bundle did not start (the hardened runtime refused the bundled Syphon framework; the instance seen running was the earlier unsigned build). With `hardenedRuntime: false` the signed app starts and logs `listening on port`.
 
-**Not checked:** a cast received by the packaged app; the `.dmg` on another Mac (Gatekeeper); signing the release APK with the release key and updating over an installed v0.1.0.
+**Checked at the release (2026-11-11):** the packaged app receives a cast from the 0.2.0 phone build; the release APK is signed with the release key and carries the same certificate as v0.1.0's APK (SHA-256 `347b6c0d…`).
 
-## Chore 2026-11ag — The product is called Caster, with one icon ⏳ built and unit-tested; not yet seen running on the tablet or the Mac (2026-11-11)
+**Not checked:** the `.dmg` on another Mac (Gatekeeper); updating over an installed v0.1.0.
+
+## Chore 2026-11ag — The product is called Caster, with one icon ⏳ shipped in v0.2.0 and running on the tablet and the Mac; the launcher icon and the menu-bar image not confirmed on screen (2026-11-11)
 
 **Why:** three names on screen ("Local Cast", "Zero-Friction Cast", "Zero-Friction Local Cast Native"), a placeholder launcher icon and an empty Mac icon, with the second release next ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)).
 
 **What:** every name a person reads is "Caster" on both apps; ids, the signing key and the receiver's data folder are unchanged. One icon, the receiver's mark on an orange tile, drawn in `designs/app-icon.figcraft` and used for the Mac app, the menu-bar template and the phone's adaptive icon. Drawn first in the design file ("The name and the icon", with the other candidates in orange and blue).
+
+## Release v0.2.0 — Caster ✅ published (2026-11-11)
+
+The second release, and the first under one product version ([release.md](release.md), ADR-026): tag `v0.2.0` on `main` (the merge of PR #173, CI green), two assets — `Caster-v0.2.0.apk` (signed with the release key) and `Caster_0.2.0_aarch64.dmg` (the native Mac receiver, ad-hoc signed, not notarized). It closes #165, #170, #171 and #172.
+
+**Not in it:** an Intel Mac, Windows or Linux receiver. **Not checked:** the `.dmg` on a second Mac; the APK as an update over v0.1.0; the thermal-emergency rule on a device.
