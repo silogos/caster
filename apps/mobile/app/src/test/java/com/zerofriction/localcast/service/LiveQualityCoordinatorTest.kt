@@ -2,7 +2,7 @@ package com.zerofriction.localcast.service
 
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
-import com.zerofriction.localcast.config.StrugglePolicy
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.webrtc.SenderSample
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,23 +52,34 @@ class LiveQualityCoordinatorTest {
     }
 
     private val stepped = performance.copy(longEdgePx = 960)
+    private val smooth = DegradationStrategy.MAINTAIN_FRAMERATE
 
     @Test
-    fun `don't adjust - the readout shows the start level and nothing is ever stepped`() {
+    fun `auto quality off - the readout shows the start level and the rule never acts`() {
         val rig = Rig()
-        rig.coordinator.start(performance, StrugglePolicy.FIXED)
+        rig.coordinator.start(performance, autoQuality = false, strategy = smooth)
         rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(600)
 
         assertEquals(performance, rig.liveQuality.value)
+        assertEquals(AdaptiveUiState(), rig.adaptiveState.value)
         assertTrue(rig.applied.isEmpty())
         assertEquals("c2.hw.avc", rig.encoder.value) // the encoder readout does not depend on the rule
     }
 
     @Test
-    fun `a step down is applied, published and announced`() {
+    fun `game heat with auto quality on changes nothing`() {
         val rig = Rig()
-        rig.coordinator.start(performance, StrugglePolicy.SMOOTH)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
+        rig.thermal = ThermalStatus.SEVERE
+        rig.runFor(600)
+        assertTrue(rig.applied.isEmpty())
+    }
+
+    @Test
+    fun `a thermal step is applied, published and announced`() {
+        val rig = Rig()
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(30)
 
@@ -82,7 +93,7 @@ class LiveQualityCoordinatorTest {
     @Test
     fun `a user live pick starts the rule over with the pick as its top`() {
         val rig = Rig()
-        rig.coordinator.start(performance, StrugglePolicy.SMOOTH)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(30)
 
@@ -99,7 +110,7 @@ class LiveQualityCoordinatorTest {
     @Test
     fun `restore puts the cast back at the profile's values`() {
         val rig = Rig()
-        rig.coordinator.start(performance, StrugglePolicy.SMOOTH)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(30)
         rig.thermal = ThermalStatus.NONE
@@ -113,7 +124,7 @@ class LiveQualityCoordinatorTest {
     @Test
     fun `stop clears every readout`() {
         val rig = Rig()
-        rig.coordinator.start(performance, StrugglePolicy.SMOOTH)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.runFor(3)
         rig.coordinator.stop()
 

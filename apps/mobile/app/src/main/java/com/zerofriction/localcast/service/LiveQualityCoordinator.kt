@@ -3,7 +3,7 @@ package com.zerofriction.localcast.service
 import android.util.Log
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
-import com.zerofriction.localcast.config.StrugglePolicy
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.webrtc.SenderSample
@@ -34,40 +34,33 @@ internal class LiveQualityCoordinator(
     private val onAdapted: (AdaptiveQualityController.QualityChange) -> Unit,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
-    /** Null without a cast. With "Don't adjust" it runs too, with no step to take. */
+    /** Null when auto quality is off (the user's switch) or without a cast. */
     private var controller: AdaptiveQualityController? = null
 
-    /** The running cast's choice of what to give up. */
-    private var policy: StrugglePolicy = StrugglePolicy.FIXED
+    /** The running cast's pressure strategy: the order a thermal step gives things up. */
+    private var strategy: DegradationStrategy = DegradationStrategy.BALANCED
 
     /** The ceiling auto quality may climb back to — the user's settings at cast start (or their live pick). */
     private var ceiling: QualityLevel? = null
 
-    /** Cast start: the readout's baseline is the profile's values; the rule steps from them the way [policy] says. */
-    fun start(startLevel: QualityLevel, policy: StrugglePolicy) {
-        this.policy = policy
+    /**
+     * Cast start: the readout's baseline is the profile's values; the rule
+     * rides only when [autoQuality], stepping in the order [strategy] gives
+     * things up.
+     */
+    fun start(startLevel: QualityLevel, autoQuality: Boolean, strategy: DegradationStrategy) {
+        this.strategy = strategy
         liveQuality.value = startLevel
-        startPolicy(startLevel)
+        if (autoQuality) startPolicy(startLevel)
     }
 
     /** The policy's stats input — called from the media session thread. */
     fun onSample(sample: SenderSample) {
         encoderImplementation.value = sample.encoderImplementation
         val policy = controller ?: return
-        policy.onTick(
-            nowMs(),
-            // Cumulative counters; the (pure, tested) controller turns their
-            // deltas into the symptoms it acts on.
-            AdaptiveQualityController.StreamSample(
-                framesEncoded = sample.framesEncoded,
-                framesDropped = sample.framesDropped,
-                totalEncodeTimeSeconds = sample.totalEncodeTimeSeconds,
-                totalPacketSendDelaySeconds = sample.totalPacketSendDelaySeconds,
-                packetsSent = sample.packetsSent,
-                targetBitrateBps = sample.targetBitrateBps,
-            ),
-            thermalStatus(),
-        )
+        // The ~1 Hz stats tick is the rule's clock; its only input is the
+        // thermal ladder (ADR-025).
+        policy.onTick(nowMs(), thermalStatus())
     }
 
     /** The user puts the cast back at their own settings (auto quality is reversible). */
@@ -78,7 +71,7 @@ internal class LiveQualityCoordinator(
     fun applyUserLevel(level: QualityLevel) {
         applyLevel(level)
         liveQuality.value = level
-        startPolicy(level)
+        if (controller !== null) startPolicy(level)
         Log.i(TAG, "user live quality: ${describe(level)}")
     }
 
@@ -94,7 +87,7 @@ internal class LiveQualityCoordinator(
     private fun startPolicy(top: QualityLevel) {
         // The ceiling: auto quality never goes above what the user chose (thermal.md principle 2).
         ceiling = top
-        controller = AdaptiveQualityController(ceiling = top, policy = policy, onLevelChanged = { onPolicyChange(it) })
+        controller = AdaptiveQualityController(ceiling = top, strategy = strategy, onLevelChanged = { onPolicyChange(it) })
         adaptiveState.value = AdaptiveUiState(current = top, ceiling = top)
     }
 

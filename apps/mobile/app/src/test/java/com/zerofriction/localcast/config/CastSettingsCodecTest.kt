@@ -20,7 +20,8 @@ class CastSettingsCodecTest {
         fps = 60,
         bitrateMinBps = 6_000_000,
         bitrateMaxBps = 12_000_000,
-        struggle = StrugglePolicy.FIXED,
+        degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
+        autoQuality = false,
         encoderImpl = EncoderImplementation.SOFTWARE,
         preferredCodec = PreferredVideoCodec.VP8,
         h264HighProfile = false,
@@ -52,10 +53,10 @@ class CastSettingsCodecTest {
     }
 
     @Test
-    fun `the document is version 8 and has no bitrate mode or auto-quality switch`() {
+    fun `the document is version 9 and has no bitrate mode or leftover field`() {
         val document = CastSettingsCodec.encode(withProfiles)
-        assertTrue(document.contains(""""v":8"""))
-        assertFalse(document.contains("autoQuality"))
+        assertTrue(document.contains(""""v":9"""))
+        assertFalse(document.contains("struggle"))
         assertFalse(document.contains("bitrateMode"))
         assertFalse(document.contains("bitrateAuto"))
     }
@@ -74,8 +75,8 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a version this build does not know decodes to null`() {
-        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":8""", """"v":9""")))
-        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":8""", """"v":0""")))
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":9""", """"v":10""")))
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":9""", """"v":0""")))
     }
 
     @Test
@@ -167,9 +168,12 @@ class CastSettingsCodecTest {
         val profile = settings.customProfiles.single()
         assertEquals("Custom 1", profile.name)
         assertEquals(ProfileSelection.Custom(profile.id), settings.selection)
-        assertEquals(QualityProfile.SHARP.toValues().copy(fps = 60), profile.values)
-        assertEquals("the range is kept", 8_000_000, settings.toConfig().bitrateMinBps)
-        assertEquals("Keep resolution became Keep it sharp", StrugglePolicy.SHARP, settings.toConfig().struggle)
+        assertEquals(
+            QualityProfile.SHARP.toValues().copy(fps = 60, autoQuality = false),
+            profile.values,
+        )
+        assertEquals("the next cast is unchanged", 8_000_000, settings.toConfig().bitrateMinBps)
+        assertEquals(CastConfig.DEGRADATION_RESOLUTION, settings.toConfig().degradationPreference)
     }
 
     @Test
@@ -207,9 +211,11 @@ class CastSettingsCodecTest {
 
     @Test
     fun `fields a version did not have yet take the default shipped with it`() {
-        val v3 = CastSettingsCodec.decode(flat(3))!!
+        val v2 = CastSettingsCodec.decode(flat(2))!!
+        assertEquals(true, v2.active.autoQuality)
+        val v3 = CastSettingsCodec.decode(flat(3, "autoQuality" to "false"))!!
+        assertEquals(false, v3.active.autoQuality)
         assertEquals(EncoderImplementation.HARDWARE, v3.active.encoderImpl)
-        assertEquals(StrugglePolicy.BALANCED, v3.active.struggle)
         val v4 = CastSettingsCodec.decode(flat(4))!!
         assertEquals(MicDeviceSource.BUILTIN, v4.micDevice)
         val v5 = CastSettingsCodec.decode(flat(5, "micDevice" to "\"bluetooth\""))!!
@@ -240,38 +246,46 @@ class CastSettingsCodecTest {
         assertNull(CastSettingsCodec.decode(flat(6, "fps" to null)))
     }
 
-    // ---- v7: profiles with two fields where there is now one ----
+    // ---- v7 and v8: the earlier profile formats ----
 
     private val v7 = """{"v":7,"selected":"custom:1","profiles":[{"id":1,"name":"Custom 1","values":{"longEdgePx":1920,"fps":60,"bitrateMinBps":8000000,"bitrateMaxBps":12000000,"degradationStrategy":"framerate","autoQuality":false,"encoderImpl":"hardware","preferredCodec":"h264","h264HighProfile":true,"encoderFpsLimit":null,"lowLatencyGameAudio":true}}],"gameAudio":true,"mic":false,"micDevice":"builtin"}"""
 
+    /** The tablet's own document after the one-day build with a single "struggle" choice. */
+    private val v8 = """{"v":8,"selected":"custom:1","profiles":[{"id":1,"name":"Custom 1","values":{"longEdgePx":1920,"fps":60,"bitrateMinBps":8000000,"bitrateMaxBps":12000000,"struggle":"smooth","degradationStrategy":null,"encoderImpl":"hardware","preferredCodec":"h264","h264HighProfile":true,"encoderFpsLimit":null,"lowLatencyGameAudio":true}}],"gameAudio":true,"mic":false,"micDevice":"builtin"}"""
+
     @Test
-    fun `a v7 profile's pressure strategy becomes its choice of what to give up`() {
-        // The tablet's own document: Keep frame rate with Automatic quality off.
-        val settings = CastSettingsCodec.decode(v7)!!
-        val profile = settings.customProfiles.single()
-        assertEquals("Custom 1", profile.name)
-        assertEquals(StrugglePolicy.SMOOTH, profile.values.struggle)
-        assertEquals(8_000_000 to 12_000_000, profile.values.bitrateMinBps to profile.values.bitrateMaxBps)
-        assertEquals(true, profile.values.lowLatencyGameAudio)
-        assertEquals(ProfileSelection.Custom(1), settings.selection)
-        assertEquals(StrugglePolicy.SHARP, CastSettingsCodec.decode(v7.replace("framerate", "resolution"))!!.active.struggle)
-        assertEquals(StrugglePolicy.BALANCED, CastSettingsCodec.decode(v7.replace("framerate", "balanced"))!!.active.struggle)
+    fun `a v7 document reads as it was stored`() {
+        val values = CastSettingsCodec.decode(v7)!!.customProfiles.single().values
+        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE, values.degradationStrategy)
+        assertEquals("the switch the user set is kept", false, values.autoQuality)
+        assertEquals(8_000_000 to 12_000_000, values.bitrateMinBps to values.bitrateMaxBps)
     }
 
     @Test
-    fun `automatic quality off does not become don't adjust`() {
-        // It was off because the old rule went to the lowest quality on a temperature reading.
-        assertEquals(StrugglePolicy.SMOOTH, CastSettingsCodec.decode(v7)!!.active.struggle)
-        assertEquals(StrugglePolicy.SMOOTH, CastSettingsCodec.decode(v7.replace(""""autoQuality":false""", """"autoQuality":true"""))!!.active.struggle)
+    fun `a v8 document's single choice becomes the two settings it stood for`() {
+        fun valuesOf(choice: String) = CastSettingsCodec.decode(v8.replace("smooth", choice))!!.customProfiles.single().values
+        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE to true, valuesOf("smooth").let { it.degradationStrategy to it.autoQuality })
+        assertEquals(DegradationStrategy.MAINTAIN_RESOLUTION to true, valuesOf("sharp").let { it.degradationStrategy to it.autoQuality })
+        assertEquals(DegradationStrategy.BALANCED to true, valuesOf("balanced").let { it.degradationStrategy to it.autoQuality })
+        assertEquals("don't adjust was the switch turned off", DegradationStrategy.BALANCED to false, valuesOf("fixed").let { it.degradationStrategy to it.autoQuality })
+        val kept = CastSettingsCodec.decode(v8)!!
+        assertEquals("Custom 1", kept.customProfiles.single().name)
+        assertEquals(true, kept.active.lowLatencyGameAudio)
+        assertEquals(8_000_000, kept.toConfig().bitrateMinBps)
     }
 
     @Test
-    fun `a v7 profile with an unknown pressure strategy decodes to null`() {
-        assertNull(CastSettingsCodec.decode(v7.replace("framerate", "vibes")))
+    fun `a v8 document with an unknown choice, or a profile with neither form, decodes to null`() {
+        assertNull(CastSettingsCodec.decode(v8.replace("smooth", "vibes")))
+        assertNull(CastSettingsCodec.decode(v8.replace(""""struggle":"smooth",""", "")))
     }
 
     @Test
     fun `a migrated document is written back as today's and reads the same`() {
+        for (old in listOf(v7, v8)) {
+            val migrated = CastSettingsCodec.decode(old)!!
+            assertEquals(migrated, CastSettingsCodec.decode(CastSettingsCodec.encode(migrated)))
+        }
         val migrated = CastSettingsCodec.decode(flat(6, "fps" to "60"))!!
         assertEquals(migrated, CastSettingsCodec.decode(CastSettingsCodec.encode(migrated)))
     }

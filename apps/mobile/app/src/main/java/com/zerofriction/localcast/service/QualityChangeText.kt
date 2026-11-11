@@ -22,19 +22,11 @@ internal fun steppedTo(context: Context, change: QualityChange): String {
     return parts.joinToString(" · ").ifEmpty { context.getString(R.string.settings_px, change.to.longEdgePx) }
 }
 
-/** The STATUS row: "Lowered to 1280 px: the encoder couldn't keep up. Comes back by itself." */
+/** The STATUS row: "Lowered to 1280 px: the phone is too hot. Comes back once it cools." */
 internal fun qualityChangeLine(context: Context, change: QualityChange, belowProfile: Boolean): String {
     val to = steppedTo(context, change)
     return when {
-        change.direction == Direction.DOWN -> context.getString(
-            R.string.adaptive_lowered,
-            to,
-            context.getString(reasonRes(change.reason)),
-            context.getString(
-                if (change.reason == Reason.THERMAL) R.string.adaptive_returns_when_cool else R.string.adaptive_returns,
-            ),
-        )
-
+        change.direction == Direction.DOWN -> context.getString(R.string.adaptive_lowered, to)
         change.reason == Reason.USER -> context.getString(R.string.adaptive_restored, to)
         belowProfile -> context.getString(R.string.adaptive_raised_partly, to)
         else -> context.getString(R.string.adaptive_raised, to)
@@ -49,15 +41,6 @@ internal fun qualityChangeNotification(context: Context, change: QualityChange):
         change.reason == Reason.USER -> context.getString(R.string.adaptive_notification_restored)
         else -> context.getString(R.string.adaptive_notification_raised, to)
     }
-}
-
-private fun reasonRes(reason: Reason): Int = when (reason) {
-    Reason.ENCODER -> R.string.adaptive_reason_encoder
-    Reason.DROPPED_FRAMES -> R.string.adaptive_reason_dropped
-    Reason.SEND_QUEUE -> R.string.adaptive_reason_queue
-    Reason.BITRATE_FLOOR -> R.string.adaptive_reason_floor
-    Reason.THERMAL -> R.string.adaptive_reason_thermal
-    Reason.RECOVERED, Reason.USER -> R.string.adaptive_reason_encoder // never a step down
 }
 
 /** Whether [level] is below the profile's own values on either dimension. */

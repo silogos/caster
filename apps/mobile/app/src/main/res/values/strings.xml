@@ -21,17 +21,18 @@
     <string name="profiles_foot_live">Picking a profile steers this cast until it ends. Changes to a profile apply to the next cast.</string>
     <string name="profiles_foot_full">%1$d profiles is the most. Delete one to add another.</string>
     <!-- What a profile gives up first when the network is short, as a tag on its row. -->
-    <string name="struggle_smooth">Keep it smooth</string>
-    <string name="struggle_sharp">Keep it sharp</string>
-    <string name="struggle_balanced">Balanced</string>
-    <string name="struggle_fixed">Don\'t adjust</string>
-    <!-- What each choice means, under its name in a profile. -->
-    <string name="struggle_smooth_meaning">Lowers detail first. Frame rate goes last.</string>
-    <string name="struggle_sharp_meaning">Lowers frame rate first. Detail stays.</string>
-    <string name="struggle_balanced_meaning">Gives up a little of both.</string>
-    <string name="struggle_fixed_meaning">Never lowers either. On a slow network the picture stutters and the sound falls behind.</string>
-    <string name="struggle_title">When the cast struggles</string>
-    <string name="struggle_hint">One answer for a slow network, a hot phone and an overloaded encoder. One step at a time, at most two steps down, and it comes back by itself.</string>
+    <string name="profile_tag_balanced">Balanced</string>
+    <string name="profile_tag_framerate">Keep frame rate</string>
+    <string name="profile_tag_resolution">Keep resolution</string>
+    <string name="settings_auto_quality">Automatic quality</string>
+    <string name="settings_auto_quality_hint">Lowers the picture one step if the phone reports a thermal emergency, and brings it back once it cools. Ordinary game heat does not trigger it.</string>
+    <string name="auto_quality_on">On</string>
+    <string name="auto_quality_off">Off</string>
+    <string name="settings_degradation">Under network pressure</string>
+    <string name="degradation_balanced">Balanced</string>
+    <string name="degradation_framerate">Keep frame rate</string>
+    <string name="degradation_resolution">Keep resolution</string>
+    <string name="settings_degradation_hint">What the cast gives up first when Wi-Fi slows down. Balanced trades a little of both; \"Keep frame rate\" stays smooth and drops detail; \"Keep resolution\" stays sharp and drops frames.</string>
     <!-- TalkBack label of a profile row's menu button. %1$s = the profile's name. -->
     <string name="profile_more_actions">More for %1$s</string>
     <string name="profile_action_edit">Edit</string>
@@ -208,16 +209,9 @@
     <!-- A step of the cast's quality (ADR-025) — plain words for what was
          lowered, why, and that it comes back (AGENTS.md); the thresholds and
          holds stay in the logs. %1$s = what it stepped to ("1280 px"). -->
-    <string name="adaptive_lowered">Lowered to %1$s: %2$s %3$s</string>
-    <string name="adaptive_reason_encoder">the encoder couldn\'t keep up.</string>
-    <string name="adaptive_reason_dropped">frames were being dropped.</string>
-    <string name="adaptive_reason_queue">the video was waiting to be sent.</string>
-    <string name="adaptive_reason_floor">the network couldn\'t carry more.</string>
-    <string name="adaptive_reason_thermal">the phone is too hot.</string>
-    <string name="adaptive_returns">Comes back by itself.</string>
-    <string name="adaptive_returns_when_cool">Comes back once it cools.</string>
-    <string name="adaptive_raised">Back to %1$s: the cast stayed clean.</string>
-    <string name="adaptive_raised_partly">Up to %1$s: the cast stayed clean. The rest comes back by itself.</string>
+    <string name="adaptive_lowered">Lowered to %1$s: the phone is too hot. Comes back once it cools.</string>
+    <string name="adaptive_raised">Back to %1$s: the phone cooled down.</string>
+    <string name="adaptive_raised_partly">Up to %1$s: the phone cooled down. The rest comes back by itself.</string>
     <string name="adaptive_restored">Restored to %1$s.</string>
     <string name="adaptive_restore">Restore now</string>
     <string name="adaptive_notification_lowered">Cast quality lowered to %1$s.</string>

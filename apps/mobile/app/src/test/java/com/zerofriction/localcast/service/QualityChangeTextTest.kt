@@ -19,31 +19,23 @@ class QualityChangeTextTest {
     private val smaller = profile.copy(longEdgePx = 1280)
 
     @Test
-    fun `a step down says what was lowered, why, and that it comes back`() {
-        assertEquals(
-            "Lowered to 1280 px: the encoder couldn't keep up. Comes back by itself.",
-            qualityChangeLine(context, QualityChange(profile, smaller, Direction.DOWN, Reason.ENCODER), belowProfile = true),
-        )
-        assertEquals(
-            "Lowered to 30 fps: the network couldn't carry more. Comes back by itself.",
-            qualityChangeLine(context, QualityChange(profile, profile.copy(fps = 30), Direction.DOWN, Reason.BITRATE_FLOOR), belowProfile = true),
-        )
-    }
-
-    @Test
-    fun `a thermal step says it waits for the phone to cool`() {
+    fun `a thermal step says what was lowered, why, and that it waits for the phone to cool`() {
         assertEquals(
             "Lowered to 1280 px: the phone is too hot. Comes back once it cools.",
             qualityChangeLine(context, QualityChange(profile, smaller, Direction.DOWN, Reason.THERMAL), belowProfile = true),
+        )
+        assertEquals(
+            "Lowered to 30 fps: the phone is too hot. Comes back once it cools.",
+            qualityChangeLine(context, QualityChange(profile, profile.copy(fps = 30), Direction.DOWN, Reason.THERMAL), belowProfile = true),
         )
     }
 
     @Test
     fun `a step back up says whether more is still to come`() {
         val up = QualityChange(profile.copy(longEdgePx = 960), smaller, Direction.UP, Reason.RECOVERED)
-        assertEquals("Up to 1280 px: the cast stayed clean. The rest comes back by itself.", qualityChangeLine(context, up, belowProfile = true))
+        assertEquals("Up to 1280 px: the phone cooled down. The rest comes back by itself.", qualityChangeLine(context, up, belowProfile = true))
         val home = QualityChange(smaller, profile, Direction.UP, Reason.RECOVERED)
-        assertEquals("Back to 1920 px: the cast stayed clean.", qualityChangeLine(context, home, belowProfile = false))
+        assertEquals("Back to 1920 px: the phone cooled down.", qualityChangeLine(context, home, belowProfile = false))
     }
 
     @Test

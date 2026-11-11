@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import com.zerofriction.localcast.BuildConfig
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.adaptive.QualityLevel
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.capture.CaptureSize
@@ -454,7 +455,8 @@ class CastService : Service() {
         // switch is a cast setting like any other — next-cast semantics).
         quality.start(
             QualityLevel(args.config.longEdgePx, args.config.fps, args.config.bitrateMinBps, args.config.bitrateMaxBps),
-            policy = args.config.struggle,
+            autoQuality = args.config.autoQuality,
+            strategy = DegradationStrategy.fromLabel(args.config.degradationPreference) ?: DegradationStrategy.BALANCED,
         )
         val newMic = MicController(
             context = applicationContext,

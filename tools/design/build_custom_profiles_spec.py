@@ -34,14 +34,8 @@ NOTES_GAP = 24
 TOP = 112
 MONO_ADVANCE = 0.6  # Liberation Mono's glyph advance, in em
 
-# "When the cast struggles": one answer for a slow network, heat and an overloaded encoder.
-STRUGGLE = {
-    "smooth": ("Keep it smooth", "Lowers detail first. Frame rate goes last."),
-    "sharp": ("Keep it sharp", "Lowers frame rate first. Detail stays."),
-    "balanced": ("Balanced", "Gives up a little of both."),
-    "fixed": ("Don't adjust", "Never lowers either. On a slow network the picture stutters and the sound falls "
-                              "behind."),
-}
+# What a profile gives up first when the network is short, as the tag on its row.
+PRESSURE = {"framerate": "Keep frame rate", "resolution": "Keep resolution", "balanced": "Balanced"}
 
 
 # ---- pieces of the console this draft adds or reuses ----
@@ -92,7 +86,7 @@ def profile_row(parent, name, spec, struggle, intent=None, selected=False, more=
     texts = vstack(row, "texts", gap=3, h="fill")
     title = hstack(texts, "title", gap=8, cross="center")
     text(title, name, 15, ON, "Medium", line=20)
-    tag(title, STRUGGLE[struggle][0].upper(), "amber" if selected else "muted")
+    tag(title, PRESSURE[struggle].upper(), "amber" if selected else "muted")
     if intent:
         text(texts, intent, 13, VARIANT, width=CARD_INNER_W - 20 - 14 - (54 if more else 0), line=19)
     mono(texts, spec, 11)
@@ -124,23 +118,6 @@ def field(parent, label, options, hint=None, width=CARD_INNER_W):
             chip(chips, chip_label, selected)
     if hint:
         text(f, hint, 13, VARIANT, width=width, line=19)
-    return f
-
-
-def struggle_field(parent, selected):
-    """The one field that replaces "Under network pressure" and "Automatic quality": a choice with its meaning."""
-    f = vstack(parent, "field · When the cast struggles", gap=8, h="fill")
-    text(f, "When the cast struggles", 13, VARIANT, line=18)
-    for key, (title, meaning) in STRUGGLE.items():
-        on = key == selected
-        option = hstack(f, f"option · {title}", gap=12, pad=(10, 12, 10, 12), cross="center", h="fill",
-                        fill=PRIMARY if on else None, opacity=0.07, radius=12, stroke=PRIMARY if on else OUTLINE)
-        radio(option, on)
-        texts = vstack(option, "texts", gap=1, h="fill")
-        text(texts, title, 14, ON, "Medium", line=20)
-        text(texts, meaning, 12.5, VARIANT, width=CARD_INNER_W - 24 - 20 - 12, line=18)
-    text(f, "One answer for a slow network, a hot phone and an overloaded encoder. One step at a time, at most "
-            "two steps down, and it comes back by itself.", 13, VARIANT, width=CARD_INNER_W, line=19)
     return f
 
 
@@ -217,7 +194,7 @@ nodes[PAGE] = {"id": PAGE, "name": "Mobile design v2 · custom profiles (draft, 
                "background": hexc(PAGE_BG), "flows": [],
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
-page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 3 (AMBER CONSOLE TOKENS) · BUILT 2026-11-11; THE RULE NOT MEASURED IN A CAST YET", 40, 30,
+page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 4 (AMBER CONSOLE TOKENS) · TWO BEHAVIOUR SETTINGS AGAIN; AUTOMATIC QUALITY ON A THERMAL EMERGENCY ONLY", 40, 30,
              13, "Bold", ON)
 COLUMN = PHONE_W + PHONE_GAP
 X = [40 + i * COLUMN for i in range(6)]
@@ -225,7 +202,7 @@ for x, label in zip(X, ("P1 · HOME — PICK A PROFILE", "P2 · EDIT A PROFILE",
                         "P4 · ROW MENU & DELETE", "P5 · WHERE ADVANCED WENT",
                         "OPEN QUESTIONS — WHAT THIS DRAFT ASSUMES")):
     page_caption(PAGE, label, x, 78)
-page_caption(PAGE, "THE RULE — WHO LOWERS WHAT, AND WHEN", X[5] + 560 + PHONE_GAP, 78)
+page_caption(PAGE, "THE RULE — WHO LOWERS THE PICTURE, AND WHEN", X[5] + 560 + PHONE_GAP, 78)
 
 # ======== P1 · Home: the profile list ========
 p1 = phone(PAGE, "P1 Home · profile list", X[0], TOP, grow=True)
@@ -239,8 +216,8 @@ zone(profiles, "BUILT-IN")
 BUILT_IN = [
     ("Cool", "960 px · 30 fps · 2–3 Mbps", "balanced", "Lowest heat — best for long sessions and warm devices."),
     ("Balanced", "1280 px · 30 fps · 4–6 Mbps", "balanced", "The default — good for most games."),
-    ("Performance", "1280 px · 60 fps · 6–10 Mbps", "smooth", "Smoother motion for fast games; more heat."),
-    ("Sharp", "1920 px · 30 fps · 8–12 Mbps", "sharp", "Highest detail; the most heat."),
+    ("Performance", "1280 px · 60 fps · 6–10 Mbps", "framerate", "Smoother motion for fast games; more heat."),
+    ("Sharp", "1920 px · 30 fps · 8–12 Mbps", "resolution", "Highest detail; the most heat."),
 ]
 for i, (name, spec, struggle, intent) in enumerate(BUILT_IN):
     if i:
@@ -248,9 +225,9 @@ for i, (name, spec, struggle, intent) in enumerate(BUILT_IN):
     profile_row(profiles, name, spec, struggle, intent)
 hairline(profiles, CONTENT_W)
 zone(profiles, "YOUR PROFILES")
-profile_row(profiles, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "smooth", selected=True, more=True)
+profile_row(profiles, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "framerate", selected=True, more=True)
 hairline(profiles, CONTENT_W)
-profile_row(profiles, "Custom 1", "1920 px · 60 fps · 8–12 Mbps", "sharp", more=True)
+profile_row(profiles, "Custom 1", "1920 px · 60 fps · 8–12 Mbps", "resolution", more=True)
 hairline(profiles, CONTENT_W)
 add_row = hstack(profiles, "add profile", gap=14, pad=(14, 16, 14, 16), cross="center", h="fill")
 plus = hstack(add_row, "plus", main="center", cross="center", h="fixed", v="fixed", width=20, height=20)
@@ -289,7 +266,12 @@ text(bitrate, "The cast stays inside this range, 1 to 20 Mbps. It moves within i
 behaviour = card(p2, "card · behaviour")
 beh = vstack(behaviour, "behaviour", gap=16, pad=(14, 16, 16, 16), h="fill")
 mono(beh, "BEHAVIOUR", 11, VARIANT, "Medium", spacing=1.1, line=14)
-struggle_field(beh, "smooth")
+field(beh, "Under network pressure", [("Balanced", False), ("Keep frame rate", True)],
+      hint="What the cast gives up first when Wi-Fi slows down. It is WebRTC that decides, second by second; "
+           "“Keep frame rate” drops detail, “Keep resolution” (the third choice, scrolled off) drops frames.")
+field(beh, "Automatic quality", [("On", True), ("Off", False)],
+      hint="Lowers the picture one step if the phone reports a thermal emergency, and brings it back once it "
+           "cools. Ordinary game heat does not trigger it.")
 encoder = card(p2, "card · encoder")
 enc = vstack(encoder, "encoder", gap=16, pad=(14, 16, 16, 16), h="fill")
 mono(enc, "ENCODER", 11, VARIANT, "Medium", spacing=1.1, line=14)
@@ -321,7 +303,7 @@ text(sheet, "New profile", 20, ON, "SemiBold", line=26)
 name_field(sheet, "Stream 60", focused=True)
 field(sheet, "Start from", [[("Current values", True), ("Cool", False), ("Balanced", False)],
                             [("Performance", False), ("Sharp", False), ("Custom 1", False)]], width=CONTENT_W)
-readout(sheet, ["1920 px · 60 fps · 4–12 Mbps", "Keep it smooth · Hardware · H.264 High"])
+readout(sheet, ["1920 px · 60 fps · 4–12 Mbps", "Keep frame rate · Hardware · H.264 High"])
 buttons = hstack(sheet, "buttons", gap=12, main="max", cross="center", h="fill")
 text_button(buttons, "Cancel", ON)
 create = hstack(buttons, "button · Create", pad=(0, 24, 0, 24), main="center", cross="center", v="fixed", height=48,
@@ -336,7 +318,7 @@ text(head, "Only your own profiles have one. Built-in profiles are read-only: co
      VARIANT, width=CONTENT_W, line=19)
 menu_card = card(p4, "card · profile")
 nodes[menu_card]["clip"] = True
-profile_row(menu_card, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "smooth", selected=True, more=True)
+profile_row(menu_card, "Stream 60", "1920 px · 60 fps · 4–12 Mbps", "framerate", selected=True, more=True)
 anchor = hstack(p4, "menu anchor", main="max", h="fill")
 menu = vstack(anchor, "menu", pad=(6, 0, 6, 0), h="fixed", width=200, fill=MENU_BG, radius=14, stroke=OUTLINE)
 for label, color in (("Edit", ON), ("Duplicate", ON), ("Delete", BAD)):
@@ -368,11 +350,11 @@ lamps = vstack(status, "lamps", gap=10, pad=(4, 16, 14, 16), h="fill")
 lowered = hstack(lamps, "lamp · lowered", gap=10, h="fill")
 ellipse(lowered, "led", 9, PRIMARY)
 lowered_text = vstack(lowered, "texts", gap=2, h="fill")
-text(lowered_text, "Lowered to 1280 px: the encoder couldn't keep up.", 13, ON, width=CARD_INNER_W - 19, line=19)
-text(lowered_text, "Comes back by itself.", 13, VARIANT, width=CARD_INNER_W - 19, line=19)
+text(lowered_text, "Lowered to 1280 px: the phone is too hot.", 13, ON, width=CARD_INNER_W - 19, line=19)
+text(lowered_text, "Comes back once it cools.", 13, VARIANT, width=CARD_INNER_W - 19, line=19)
 restore = hstack(lowered_text, "restore", pad=(2, 0, 0, 0))
 text_button(restore, "Restore now")
-for lamp, tone in (("Phone temperature: hot.", PRIMARY), ("Encoder: c2.qti.avc.encoder", VARIANT)):
+for lamp, tone in (("Phone temperature: critical.", PRIMARY), ("Encoder: c2.qti.avc.encoder", VARIANT)):
     row = hstack(lamps, f"lamp · {lamp}", gap=10, cross="center", h="fill")
     ellipse(row, "led", 9, tone, opacity=1.0 if tone == PRIMARY else 0.5)
     text(row, lamp, 13, ON, line=19)
@@ -380,7 +362,7 @@ audio_card(p5)
 moved = vstack(p5, "where each setting went", gap=10, h="fill")
 text(moved, "Where each Advanced setting went", 15, ON, "SemiBold", line=20)
 for setting, home in (
-    ("Automatic quality + Under network pressure", "One field in the profile: When the cast struggles (P2)"),
+    ("Automatic quality, Under network pressure", "The profile's Behaviour card, still two settings (P2)"),
     ("Encoder, H.264 profile, encoder fps limit", "The profile's Encoder card (P2)"),
     ("Preferred video codec", "The profile's Encoder card (P2)"),
     ("Low-latency game audio", "The profile's Audio card (P2)"),
@@ -412,7 +394,7 @@ for number, (question, drawn) in enumerate([
     ("Today's Custom values on upgrade?",
      "They arrive as a first profile, “Custom 1” (P1)."),
     ("Auto quality with a custom profile?",
-     "Folded into “When the cast struggles” (P2): the profile is the ceiling, and its choice says what goes first."),
+     "A switch in each profile (P2). It acts only on a thermal emergency; the profile is the ceiling."),
     ("Picking another profile during a cast?",
      "Not drawn. P5 shows a cast, but not its profile list."),
     ("How many profiles, and how long a name?",
@@ -420,12 +402,12 @@ for number, (question, drawn) in enumerate([
     ("Should a new profile start with “Keep frame rate”?",
      "A new profile always copies something, “Current values” by default (P3), so it has no default of its own."),
     ("NEW · “Under network pressure” and “Automatic quality” as one field?",
-     "Drawn as one (P2), with the rule beside this list. Built 2026-11-11 (ADR-025); not measured in a cast."),
+     "No. Built as one for a day, then split again by the product owner (2026-11-11): the network is "
+     "WebRTC's, and the app's own rule had no trigger that held up on the device except the temperature."),
     ("NEW · Does the Advanced page go?",
      "Drawn as gone: no gear on Home (P1), and P5 shows where each of its settings went."),
     ("NEW · Today's “Automatic quality: Off” on upgrade?",
-     "Not settled. “Custom 1” is drawn as Keep it sharp, which would turn the new rule on for it; “Don't "
-     "adjust” would instead stop it following the network."),
+     "Kept as it is stored: the switch is still there."),
 ], start=1):
     entry = hstack(questions, f"question {number}", gap=10, h="fill")
     num = hstack(entry, f"number {number}", main="center", cross="center", h="fixed", v="fixed", width=22,
@@ -439,38 +421,32 @@ removed = vstack(questions, "removed · bitrate mode", gap=6, h="fill")
 tag(removed, "REMOVED · BITRATE MODE (CBR / VBR)", "bad")
 text(removed, "Decided 2026-11-11: the setting goes. VBR never took effect (libwebrtc fixes the encoder to CBR), "
               "and real VBR would burst on busy scenes, against smooth frames and sound. The bitrate already "
-              "follows the network through the range and “When the cast struggles”. A profile has no such field "
+              "follows the network through the range and “Under network pressure”. A profile has no such field "
               "(P2).", 12.5, VARIANT, width=QUESTIONS_W - 40, line=18)
 
-# ======== The rule behind "When the cast struggles" ========
+# ======== Who lowers the picture, and when ========
 RULE_W = 560
-rule = vstack(PAGE, "The rule · when the cast struggles", gap=12, pad=(20, 20, 20, 20), h="fixed", width=RULE_W,
+rule = vstack(PAGE, "The rule · who lowers the picture", gap=12, pad=(20, 20, 20, 20), h="fixed", width=RULE_W,
               fill=SURFACE, radius=18, stroke=OUTLINE)
 nodes[rule]["child_layout"]["absolute"] = False
-text(rule, "The rule behind the one field", 20, ON, "SemiBold", line=26)
-text(rule, "Agreed with the product owner 2026-11-11 and built (ADR-025). Every number is a starting guess to be "
-           "measured in a real game cast.", 13, VARIANT, width=RULE_W - 40, line=19)
+text(rule, "Who lowers the picture, and when", 20, ON, "SemiBold", line=26)
+text(rule, "Decided by the product owner 2026-11-11, after a day with one merged field (ADR-025).", 13, VARIANT,
+     width=RULE_W - 40, line=19)
 for heading, lines in (
-    ("Who moves what",
-     ["Bitrate: WebRTC, by itself and within seconds, inside the profile's range.",
-      "Resolution and frame rate: the app, one step at a time. WebRTC no longer changes either."]),
-    ("The steps (at most two below the profile)",
-     ["Keep it smooth: resolution down, then resolution down again.",
-      "Keep it sharp: 60 → 30 fps, then resolution down.",
-      "Balanced: resolution down, then 60 → 30 fps.",
-      "Don't adjust: none.",
-      "Resolution steps are the app's own: 1920 → 1280 → 960 px."]),
-    ("Down one step, when one of these holds for about 10 s",
-     ["The encoder cannot keep up (95% of the time it has).",
-      "A tenth of the frames are dropped.",
-      "Video packets wait 60 ms or more to be sent.",
-      "The bitrate sits at the profile's least."]),
-    ("Up one step",
-     ["After 30 s with none of those, and the bitrate clear of the least."]),
-    ("Guards",
-     ["20 s between two steps, either way.",
-      "Temperature alone does nothing until CRITICAL: then one step down, and no step up while it lasts.",
-      "“Restore now” and a profile pick go back to the profile's values and start over."]),
+    ("Under network pressure: WebRTC",
+     ["Bitrate, and with it resolution or frame rate, second by second, the way the profile's choice says.",
+      "Never under the least of the profile's bitrate range.",
+      "The app does not step in, and cannot say on screen what WebRTC did."]),
+    ("Automatic quality: the app, on a thermal emergency only",
+     ["Nothing below CRITICAL. A game keeps this tablet at SEVERE for a whole session at 60 fps.",
+      "At CRITICAL: one step down at once; a second if it is still there a minute later; no further.",
+      "The order is the profile's pressure choice: Keep frame rate gives up resolution, Keep resolution "
+      "gives up 60 → 30 fps first, Balanced one of each.",
+      "Out of the emergency for 30 s: one step back, then the next.",
+      "“Restore now” goes straight back to the profile's values."]),
+    ("Why nothing else triggers it",
+     ["Measured on the TB321FU over 14,000 s of casts: the dropped-frame counter never left 0, and the "
+      "encoder-load figure read highest when the cast was healthiest."]),
 ):
     block = vstack(rule, f"rule · {heading}", gap=3, h="fill")
     text(block, heading, 13, ON, "Medium", width=RULE_W - 40, line=18)
@@ -493,8 +469,8 @@ for f, title, lines in (
                 "cast do”.",
                 "The bitrate is one slider with two thumbs: the least and the most. The sender never goes under "
                 "the least, whatever the choice below (there was a hidden 1 Mbps floor).",
-                "One field replaces “Under network pressure” and “Automatic quality”. “Don't adjust” is the "
-                "old Automatic quality: Off, and says what it costs.",
+                "Behaviour keeps two settings: what WebRTC gives up under network pressure, and whether the app "
+                "may lower the picture in a thermal emergency.",
                 "The codec joins the H.264 profile it belongs with. No Bitrate mode: removed.",
                 "How the game audio travels (Low latency / Standard) is the profile's too.",
                 "The fps choices are the app's own (30 / 60)."]),
@@ -503,8 +479,8 @@ for f, title, lines in (
     (p4, "P4", ["Rename is the Name field in Edit, not a separate item.",
                 "Deleting the selected profile falls back to Balanced, the app's default."]),
     (p5, "P5", ["Home while casting. The encoder readout moves to Status, where the cast's other facts are.",
-                "A step down says what was lowered and why, and that it comes back. “Restore now” is for not "
-                "waiting.",
+                "A thermal step says what was lowered and that it comes back once the phone cools. “Restore "
+                "now” is for not waiting.",
                 "The list under the cards is an annotation, not part of the screen."]),
 ):
     n = notes(PAGE, title, lines, nodes[f]["transform"][4], TOP + nodes[f]["height"] + NOTES_GAP)

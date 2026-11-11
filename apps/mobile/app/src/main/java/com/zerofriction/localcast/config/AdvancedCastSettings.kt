@@ -42,41 +42,14 @@ enum class PreferredVideoCodec(val label: String, val sdpName: String) {
     }
 }
 
-/**
- * What the cast gives up when it struggles — a slow network, a hot phone or
- * an overloaded encoder alike (ADR-025). One choice where there used to be
- * two ("Under network pressure" and "Automatic quality"): the app lowers the
- * picture one step at a time in this order and brings it back by itself
- * ([com.zerofriction.localcast.adaptive.AdaptiveQualityController]).
- */
-enum class StrugglePolicy(val label: String) {
-    /** Detail goes first; the frame rate goes last. */
-    SMOOTH("smooth"),
-
-    /** The frame rate goes first; detail stays. */
-    SHARP("sharp"),
-
-    /** A little of both. */
+/** What the cast gives up first under bandwidth/encoder pressure ([CastConfig.degradationPreference]). */
+enum class DegradationStrategy(val label: String) {
     BALANCED("balanced"),
-
-    /** Neither is ever lowered; the bitrate still moves inside the profile's range. */
-    FIXED("fixed");
+    MAINTAIN_FRAMERATE("framerate"),
+    MAINTAIN_RESOLUTION("resolution");
 
     companion object {
-        fun fromLabel(label: String): StrugglePolicy? = entries.firstOrNull { it.label == label }
-
-        /**
-         * What a stored "Under network pressure" label becomes (v7 and
-         * older documents). The old "Automatic quality: off" does not map to
-         * [FIXED]: it was turned off because the old rule went to the lowest
-         * quality on a temperature reading, which the new rule does not do.
-         */
-        fun fromPressureLabel(label: String): StrugglePolicy? = when (label) {
-            "framerate" -> SMOOTH
-            "resolution" -> SHARP
-            "balanced" -> BALANCED
-            else -> null
-        }
+        fun fromLabel(label: String): DegradationStrategy? = entries.firstOrNull { it.label == label }
     }
 }
 

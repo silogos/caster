@@ -49,7 +49,7 @@ import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CustomProfile
 import com.zerofriction.localcast.config.CustomProfileRules
-import com.zerofriction.localcast.config.StrugglePolicy
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.ProfileSelection
 import com.zerofriction.localcast.config.ProfileValues
 import com.zerofriction.localcast.config.QualityProfile
@@ -70,8 +70,8 @@ import kotlinx.coroutines.delay
  *    live and resets auto quality onto them; the stored selection is
  *    untouched — "until the cast ends").
  *
- * Every row says in words what the profile gives up when the cast
- * struggles, so a combination that will hurt is visible before the cast starts.
+ * Every row says in words what the profile gives up when the network is
+ * short, so a combination that will hurt is visible before the cast starts.
  * Only the user's own profiles have a menu (edit, duplicate, delete); the
  * built-in ones are fixed. STATUS — casting only — is the card's last zone:
  * the readout header (amber timecode + shorthand quality) over the lamp
@@ -105,7 +105,7 @@ fun QualityConsoleCard(
             val selection = ProfileSelection.BuiltIn(preset)
             ProfileRow(
                 name = profileName(preset),
-                tag = struggleName(preset.struggle),
+                tag = pressureTag(preset.degradation),
                 intent = profileIntent(preset),
                 spec = profileSpec(preset.toValues()),
                 selected = lit == selection,
@@ -121,7 +121,7 @@ fun QualityConsoleCard(
             val selection = ProfileSelection.Custom(profile.id)
             ProfileRow(
                 name = profile.name,
-                tag = struggleName(profile.values.struggle),
+                tag = pressureTag(profile.values.degradationStrategy),
                 intent = null,
                 spec = profileSpec(profile.values),
                 selected = lit == selection,
@@ -355,7 +355,7 @@ private fun ProfileRow(
     }
 }
 
-/** What the profile gives up when the cast struggles, as a quiet tag beside its name. */
+/** What the profile gives up first when the network is short, as a quiet tag beside its name. */
 @Composable
 private fun PressureTag(text: String, selected: Boolean) {
     val ink = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -484,14 +484,12 @@ internal fun DeleteProfileDialog(
     )
 }
 
-/** A profile's answer to "what goes first when the cast struggles", by name. */
 @Composable
-internal fun struggleName(policy: StrugglePolicy): String = stringResource(
-    when (policy) {
-        StrugglePolicy.SMOOTH -> R.string.struggle_smooth
-        StrugglePolicy.SHARP -> R.string.struggle_sharp
-        StrugglePolicy.BALANCED -> R.string.struggle_balanced
-        StrugglePolicy.FIXED -> R.string.struggle_fixed
+private fun pressureTag(strategy: DegradationStrategy): String = stringResource(
+    when (strategy) {
+        DegradationStrategy.BALANCED -> R.string.profile_tag_balanced
+        DegradationStrategy.MAINTAIN_FRAMERATE -> R.string.profile_tag_framerate
+        DegradationStrategy.MAINTAIN_RESOLUTION -> R.string.profile_tag_resolution
     },
 )
 

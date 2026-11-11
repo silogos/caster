@@ -604,10 +604,11 @@ class MediaCastSession(
             // Advanced limit still wins when tighter ([effectiveEncoderFpsCap]).
             maxFramerate = effectiveEncoderFpsCap(liveFps, config.encoderFpsLimit)
         }
-        // libwebrtc moves the bitrate; the app steps the resolution and the
-        // frame rate, one at a time and bounded (ADR-025). Left to itself
-        // libwebrtc took a game cast from 1920 px to 640×400.
-        parameters.degradationPreference = RtpParameters.DegradationPreference.DISABLED
+        parameters.degradationPreference = when (config.degradationPreference) {
+            CastConfig.DEGRADATION_BALANCED -> RtpParameters.DegradationPreference.BALANCED
+            CastConfig.DEGRADATION_FRAMERATE -> RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            else -> RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+        }
         val result = sender.setParameters(parameters)
         if (!result) {
             Log.w(TAG, "setParameters rejected — bitrate/degradation targets may not be applied")
@@ -616,7 +617,7 @@ class MediaCastSession(
         Log.i(
             TAG,
             "sender targets: ${liveBitrateMinBps / 1_000}–${liveBitrateMaxBps / 1_000} kbps" +
-                ", when it struggles: ${config.struggle.label}",
+                ", under pressure: ${config.degradationPreference}",
         )
     }
 

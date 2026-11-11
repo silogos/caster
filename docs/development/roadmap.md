@@ -355,13 +355,15 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the fixed Add sheet and the bitrate range are not installed on the tablet yet; picking a profile during a cast was not tried. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
 
-## Feature 2026-11ae — The app steps the picture; one field in a profile ⏳ built and unit-tested; not measured in a cast (2026-11-11)
-*(Not a numbered phase: follows the game cast in which libwebrtc took the picture to 640×400.)*
-**Scope:** "Under network pressure" and "Automatic quality" become one choice in a profile, "When the cast struggles" (Keep it smooth / Keep it sharp / Balanced / Don't adjust). libwebrtc only moves the bitrate inside the profile's range; the app steps the resolution and the frame rate: one step at a time, on symptoms held for 10 s, at most two steps down, 20 s apart, back up after 30 clean seconds; the temperature alone acts only at CRITICAL. Home's STATUS says what was lowered and why, with "Restore now". Stored settings v8 — [ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md).
+## Feature 2026-11ae — Automatic quality acts on a thermal emergency only ⏳ built and unit-tested; the emergency has never occurred on the device (2026-11-11)
+*(Not a numbered phase: follows the game casts of 2026-11-11.)*
+**Scope:** Automatic quality used to step on a temperature reading (MODERATE for minutes), down to the lowest preset, without coming back. It now acts only at thermal CRITICAL: one step down, a second if the emergency lasts a minute, in the order of the profile's pressure strategy, and back up 30 s after it ends; STATUS says so, with "Restore now". "Under network pressure" stays libwebrtc's, inside the profile's bitrate range. Dropped frames and encoder utilization are no longer inputs: 14,000 s of recorded casts disprove both — [ADR-025](../decisions/ADR-025-automatic-quality-acts-on-a-thermal-emergency.md).
 
-**Accept:** mobile `testDebugUnitTest` 446 (0 failures, 2 skipped): the rule on a one-second clock (steps per choice, each symptom, the hold, the pause, the two-step bound, recovery, no flapping, the thermal emergency, restore, counter resets), the v7 migration, the texts.
+**Tried first, the same day:** one merged field ("When the cast struggles") with the app stepping the picture on four symptoms and libwebrtc's adaptation off. In one game cast it bounded the fall (1920 → 1280 → 960 px, 60 fps restored) and never came back, because the encoder symptom reads "on" at a healthy 60 fps. Split again by the product owner (ADR-025, History). Stored settings v8 from that day map back into v9.
 
-**Not done:** no cast has run with it; every number is a starting guess. Not installed on the tablet.
+**Accept:** mobile `testDebugUnitTest` 437 (0 failures, 2 skipped).
+
+**Not done:** CRITICAL has never been reached on the tablet, so the rule has not run in a cast. Nothing reacts to an overloaded encoder short of the stall recovery (ADR-022).
 
 ## Definition of Done (every phase)
 

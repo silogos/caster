@@ -37,9 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,7 +47,7 @@ import com.zerofriction.localcast.config.AdvancedSettingChoices
 import com.zerofriction.localcast.config.CastSettingChoices
 import com.zerofriction.localcast.config.CustomProfile
 import com.zerofriction.localcast.config.CustomProfileRules
-import com.zerofriction.localcast.config.StrugglePolicy
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.ProfileSelection
@@ -59,7 +56,6 @@ import com.zerofriction.localcast.ui.components.CastCard
 import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.SilkscreenLabel
 import com.zerofriction.localcast.ui.home.DeleteProfileDialog
-import com.zerofriction.localcast.ui.home.struggleName
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.settings.settingsFactory
 import kotlin.math.roundToInt
@@ -199,21 +195,34 @@ fun ProfileEditContent(
                 }
             }
 
-            // ---- Behaviour: what the cast gives up when it struggles (ADR-025) ----
+            // ---- Behaviour: what the cast gives up, and whether it may lower itself ----
             SilkscreenLabel(stringResource(R.string.profile_card_behaviour))
             CastCard {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp)) {
-                    SubLabel(R.string.struggle_title)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                        for (policy in StrugglePolicy.entries) {
-                            StruggleOption(
-                                policy = policy,
-                                selected = policy == values.struggle,
-                                onClick = { onEdit { it.copy(struggle = policy) } },
-                            )
-                        }
-                    }
-                    HintText(R.string.struggle_hint)
+                    SubLabel(R.string.settings_degradation)
+                    CastChipRow(
+                        options = DegradationStrategy.entries.map { strategy ->
+                            stringResource(
+                                when (strategy) {
+                                    DegradationStrategy.BALANCED -> R.string.degradation_balanced
+                                    DegradationStrategy.MAINTAIN_FRAMERATE -> R.string.degradation_framerate
+                                    DegradationStrategy.MAINTAIN_RESOLUTION -> R.string.degradation_resolution
+                                },
+                            ) to (strategy == values.degradationStrategy)
+                        },
+                        onSelect = { index -> onEdit { it.copy(degradationStrategy = DegradationStrategy.entries[index]) } },
+                    )
+                    HintText(R.string.settings_degradation_hint)
+
+                    SubLabel(R.string.settings_auto_quality)
+                    CastChipRow(
+                        options = listOf(
+                            stringResource(R.string.auto_quality_on) to values.autoQuality,
+                            stringResource(R.string.auto_quality_off) to !values.autoQuality,
+                        ),
+                        onSelect = { index -> onEdit { it.copy(autoQuality = index == 0) } },
+                    )
+                    HintText(R.string.settings_auto_quality_hint)
                 }
             }
 
@@ -381,43 +390,6 @@ private fun BitrateRange(minBps: Int, maxBps: Int, onCommit: (Int, Int) -> Unit)
         lineHeight = 19.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-}
-
-/** One choice of [StrugglePolicy]: its name over what it means, the whole row one radio button. */
-@Composable
-private fun StruggleOption(policy: StrugglePolicy, selected: Boolean, onClick: () -> Unit) {
-    val meaning = when (policy) {
-        StrugglePolicy.SMOOTH -> R.string.struggle_smooth_meaning
-        StrugglePolicy.SHARP -> R.string.struggle_sharp_meaning
-        StrugglePolicy.BALANCED -> R.string.struggle_balanced_meaning
-        StrugglePolicy.FIXED -> R.string.struggle_fixed_meaning
-    }
-    Surface(
-        selected = selected,
-        onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f) else Color.Transparent,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { role = Role.RadioButton },
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                text = struggleName(policy),
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = stringResource(meaning),
-                fontSize = 12.5.sp,
-                lineHeight = 18.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
 }
 
 /** A lighter label for the items inside a card. */
