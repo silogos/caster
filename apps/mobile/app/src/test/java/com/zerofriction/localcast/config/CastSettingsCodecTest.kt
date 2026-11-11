@@ -20,8 +20,7 @@ class CastSettingsCodecTest {
         fps = 60,
         bitrateMinBps = 6_000_000,
         bitrateMaxBps = 12_000_000,
-        degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
-        autoQuality = false,
+        struggle = StrugglePolicy.FIXED,
         encoderImpl = EncoderImplementation.SOFTWARE,
         preferredCodec = PreferredVideoCodec.VP8,
         h264HighProfile = false,
@@ -53,9 +52,10 @@ class CastSettingsCodecTest {
     }
 
     @Test
-    fun `the document is version 7 and has no bitrate mode`() {
+    fun `the document is version 8 and has no bitrate mode or auto-quality switch`() {
         val document = CastSettingsCodec.encode(withProfiles)
-        assertTrue(document.contains(""""v":7"""))
+        assertTrue(document.contains(""""v":8"""))
+        assertFalse(document.contains("autoQuality"))
         assertFalse(document.contains("bitrateMode"))
         assertFalse(document.contains("bitrateAuto"))
     }
@@ -74,8 +74,8 @@ class CastSettingsCodecTest {
 
     @Test
     fun `a version this build does not know decodes to null`() {
-        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":7""", """"v":8""")))
-        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":7""", """"v":0""")))
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":8""", """"v":9""")))
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":8""", """"v":0""")))
     }
 
     @Test
@@ -167,12 +167,9 @@ class CastSettingsCodecTest {
         val profile = settings.customProfiles.single()
         assertEquals("Custom 1", profile.name)
         assertEquals(ProfileSelection.Custom(profile.id), settings.selection)
-        assertEquals(
-            QualityProfile.SHARP.toValues().copy(fps = 60, autoQuality = false),
-            profile.values,
-        )
-        assertEquals("the next cast is unchanged", 8_000_000, settings.toConfig().bitrateMinBps)
-        assertEquals(CastConfig.DEGRADATION_RESOLUTION, settings.toConfig().degradationPreference)
+        assertEquals(QualityProfile.SHARP.toValues().copy(fps = 60), profile.values)
+        assertEquals("the range is kept", 8_000_000, settings.toConfig().bitrateMinBps)
+        assertEquals("Keep resolution became Keep it sharp", StrugglePolicy.SHARP, settings.toConfig().struggle)
     }
 
     @Test
@@ -210,11 +207,9 @@ class CastSettingsCodecTest {
 
     @Test
     fun `fields a version did not have yet take the default shipped with it`() {
-        val v2 = CastSettingsCodec.decode(flat(2))!!
-        assertEquals(true, v2.active.autoQuality)
-        val v3 = CastSettingsCodec.decode(flat(3, "autoQuality" to "false"))!!
-        assertEquals(false, v3.active.autoQuality)
+        val v3 = CastSettingsCodec.decode(flat(3))!!
         assertEquals(EncoderImplementation.HARDWARE, v3.active.encoderImpl)
+        assertEquals(StrugglePolicy.BALANCED, v3.active.struggle)
         val v4 = CastSettingsCodec.decode(flat(4))!!
         assertEquals(MicDeviceSource.BUILTIN, v4.micDevice)
         val v5 = CastSettingsCodec.decode(flat(5, "micDevice" to "\"bluetooth\""))!!
@@ -243,6 +238,36 @@ class CastSettingsCodecTest {
         assertNull(CastSettingsCodec.decode(flat(6, "degradationStrategy" to "\"vibes\"")))
         assertNull(CastSettingsCodec.decode(flat(6, "micDevice" to "\"telepathy\"")))
         assertNull(CastSettingsCodec.decode(flat(6, "fps" to null)))
+    }
+
+    // ---- v7: profiles with two fields where there is now one ----
+
+    private val v7 = """{"v":7,"selected":"custom:1","profiles":[{"id":1,"name":"Custom 1","values":{"longEdgePx":1920,"fps":60,"bitrateMinBps":8000000,"bitrateMaxBps":12000000,"degradationStrategy":"framerate","autoQuality":false,"encoderImpl":"hardware","preferredCodec":"h264","h264HighProfile":true,"encoderFpsLimit":null,"lowLatencyGameAudio":true}}],"gameAudio":true,"mic":false,"micDevice":"builtin"}"""
+
+    @Test
+    fun `a v7 profile's pressure strategy becomes its choice of what to give up`() {
+        // The tablet's own document: Keep frame rate with Automatic quality off.
+        val settings = CastSettingsCodec.decode(v7)!!
+        val profile = settings.customProfiles.single()
+        assertEquals("Custom 1", profile.name)
+        assertEquals(StrugglePolicy.SMOOTH, profile.values.struggle)
+        assertEquals(8_000_000 to 12_000_000, profile.values.bitrateMinBps to profile.values.bitrateMaxBps)
+        assertEquals(true, profile.values.lowLatencyGameAudio)
+        assertEquals(ProfileSelection.Custom(1), settings.selection)
+        assertEquals(StrugglePolicy.SHARP, CastSettingsCodec.decode(v7.replace("framerate", "resolution"))!!.active.struggle)
+        assertEquals(StrugglePolicy.BALANCED, CastSettingsCodec.decode(v7.replace("framerate", "balanced"))!!.active.struggle)
+    }
+
+    @Test
+    fun `automatic quality off does not become don't adjust`() {
+        // It was off because the old rule went to the lowest quality on a temperature reading.
+        assertEquals(StrugglePolicy.SMOOTH, CastSettingsCodec.decode(v7)!!.active.struggle)
+        assertEquals(StrugglePolicy.SMOOTH, CastSettingsCodec.decode(v7.replace(""""autoQuality":false""", """"autoQuality":true"""))!!.active.struggle)
+    }
+
+    @Test
+    fun `a v7 profile with an unknown pressure strategy decodes to null`() {
+        assertNull(CastSettingsCodec.decode(v7.replace("framerate", "vibes")))
     }
 
     @Test

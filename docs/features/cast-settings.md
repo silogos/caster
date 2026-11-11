@@ -97,7 +97,7 @@ Supersedes the `Preset | Custom` console, the Advanced page and the single setti
 ### What the user sees
 
 - **Home's quality console is one list of profiles** (`ui/home/QualityConsoleCard.kt`): the four built-in ones, then the user's own, then *Add profile*.
-  - Every row shows the profile's name, a tag saying what it gives up when the network is short (BALANCED / KEEP FRAME RATE / KEEP RESOLUTION), and its real numbers (`1920 px · 60 fps · 6–12 Mbps`). A built-in also keeps its intent line.
+  - Every row shows the profile's name, a tag saying what it gives up when the cast struggles (KEEP IT SMOOTH / KEEP IT SHARP / BALANCED / DON'T ADJUST), and its real numbers (`1920 px · 60 fps · 6–12 Mbps`). A built-in also keeps its intent line.
   - Only the user's own rows have a `⋯` menu: Edit, Duplicate, Delete. Delete asks first.
   - Idle, a pick selects the profile for the next cast. Casting, a pick steers the running cast to that profile's picture and leaves the stored selection alone; the lit row is the one the running picture matches.
 - **Add profile** (`ui/profiles/AddProfileSheet.kt`): a sheet with a name (the next free "Custom N" is suggested), *Start from* (the values on screen, or any profile), and a strip showing what will be copied.
@@ -106,7 +106,7 @@ Supersedes the `Preset | Custom` console, the Advanced page and the single setti
   | Card | Settings |
   |---|---|
   | Picture | Resolution, frame rate, bitrate range: one slider with two thumbs, the least and the most (1–20 Mbps). The sender never goes under the least, whatever the pressure choice ([ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md), revised) |
-  | Behaviour | Under network pressure, Automatic quality |
+  | Behaviour | When the cast struggles: Keep it smooth / Keep it sharp / Balanced / Don't adjust ([ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md)) |
   | Encoder | Encoder, video codec, H.264 profile, encoder fps limit |
   | Audio | Low-latency game audio (Low latency / Standard) |
 
@@ -120,9 +120,9 @@ Supersedes the `Preset | Custom` console, the Advanced page and the single setti
 - `config/CastSettings.kt` holds the selection, the user's profiles and the audio switches. The cast's values are the selected profile's (`active`); nothing duplicates them. The profile edits (`withProfileAdded`, `withProfileEdited`, …) return the settings unchanged when an edit is not allowed, and `toConfig()` is still the single conversion into `CastConfig`.
 - `session-info.profile` carries a built-in's label or the user's profile name.
 
-### Persistence (v6 → v7)
+### Persistence (v6 → v7 → v8)
 
-`CastSettingsCodec` v7 stores the selection, the profiles and the audio switches. Every older document migrates: values that equal a built-in profile select it; anything else becomes "Custom 1", selected, with every value kept. `bitrateAuto` and `bitrateMode` are dropped. A document that breaks a rule (two profiles with one id, an empty name, a selection that names no profile, a value this build does not offer) decodes to null and the store falls back to defaults.
+v8 ([ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md)) replaces a profile's two behaviour fields with one; v7 documents migrate by their pressure strategy. `CastSettingsCodec` v7 stored the selection, the profiles and the audio switches. Every older document migrates: values that equal a built-in profile select it; anything else becomes "Custom 1", selected, with every value kept. `bitrateAuto` and `bitrateMode` are dropped. A document that breaks a rule (two profiles with one id, an empty name, a selection that names no profile, a value this build does not offer) decodes to null and the store falls back to defaults.
 
 ### Verification (2026-11-11)
 
@@ -134,5 +134,5 @@ Mobile `testDebugUnitTest`: 442 tests, 0 failures, 2 skipped. New or rewritten: 
 
 - A built-in profile cannot be changed in place; the user copies it first.
 - The live dials are gone: during a cast the picture is steered by picking a profile.
-- "Under network pressure" and "Automatic quality" stay two settings. The design draft merges them into one; that needs a new automatic-quality rule first (ADR-024, Consequences).
+- The rule behind "When the cast struggles" ([ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md)) is built and unit-tested, not measured in a cast.
 

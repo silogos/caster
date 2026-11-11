@@ -19,7 +19,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CustomProfile
-import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.StrugglePolicy
 import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.ProfileValues
@@ -79,13 +79,13 @@ class ProfileScreensUiTest {
     fun `each choice changes the one value it names`() {
         showEdit()
         compose.onNodeWithText("960 px").performScrollTo().performClick()
-        compose.onNodeWithText("Keep frame rate").performScrollTo().performClick()
+        compose.onNodeWithText("Keep it smooth").performScrollTo().performClick()
         compose.onNodeWithText("Software").performScrollTo().performClick()
         compose.onNodeWithText("Low latency").performScrollTo().performClick()
         assertEquals(
             sharp60.copy(
                 longEdgePx = 960,
-                degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
+                struggle = StrugglePolicy.SMOOTH,
                 encoderImpl = EncoderImplementation.SOFTWARE,
                 lowLatencyGameAudio = true,
             ),
@@ -193,7 +193,7 @@ class ProfileScreensUiTest {
     fun `a new profile starts as a copy of the values on screen, under the next free name`() {
         showAdd(CastSettings.default().withProfileAdded("Custom 1", sharp60))
         compose.onNodeWithText("1920 px · 60 fps · 8–12 Mbps").assertExists()
-        compose.onNodeWithText("Keep resolution · Hardware · H.264 High").assertExists()
+        compose.onNodeWithText("Keep it sharp · Hardware · H.264 High").assertExists()
         compose.onNodeWithText("Create").performClick()
         assertEquals(listOf("Custom 2" to sharp60), created)
     }
@@ -203,7 +203,7 @@ class ProfileScreensUiTest {
         showAdd(CastSettings.default())
         compose.onNodeWithText("Performance").performClick()
         compose.onNodeWithText("1280 px · 60 fps · 6–10 Mbps").assertExists()
-        compose.onNodeWithText("Keep frame rate · Hardware · H.264 High").assertExists()
+        compose.onNodeWithText("Keep it smooth · Hardware · H.264 High").assertExists()
         compose.onNode(hasSetTextAction()).performTextReplacement(" Fast ")
         compose.onNodeWithText("Create").performClick()
         assertEquals(listOf("Fast" to QualityProfile.PERFORMANCE.toValues()), created)

@@ -13,8 +13,10 @@ import kotlinx.serialization.json.Json
  * can't fully validate degrades to defaults, logged by the caller — a cast
  * must never run on guessed values.
  *
- * **v7 (ADR-024)** stores the selected profile, the user's own profiles and
- * the audio switches.
+ * **v8 (ADR-025)** stores the selected profile, the user's own profiles and
+ * the audio switches. **v7 (ADR-024)** had the same shape with two fields
+ * where a profile now has one: `degradationStrategy` becomes `struggle`
+ * ([StrugglePolicy.fromPressureLabel]) and `autoQuality` is dropped.
  *
  * **v1–v6** stored one flat set of values (a preset pick overwrote it; the
  * rest was an unnamed "Custom" state). They are still accepted and migrate
@@ -24,13 +26,16 @@ import kotlinx.serialization.json.Json
  * (a profile's window is simply its window) and `bitrateMode` (the setting
  * never took effect and is gone). The flat ladder itself: v1 → v2 was the
  * Phase11 preset relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added
- * `autoQuality`, v3 → v4 the encoder choices, v4 → v5 `micDevice`, v5 → v6
+ * `autoQuality` (dropped again in v8), v3 → v4 the encoder choices, v4 → v5 `micDevice`, v5 → v6
  * `lowLatencyGameAudio` — each with the default that was shipped then.
  */
 object CastSettingsCodec {
 
     /** Storage format version; an unknown one is "not ours" → defaults. */
-    const val VERSION = 7
+    const val VERSION = 8
+
+    /** The first profile format: two fields where v8 has `struggle`. */
+    const val PROFILES_V7 = 7
 
     /** The flat formats (see the class comment). */
     const val FIRST_FLAT_VERSION = 1
@@ -68,8 +73,9 @@ object CastSettingsCodec {
         val fps: Int,
         val bitrateMinBps: Int,
         val bitrateMaxBps: Int,
-        val degradationStrategy: String,
-        val autoQuality: Boolean,
+        /** v8. Absent in v7, which had [degradationStrategy] instead. */
+        val struggle: String? = null,
+        val degradationStrategy: String? = null,
         val encoderImpl: String,
         val preferredCodec: String,
         val h264HighProfile: Boolean,
@@ -102,12 +108,11 @@ object CastSettingsCodec {
         val gameAudio: Boolean,
         val mic: Boolean,
         val micDevice: String = MicDeviceSource.BUILTIN.label,
-        val autoQuality: Boolean = CastConfig.DEFAULT_AUTO_QUALITY,
         val lowLatencyGameAudio: Boolean = CastConfig.DEFAULT_LOW_LATENCY_GAME_AUDIO,
         val encoderImpl: String = EncoderImplementation.HARDWARE.label,
         val h264HighProfile: Boolean = true,
         val preferredCodec: String = PreferredVideoCodec.H264.label,
-        val degradationStrategy: String = DegradationStrategy.BALANCED.label,
+        val degradationStrategy: String = "balanced",
         val encoderFpsLimit: Int? = null,
     )
 
@@ -128,7 +133,7 @@ object CastSettingsCodec {
     /** Null on anything this build can't fully validate — caller falls back to defaults. */
     fun decode(document: String): CastSettings? = try {
         when (json.decodeFromString<Versioned>(document).v) {
-            VERSION -> decodeCurrent(json.decodeFromString(document))
+            VERSION, PROFILES_V7 -> decodeCurrent(json.decodeFromString(document))
             in FIRST_FLAT_VERSION..LAST_FLAT_VERSION -> decodeFlat(json.decodeFromString(document))
             else -> null
         }
@@ -180,7 +185,6 @@ object CastSettingsCodec {
             bitrateMinBps = stored.bitrateMinBps,
             bitrateMaxBps = stored.bitrateMaxBps,
             degradationStrategy = stored.degradationStrategy,
-            autoQuality = stored.autoQuality,
             encoderImpl = stored.encoderImpl,
             preferredCodec = stored.preferredCodec,
             h264HighProfile = stored.h264HighProfile,
@@ -206,8 +210,7 @@ object CastSettingsCodec {
         fps = fps,
         bitrateMinBps = bitrateMinBps,
         bitrateMaxBps = bitrateMaxBps,
-        degradationStrategy = degradationStrategy.label,
-        autoQuality = autoQuality,
+        struggle = struggle.label,
         encoderImpl = encoderImpl.label,
         preferredCodec = preferredCodec.label,
         h264HighProfile = h264HighProfile,
@@ -222,8 +225,10 @@ object CastSettingsCodec {
             fps = fps,
             bitrateMinBps = bitrateMinBps,
             bitrateMaxBps = bitrateMaxBps,
-            degradationStrategy = DegradationStrategy.fromLabel(degradationStrategy) ?: return null,
-            autoQuality = autoQuality,
+            // v8 names the choice; older documents name the pressure strategy it came from.
+            struggle = struggle?.let { StrugglePolicy.fromLabel(it) ?: return null }
+                ?: StrugglePolicy.fromPressureLabel(degradationStrategy ?: return null)
+                ?: return null,
             encoderImpl = EncoderImplementation.fromLabel(encoderImpl) ?: return null,
             preferredCodec = PreferredVideoCodec.fromLabel(preferredCodec) ?: return null,
             h264HighProfile = h264HighProfile,

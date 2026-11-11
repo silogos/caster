@@ -217,7 +217,7 @@ nodes[PAGE] = {"id": PAGE, "name": "Mobile design v2 · custom profiles (draft, 
                "background": hexc(PAGE_BG), "flows": [],
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
-page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 3 (AMBER CONSOLE TOKENS) · PROFILES BUILT; RANGE SLIDER, ONE FIELD AND ITS RULE NOT YET", 40, 30,
+page_caption(PAGE, "ISSUE #165 · CUSTOM PROFILES — DRAFT 3 (AMBER CONSOLE TOKENS) · BUILT 2026-11-11; THE RULE NOT MEASURED IN A CAST YET", 40, 30,
              13, "Bold", ON)
 COLUMN = PHONE_W + PHONE_GAP
 X = [40 + i * COLUMN for i in range(6)]
@@ -420,8 +420,7 @@ for number, (question, drawn) in enumerate([
     ("Should a new profile start with “Keep frame rate”?",
      "A new profile always copies something, “Current values” by default (P3), so it has no default of its own."),
     ("NEW · “Under network pressure” and “Automatic quality” as one field?",
-     "Drawn as one (P2), with the rule beside this list. Agreed 2026-11-11; not built and not measured. Until "
-     "it is, the app keeps two settings."),
+     "Drawn as one (P2), with the rule beside this list. Built 2026-11-11 (ADR-025); not measured in a cast."),
     ("NEW · Does the Advanced page go?",
      "Drawn as gone: no gear on Home (P1), and P5 shows where each of its settings went."),
     ("NEW · Today's “Automatic quality: Off” on upgrade?",
@@ -449,8 +448,8 @@ rule = vstack(PAGE, "The rule · when the cast struggles", gap=12, pad=(20, 20, 
               fill=SURFACE, radius=18, stroke=OUTLINE)
 nodes[rule]["child_layout"]["absolute"] = False
 text(rule, "The rule behind the one field", 20, ON, "SemiBold", line=26)
-text(rule, "Agreed with the product owner 2026-11-11. Every number is a starting guess to be measured in a real "
-           "game cast.", 13, VARIANT, width=RULE_W - 40, line=19)
+text(rule, "Agreed with the product owner 2026-11-11 and built (ADR-025). Every number is a starting guess to be "
+           "measured in a real game cast.", 13, VARIANT, width=RULE_W - 40, line=19)
 for heading, lines in (
     ("Who moves what",
      ["Bitrate: WebRTC, by itself and within seconds, inside the profile's range.",

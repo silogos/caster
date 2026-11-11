@@ -25,7 +25,7 @@ class CastProfilesTest {
         val config = settings.toConfig()
         assertEquals(1920, config.longEdgePx)
         assertEquals(60, config.fps)
-        assertEquals(CastConfig.DEGRADATION_RESOLUTION, config.degradationPreference)
+        assertEquals(StrugglePolicy.SHARP, config.struggle)
         assertEquals("the desktop shows the profile's name", "Stream 60", config.profile)
     }
 
@@ -37,8 +37,7 @@ class CastProfilesTest {
         assertEquals("performance", config.profile)
         assertEquals(1280, config.longEdgePx)
         assertEquals(60, config.fps)
-        assertEquals(CastConfig.DEGRADATION_FRAMERATE, config.degradationPreference)
-        assertEquals(true, config.autoQuality)
+        assertEquals(StrugglePolicy.SMOOTH, config.struggle)
         assertEquals(false, config.lowLatencyGameAudio)
     }
 
@@ -64,8 +63,8 @@ class CastProfilesTest {
     fun `editing a profile changes the next cast only when it is the selected one`() {
         val two = start.withProfileAdded("A", sharp60).withProfileAdded("B", sharp60)
         val (a, b) = two.customProfiles
-        val edited = two.withProfileEdited(a.id) { it.copy(degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE) }
-        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE, edited.customProfile(a.id)!!.values.degradationStrategy)
+        val edited = two.withProfileEdited(a.id) { it.copy(struggle = StrugglePolicy.SMOOTH) }
+        assertEquals(StrugglePolicy.SMOOTH, edited.customProfile(a.id)!!.values.struggle)
         assertEquals("B is selected and untouched", sharp60, edited.active)
         val editedSelected = two.withProfileEdited(b.id) { it.copy(fps = 30) }
         assertEquals(30, editedSelected.toConfig().fps)

@@ -55,15 +55,10 @@ data class CastSettings(
             fps = values.fps,
             bitrateMinBps = values.bitrateMinBps,
             bitrateMaxBps = values.bitrateMaxBps,
-            degradationPreference = when (values.degradationStrategy) {
-                DegradationStrategy.BALANCED -> CastConfig.DEGRADATION_BALANCED
-                DegradationStrategy.MAINTAIN_FRAMERATE -> CastConfig.DEGRADATION_FRAMERATE
-                DegradationStrategy.MAINTAIN_RESOLUTION -> CastConfig.DEGRADATION_RESOLUTION
-            },
+            struggle = values.struggle,
             gameAudio = gameAudio,
             mic = mic,
             micDevice = micDevice,
-            autoQuality = values.autoQuality,
             lowLatencyGameAudio = values.lowLatencyGameAudio,
             encoderImpl = values.encoderImpl,
             h264HighProfile = values.h264HighProfile,

@@ -4,6 +4,7 @@ import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.config.ProfileSelection
 import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.StrugglePolicy
 import com.zerofriction.localcast.config.toValues
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -70,7 +71,7 @@ class SettingsViewModelTest {
     fun `edits, renames, copies and deletes are each saved as they happen`() {
         val vm = viewModel()
         val id = vm.addProfile("A", sharp60)!!
-        vm.editProfile(id) { it.copy(autoQuality = false) }
+        vm.editProfile(id) { it.copy(struggle = StrugglePolicy.FIXED) }
         vm.renameProfile(id, "Evening")
         val copy = vm.duplicateProfile(id)!!
         vm.deleteProfile(id)
@@ -78,7 +79,7 @@ class SettingsViewModelTest {
         assertEquals(vm.settings.value, persisted.last())
         val left = vm.settings.value.customProfiles.single()
         assertEquals(copy, left.id)
-        assertEquals("the copy took the edit with it", false, left.values.autoQuality)
+        assertEquals("the copy took the edit with it", StrugglePolicy.FIXED, left.values.struggle)
         assertEquals("the selection followed the copy", ProfileSelection.Custom(copy), vm.settings.value.selection)
     }
 

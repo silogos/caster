@@ -73,9 +73,9 @@ class QualityConsoleCardUiTest {
             compose.onNodeWithText(name).assertExists()
         }
         compose.onNodeWithText("Your profiles", ignoreCase = true).assertExists()
-        // Sharp and the copy made from it both keep resolution; Performance keeps frame rate.
-        assertEquals(2, compose.onAllNodes(hasText("KEEP RESOLUTION")).fetchSemanticsNodes().size)
-        assertEquals(1, compose.onAllNodes(hasText("KEEP FRAME RATE")).fetchSemanticsNodes().size)
+        // Sharp and the copy made from it both keep it sharp; Performance keeps it smooth.
+        assertEquals(2, compose.onAllNodes(hasText("KEEP IT SHARP")).fetchSemanticsNodes().size)
+        assertEquals(1, compose.onAllNodes(hasText("KEEP IT SMOOTH")).fetchSemanticsNodes().size)
         compose.onNodeWithText("1920 px · 60 fps · 8–12 Mbps").assertExists()
     }
 

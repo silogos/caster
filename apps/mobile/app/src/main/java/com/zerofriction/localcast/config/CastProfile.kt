@@ -25,10 +25,8 @@ data class ProfileValues(
     /** The sender's bitrate window (webrtc.md sender targets). */
     val bitrateMinBps: Int,
     val bitrateMaxBps: Int,
-    /** What the cast gives up first when the network is short. */
-    val degradationStrategy: DegradationStrategy,
-    /** Whether the cast may step its quality down on its own (thermal.md). */
-    val autoQuality: Boolean,
+    /** What the cast gives up when it struggles (ADR-025). */
+    val struggle: StrugglePolicy,
     val encoderImpl: EncoderImplementation,
     /** The codec the offer advertises first. */
     val preferredCodec: PreferredVideoCodec,
@@ -84,8 +82,7 @@ fun QualityProfile.toValues(): ProfileValues = ProfileValues(
     fps = fps,
     bitrateMinBps = bitrateMinBps,
     bitrateMaxBps = bitrateMaxBps,
-    degradationStrategy = degradation,
-    autoQuality = CastConfig.DEFAULT_AUTO_QUALITY,
+    struggle = struggle,
     encoderImpl = EncoderImplementation.HARDWARE,
     preferredCodec = PreferredVideoCodec.H264,
     h264HighProfile = h264HighProfile,

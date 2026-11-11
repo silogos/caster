@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.sp
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CustomProfileRules
-import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.EncoderImplementation
 import com.zerofriction.localcast.config.PreferredVideoCodec
 import com.zerofriction.localcast.config.ProfileValues
@@ -42,6 +41,7 @@ import com.zerofriction.localcast.ui.components.CastChipRow
 import com.zerofriction.localcast.ui.components.CastTextButton
 import com.zerofriction.localcast.ui.home.profileName
 import com.zerofriction.localcast.ui.home.profileSpec
+import com.zerofriction.localcast.ui.home.struggleName
 
 /**
  * Adding a profile (ADR-024): a sheet over Home. A new profile is always a
@@ -154,16 +154,10 @@ fun AddProfileContent(
     }
 }
 
-/** "Keep frame rate · Hardware · H.264 High": what a profile gives up and its encoder, in the app's own words. */
+/** "Keep it smooth · Hardware · H.264 High": what a profile gives up and its encoder, in the app's own words. */
 @Composable
 private fun behaviourSummary(values: ProfileValues): String = listOf(
-    stringResource(
-        when (values.degradationStrategy) {
-            DegradationStrategy.BALANCED -> R.string.degradation_balanced
-            DegradationStrategy.MAINTAIN_FRAMERATE -> R.string.degradation_framerate
-            DegradationStrategy.MAINTAIN_RESOLUTION -> R.string.degradation_resolution
-        },
-    ),
+    struggleName(values.struggle),
     stringResource(
         if (values.encoderImpl == EncoderImplementation.HARDWARE) {
             R.string.settings_encoder_hardware

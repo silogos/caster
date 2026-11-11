@@ -46,7 +46,7 @@ import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.config.CastSettings
-import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.StrugglePolicy
 import com.zerofriction.localcast.config.QualityProfile
 import com.zerofriction.localcast.config.toValues
 import com.zerofriction.localcast.config.MicDeviceSource
@@ -113,8 +113,8 @@ class DesignExportTest {
 
     /** Home with two profiles of the user's own (ADR-024), the first one selected for editing's sake. */
     private val withOwnProfiles = CastSettings.default()
-        .withProfileAdded("Stream 60", QualityProfile.SHARP.toValues().copy(fps = 60, degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE).withBitrateRange(4_000_000, 12_000_000))
-        .withProfileAdded("Couch", QualityProfile.SHARP.toValues().copy(autoQuality = false))
+        .withProfileAdded("Stream 60", QualityProfile.SHARP.toValues().copy(fps = 60, struggle = StrugglePolicy.SMOOTH).withBitrateRange(4_000_000, 12_000_000))
+        .withProfileAdded("Couch", QualityProfile.SHARP.toValues().copy(struggle = StrugglePolicy.FIXED))
 
     /** Scrolling screens: a tall window, the frame as tall as the content. */
     @Test

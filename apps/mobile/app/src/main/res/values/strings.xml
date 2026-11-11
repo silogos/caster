@@ -21,9 +21,17 @@
     <string name="profiles_foot_live">Picking a profile steers this cast until it ends. Changes to a profile apply to the next cast.</string>
     <string name="profiles_foot_full">%1$d profiles is the most. Delete one to add another.</string>
     <!-- What a profile gives up first when the network is short, as a tag on its row. -->
-    <string name="profile_tag_balanced">Balanced</string>
-    <string name="profile_tag_framerate">Keep frame rate</string>
-    <string name="profile_tag_resolution">Keep resolution</string>
+    <string name="struggle_smooth">Keep it smooth</string>
+    <string name="struggle_sharp">Keep it sharp</string>
+    <string name="struggle_balanced">Balanced</string>
+    <string name="struggle_fixed">Don\'t adjust</string>
+    <!-- What each choice means, under its name in a profile. -->
+    <string name="struggle_smooth_meaning">Lowers detail first. Frame rate goes last.</string>
+    <string name="struggle_sharp_meaning">Lowers frame rate first. Detail stays.</string>
+    <string name="struggle_balanced_meaning">Gives up a little of both.</string>
+    <string name="struggle_fixed_meaning">Never lowers either. On a slow network the picture stutters and the sound falls behind.</string>
+    <string name="struggle_title">When the cast struggles</string>
+    <string name="struggle_hint">One answer for a slow network, a hot phone and an overloaded encoder. One step at a time, at most two steps down, and it comes back by itself.</string>
     <!-- TalkBack label of a profile row's menu button. %1$s = the profile's name. -->
     <string name="profile_more_actions">More for %1$s</string>
     <string name="profile_action_edit">Edit</string>
@@ -126,14 +134,10 @@
              hysteresis, announced, reversible; the On/Off pair is the "user
              can disable" acceptance criterion (chip vocabulary, not a
              Home-style switch row). -->
-    <string name="settings_auto_quality">Automatic quality</string>
-    <string name="settings_auto_quality_hint">Lowers the quality on its own when the phone gets hot or the stream struggles.</string>
     <string name="settings_low_latency_game_audio">Low-latency game audio</string>
     <string name="low_latency_audio_on">Low latency</string>
     <string name="low_latency_audio_off">Standard</string>
     <string name="settings_low_latency_game_audio_hint">Sends game audio as raw sound data — the smallest possible delay for headphones, at a higher Wi-Fi bitrate. Standard keeps the usual compressed audio (smaller on the wire, a little more delay).</string>
-    <string name="auto_quality_on">On</string>
-    <string name="auto_quality_off">Off</string>
 
     <!-- Microphone device (Home's Audio card, designs/mobile-app.html) — which
          mic the cast records from. The picker is realtime while casting
@@ -195,28 +199,29 @@
     <string name="settings_h264_profile_baseline">Baseline</string>
     <string name="settings_h264_profile_high">High</string>
     <string name="settings_h264_profile_codec_hint">Profile applies to H.264 only.</string>
-    <string name="settings_degradation">Under network pressure</string>
-    <string name="degradation_balanced">Balanced</string>
-    <string name="degradation_framerate">Keep frame rate</string>
-    <string name="degradation_resolution">Keep resolution</string>
-    <string name="settings_degradation_hint">What the cast gives up first when Wi-Fi slows down. Balanced trades a little of both; \"Keep frame rate\" stays smooth and drops detail; \"Keep resolution\" stays sharp and drops frames.</string>
     <string name="settings_encoder_fps_limit">Encoder fps limit</string>
     <string name="settings_encoder_fps_off">Off</string>
     <string name="settings_encoder_fps_hint">Caps how many frames per second the encoder works on. The effective rate is the lower of this and the capture frame rate — e.g. capture 60 fps with a 30 fps limit encodes 30. Off follows the capture frame rate.</string>
     <!-- Status zone, while casting: what libwebrtc actually picked. %1$s = the encoder's name. -->
     <string name="status_encoder_in_use">Encoder: %1$s</string>
 
-    <!-- Auto-quality transitions (Phase12) — plain words for what the policy
-             did (AGENTS.md); the thresholds and holds stay in the logs. -->
-    <string name="adaptive_lowered_thermal">The phone got hot, so the quality was lowered to %1$s.</string>
-    <string name="adaptive_lowered_stream">The stream struggled, so the quality was lowered to %1$s.</string>
-    <string name="adaptive_raised">The stream stayed healthy, so the quality went back up to %1$s.</string>
-    <string name="adaptive_restored">Quality restored to %1$s.</string>
-    <string name="adaptive_your_settings">your settings</string>
-    <string name="adaptive_restore">Restore quality</string>
-    <string name="adaptive_notification_lowered_thermal">Phone is hot — cast quality lowered to %1$s.</string>
-    <string name="adaptive_notification_lowered_stream">Connection trouble — cast quality lowered to %1$s.</string>
-    <string name="adaptive_notification_raised">Cast quality raised to %1$s.</string>
+    <!-- A step of the cast's quality (ADR-025) — plain words for what was
+         lowered, why, and that it comes back (AGENTS.md); the thresholds and
+         holds stay in the logs. %1$s = what it stepped to ("1280 px"). -->
+    <string name="adaptive_lowered">Lowered to %1$s: %2$s %3$s</string>
+    <string name="adaptive_reason_encoder">the encoder couldn\'t keep up.</string>
+    <string name="adaptive_reason_dropped">frames were being dropped.</string>
+    <string name="adaptive_reason_queue">the video was waiting to be sent.</string>
+    <string name="adaptive_reason_floor">the network couldn\'t carry more.</string>
+    <string name="adaptive_reason_thermal">the phone is too hot.</string>
+    <string name="adaptive_returns">Comes back by itself.</string>
+    <string name="adaptive_returns_when_cool">Comes back once it cools.</string>
+    <string name="adaptive_raised">Back to %1$s: the cast stayed clean.</string>
+    <string name="adaptive_raised_partly">Up to %1$s: the cast stayed clean. The rest comes back by itself.</string>
+    <string name="adaptive_restored">Restored to %1$s.</string>
+    <string name="adaptive_restore">Restore now</string>
+    <string name="adaptive_notification_lowered">Cast quality lowered to %1$s.</string>
+    <string name="adaptive_notification_raised">Cast quality back to %1$s.</string>
     <string name="adaptive_notification_restored">Cast quality restored.</string>
 
     <!-- Thermal read-out (Phase11, thermal.md) — read-only diagnostics in the

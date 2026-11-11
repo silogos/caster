@@ -355,6 +355,14 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** the fixed Add sheet and the bitrate range are not installed on the tablet yet; picking a profile during a cast was not tried. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
 
+## Feature 2026-11ae — The app steps the picture; one field in a profile ⏳ built and unit-tested; not measured in a cast (2026-11-11)
+*(Not a numbered phase: follows the game cast in which libwebrtc took the picture to 640×400.)*
+**Scope:** "Under network pressure" and "Automatic quality" become one choice in a profile, "When the cast struggles" (Keep it smooth / Keep it sharp / Balanced / Don't adjust). libwebrtc only moves the bitrate inside the profile's range; the app steps the resolution and the frame rate: one step at a time, on symptoms held for 10 s, at most two steps down, 20 s apart, back up after 30 clean seconds; the temperature alone acts only at CRITICAL. Home's STATUS says what was lowered and why, with "Restore now". Stored settings v8 — [ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md).
+
+**Accept:** mobile `testDebugUnitTest` 446 (0 failures, 2 skipped): the rule on a one-second clock (steps per choice, each symptom, the hold, the pause, the two-step bound, recovery, no flapping, the thermal emergency, restore, counter resets), the v7 migration, the texts.
+
+**Not done:** no cast has run with it; every number is a starting guess. Not installed on the tablet.
+
 ## Definition of Done (every phase)
 
 ```text

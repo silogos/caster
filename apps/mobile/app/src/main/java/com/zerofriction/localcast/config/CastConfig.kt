@@ -24,8 +24,8 @@ data class CastConfig(
     /** Sender bitrate floor/ceiling (webrtc.md Phase5 target: 4–6 Mbps). */
     val bitrateMinBps: Int,
     val bitrateMaxBps: Int,
-    /** BALANCED: libwebrtc may drop resolution or fps under bandwidth pressure. */
-    val degradationPreference: String,
+    /** What the cast gives up when it struggles; the app steps the picture, libwebrtc only the bitrate (ADR-025). */
+    val struggle: StrugglePolicy,
     /** Cast the device's game audio (AudioPlaybackCapture) with the screen. */
     val gameAudio: Boolean,
     /** Start the cast with the microphone on (audio.md: off by default). */
@@ -37,12 +37,6 @@ data class CastConfig(
      * (MicDeviceResolver), never a failed session.
      */
     val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
-    /**
-     * Stats/thermal-driven auto quality (Phase12, [thermal.md]):
-     * conservative one-level step-downs with hysteresis, announced and
-     * reversible — off leaves the cast exactly at the user's settings.
-     */
-    val autoQuality: Boolean,
     /**
      * Feature 2026-11d: keep the game-audio DataChannel on raw PCM16 (ADR-012)
      * instead of negotiating AAC (ADR-013) — the codec's ~40–50 ms latency
@@ -68,20 +62,11 @@ data class CastConfig(
         const val DEFAULT_FPS = 30
         const val DEFAULT_BITRATE_MIN_BPS = 4_000_000
         const val DEFAULT_BITRATE_MAX_BPS = 6_000_000
-        const val DEGRADATION_BALANCED = "balanced"
-
-        /** [DegradationStrategy] labels carried on the sender (RtpParameters). */
-        const val DEGRADATION_FRAMERATE = "framerate"
-        const val DEGRADATION_RESOLUTION = "resolution"
-
         /** audio.md: game audio is part of the default cast (set off in Phase10's UI). */
         const val DEFAULT_GAME_AUDIO = true
 
         /** audio.md/Phase8: the mic needs an explicit user action, not a default. */
         const val DEFAULT_MIC = false
-
-        /** thermal.md Phase12: auto quality is part of the good default cast; a switch turns it off. */
-        const val DEFAULT_AUTO_QUALITY = true
 
         /** Feature 2026-11d: AAC (ADR-013) stays the default wire; the toggle opts into raw PCM. */
         const val DEFAULT_LOW_LATENCY_GAME_AUDIO = false
@@ -92,10 +77,9 @@ data class CastConfig(
             fps = DEFAULT_FPS,
             bitrateMinBps = DEFAULT_BITRATE_MIN_BPS,
             bitrateMaxBps = DEFAULT_BITRATE_MAX_BPS,
-            degradationPreference = DEGRADATION_BALANCED,
+            struggle = StrugglePolicy.BALANCED,
             gameAudio = DEFAULT_GAME_AUDIO,
             mic = DEFAULT_MIC,
-            autoQuality = DEFAULT_AUTO_QUALITY,
         )
     }
 }

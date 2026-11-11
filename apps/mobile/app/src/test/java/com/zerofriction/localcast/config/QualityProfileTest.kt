@@ -84,14 +84,21 @@ class QualityProfileTest {
         val config = CastSettings.default().copy(gameAudio = false, mic = true).toConfig()
         assertEquals(false, config.gameAudio)
         assertEquals(true, config.mic)
-        assertEquals(CastConfig.DEGRADATION_BALANCED, config.degradationPreference)
+        assertEquals(StrugglePolicy.BALANCED, config.struggle)
     }
 
     @Test
-    fun `toConfig carries a profile's auto-quality choice through`() {
-        assertEquals(true, CastSettings.default().toConfig().autoQuality)
-        val off = QualityProfile.BALANCED.toValues().copy(autoQuality = false)
-        assertEquals(false, CastSettings.default().withProfileAdded("Fixed", off).toConfig().autoQuality)
+    fun `toConfig carries a profile's choice of what to give up through`() {
+        assertEquals(StrugglePolicy.BALANCED, CastSettings.default().toConfig().struggle)
+        val fixed = QualityProfile.BALANCED.toValues().copy(struggle = StrugglePolicy.FIXED)
+        assertEquals(StrugglePolicy.FIXED, CastSettings.default().withProfileAdded("Fixed", fixed).toConfig().struggle)
+    }
+
+    @Test
+    fun `each built-in profile gives up what its promise says`() {
+        assertEquals(StrugglePolicy.SMOOTH, QualityProfile.PERFORMANCE.struggle)
+        assertEquals(StrugglePolicy.SHARP, QualityProfile.SHARP.struggle)
+        assertEquals(StrugglePolicy.BALANCED, QualityProfile.COOL.struggle)
     }
 
     /** Phase12: the inverse mapping — naming an auto-quality level for the user. */

@@ -454,7 +454,7 @@ class CastService : Service() {
         // switch is a cast setting like any other — next-cast semantics).
         quality.start(
             QualityLevel(args.config.longEdgePx, args.config.fps, args.config.bitrateMinBps, args.config.bitrateMaxBps),
-            autoQuality = args.config.autoQuality,
+            policy = args.config.struggle,
         )
         val newMic = MicController(
             context = applicationContext,

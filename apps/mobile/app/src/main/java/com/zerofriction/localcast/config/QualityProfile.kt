@@ -35,7 +35,7 @@ enum class QualityProfile(
     val bitrateMinBps: Int,
     val bitrateMaxBps: Int,
     val h264HighProfile: Boolean,
-    val degradation: DegradationStrategy,
+    val struggle: StrugglePolicy,
 ) {
     /** thermal.md Cool: long sessions, warm devices, battery priority — the least added heat. */
     COOL(
@@ -45,7 +45,7 @@ enum class QualityProfile(
         bitrateMinBps = 2_000_000,
         bitrateMaxBps = 3_000_000,
         h264HighProfile = false,
-        degradation = DegradationStrategy.BALANCED,
+        struggle = StrugglePolicy.BALANCED,
     ),
     /** thermal.md Balanced (default): the good-enough window for most games. */
     BALANCED(
@@ -55,7 +55,7 @@ enum class QualityProfile(
         bitrateMinBps = 4_000_000,
         bitrateMaxBps = 6_000_000,
         h264HighProfile = true,
-        degradation = DegradationStrategy.BALANCED,
+        struggle = StrugglePolicy.BALANCED,
     ),
     /** thermal.md Performance: fast-motion games; measurably more heat. */
     PERFORMANCE(
@@ -65,7 +65,7 @@ enum class QualityProfile(
         bitrateMinBps = 6_000_000,
         bitrateMaxBps = 10_000_000,
         h264HighProfile = true,
-        degradation = DegradationStrategy.MAINTAIN_FRAMERATE,
+        struggle = StrugglePolicy.SMOOTH,
     ),
     /** Fidelity over thermals: most detail, most heat — the user's explicit choice. */
     SHARP(
@@ -75,7 +75,7 @@ enum class QualityProfile(
         bitrateMinBps = 8_000_000,
         bitrateMaxBps = 12_000_000,
         h264HighProfile = true,
-        degradation = DegradationStrategy.MAINTAIN_RESOLUTION,
+        struggle = StrugglePolicy.SHARP,
     ),
 }
 

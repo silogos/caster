@@ -3,6 +3,7 @@ package com.zerofriction.localcast.service
 import android.util.Log
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
+import com.zerofriction.localcast.config.StrugglePolicy
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.webrtc.SenderSample
@@ -33,16 +34,20 @@ internal class LiveQualityCoordinator(
     private val onAdapted: (AdaptiveQualityController.QualityChange) -> Unit,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
-    /** Null when auto quality is off (the user's switch) or without a cast. */
+    /** Null without a cast. With "Don't adjust" it runs too, with no step to take. */
     private var controller: AdaptiveQualityController? = null
+
+    /** The running cast's choice of what to give up. */
+    private var policy: StrugglePolicy = StrugglePolicy.FIXED
 
     /** The ceiling auto quality may climb back to — the user's settings at cast start (or their live pick). */
     private var ceiling: QualityLevel? = null
 
-    /** Cast start: the readout's baseline is the user's settings; the policy rides only when [autoQuality]. */
-    fun start(startLevel: QualityLevel, autoQuality: Boolean) {
+    /** Cast start: the readout's baseline is the profile's values; the rule steps from them the way [policy] says. */
+    fun start(startLevel: QualityLevel, policy: StrugglePolicy) {
+        this.policy = policy
         liveQuality.value = startLevel
-        if (autoQuality) startPolicy(startLevel)
+        startPolicy(startLevel)
     }
 
     /** The policy's stats input — called from the media session thread. */
@@ -51,15 +56,15 @@ internal class LiveQualityCoordinator(
         val policy = controller ?: return
         policy.onTick(
             nowMs(),
+            // Cumulative counters; the (pure, tested) controller turns their
+            // deltas into the symptoms it acts on.
             AdaptiveQualityController.StreamSample(
                 framesEncoded = sample.framesEncoded,
                 framesDropped = sample.framesDropped,
-                fractionLost = sample.fractionLost,
-                rttMs = sample.rttMs,
-                // Phase18's leading encoder-stress signal — the cumulative
-                // encode time; its delta becomes the utilization in the
-                // (pure, tested) controller.
                 totalEncodeTimeSeconds = sample.totalEncodeTimeSeconds,
+                totalPacketSendDelaySeconds = sample.totalPacketSendDelaySeconds,
+                packetsSent = sample.packetsSent,
+                targetBitrateBps = sample.targetBitrateBps,
             ),
             thermalStatus(),
         )
@@ -73,7 +78,7 @@ internal class LiveQualityCoordinator(
     fun applyUserLevel(level: QualityLevel) {
         applyLevel(level)
         liveQuality.value = level
-        if (controller !== null) startPolicy(level)
+        startPolicy(level)
         Log.i(TAG, "user live quality: ${describe(level)}")
     }
 
@@ -89,7 +94,7 @@ internal class LiveQualityCoordinator(
     private fun startPolicy(top: QualityLevel) {
         // The ceiling: auto quality never goes above what the user chose (thermal.md principle 2).
         ceiling = top
-        controller = AdaptiveQualityController(ceiling = top, onLevelChanged = { onPolicyChange(it) })
+        controller = AdaptiveQualityController(ceiling = top, policy = policy, onLevelChanged = { onPolicyChange(it) })
         adaptiveState.value = AdaptiveUiState(current = top, ceiling = top)
     }
 

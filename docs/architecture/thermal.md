@@ -1,5 +1,7 @@
 # Thermal Strategy
 
+> **Superseded in part (2026-11-11, [ADR-025](../decisions/ADR-025-the-app-steps-the-picture.md)).** The auto-quality policy described under *How thermal data is used* (steps on thermal MODERATE held for minutes, a preset ladder, no automatic recovery from a thermal step) is replaced: the app steps the picture on symptoms, at most two steps, and brings it back by itself; the temperature alone acts only at CRITICAL. The thermal monitor, the read-out and the built-in profiles' heat rationale stand.
+
 Status: Phase12 (profiles are the settings presets; monitoring is read-only diagnostics; auto quality — the conservative adaptation — is implemented; measurements in Phase 15).
 
 ## Principles
