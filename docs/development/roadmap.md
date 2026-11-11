@@ -392,7 +392,7 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **What:** `VERSION` at the root (0.2.0) is the product's version; the Android build reads it and derives `versionCode` (200); the receiver's Cargo copies are written by `tools/versioning/set_version.sh` and checked in CI by `check_version.sh`. The receiver gained bundle settings (Syphon framework embedded, ad-hoc signature over the whole bundle) and [release.md](release.md) is rewritten: two assets, the APK and an Apple Silicon `.dmg`.
 
-**Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk", `Info.plist` reports 0.2.0, and the packaged app starts, listens and loads Syphon from inside the bundle.
+**Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk" and `Info.plist` reports 0.2.0. **Corrected the same day:** the signed bundle did not start (the hardened runtime refused the bundled Syphon framework; the instance seen running was the earlier unsigned build). With `hardenedRuntime: false` the signed app starts and logs `listening on port`.
 
 **Not checked:** a cast received by the packaged app; the `.dmg` on another Mac (Gatekeeper); signing the release APK with the release key and updating over an installed v0.1.0.
 

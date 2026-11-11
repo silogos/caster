@@ -58,6 +58,7 @@ What the bundle settings do, and why:
 
 - `macOS.frameworks` copies the vendored `Syphon.framework` into the app; the binary looks for it at `@executable_path/../Frameworks` (`build.rs`). Without it the app does not start on another Mac.
 - `macOS.signingIdentity: "-"` signs the whole bundle ad hoc. There is no Developer ID, so the app is **not notarized**; but an Apple Silicon Mac refuses to run a bundle whose seal is broken, and the linker's own signature covers the binary only.
+- `macOS.hardenedRuntime: false`: with the hardened runtime on, an ad-hoc signed app refuses its own bundled framework at launch (`Library not loaded … different Team IDs`) and exits before it logs a line. Found on 2026-11-11 by starting the signed bundle; `codesign --verify` had passed. The hardened runtime only matters for notarization, which this app does not have.
 
 Check before shipping:
 
@@ -65,7 +66,7 @@ Check before shipping:
 APP="target/release/bundle/macos/Caster.app"
 codesign --verify --deep --strict -v "$APP"        # "valid on disk"
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
-open "$APP"                                         # it starts, pairs and plays a cast
+"$APP/Contents/MacOS/desktop-native"                # must log "[signaling] listening on port …"; then pair and play a cast
 ```
 
 Notes:

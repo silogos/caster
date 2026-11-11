@@ -39,7 +39,8 @@
         "../vendor/syphon/Syphon.framework"
       ],
       "minimumSystemVersion": "12.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }
