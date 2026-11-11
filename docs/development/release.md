@@ -34,7 +34,7 @@ tools/versioning/check_version.sh        # what CI runs: fails when a copy diffe
 ## Prerequisites (build machine)
 
 - An Apple Silicon Mac with the repo's toolchains: JDK 17 and the Android SDK (build-tools ≥ 36, for `apksigner`), Rust (`cargo`), Node 22 (only for `npx @tauri-apps/cli`).
-- **The release keystore** at `apps/mobile/keystore/release.keystore`, with credentials in `apps/mobile/keystore/release.keystore.properties` (alias + passwords). This directory is **deliberately untracked** — `*.keystore` is gitignored and signing material must never be committed. It exists only on machines that sign releases; back it up separately.
+- **The release keystore** at `~/.android-signing/caster/release.keystore`, with credentials in `release.keystore.properties` beside it (alias + passwords). It lives **outside the repository** since 2026-11-11 (folder `700`, files `600`), so it cannot travel with a zipped or shared project folder; `.gitignore` still refuses `*.keystore` and `apps/mobile/keystore/` in case one is put back. It exists only on machines that sign releases. **This key is the app's only identity** (Caster is not on Google Play, so nothing can reissue it): without it no update installs over an earlier release. Keep an encrypted copy in two other places and the passwords in a password manager, not beside the key. Its certificate's SHA-256 starts `347b6c0d`.
 - Run the packaging build in a normal terminal session. `hdiutil` (disk-image creation) can fail in a sandboxed shell.
 
 ## 0. Pre-flight
@@ -84,11 +84,11 @@ cd apps/mobile
 ./gradlew assembleRelease        # → app/build/outputs/apk/release/app-release-unsigned.apk
 
 SDK=~/Library/Android/sdk        # adjust if ANDROID_HOME differs
-# read alias/passwords from keystore/release.keystore.properties — do not paste them into commands in scripts/docs
+KEYS=~/.android-signing/caster   # read the alias from $KEYS/release.keystore.properties; pass the passwords as env: values, never on the command line
 $SDK/build-tools/<latest>/apksigner sign \
-  --ks keystore/release.keystore \
+  --ks $KEYS/release.keystore \
   --ks-key-alias <alias> \
-  --ks-pass pass:<storePassword> --key-pass pass:<keyPassword> \
+  --ks-pass env:STORE_PASS --key-pass env:KEY_PASS \
   --out app/build/outputs/apk/release/Caster-v<ver>.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 
