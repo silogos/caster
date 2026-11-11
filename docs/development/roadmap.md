@@ -385,3 +385,13 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
 - Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`, `features/thermal.md`, `features/adaptive-quality.md`, `features/obs-streaming.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.
+
+## Chore 2026-11af — One product version; the release process for the native receiver ⏳ built and checked on the build machine; no release cut yet (2026-11-11)
+
+**Why:** preparing the second release showed every version string still at `0.1.0` (Android `versionCode` 1, so an update would be refused), four hand-kept copies, and a release guide for the obsolete Electron receiver ([ADR-026](../decisions/ADR-026-one-product-version.md)).
+
+**What:** `VERSION` at the root (0.2.0) is the product's version; the Android build reads it and derives `versionCode` (200); the receiver's Cargo copies are written by `tools/versioning/set_version.sh` and checked in CI by `check_version.sh`. The receiver gained bundle settings (Syphon framework embedded, ad-hoc signature over the whole bundle) and [release.md](release.md) is rewritten: two assets, the APK and an Apple Silicon `.dmg`.
+
+**Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk", `Info.plist` reports 0.2.0, and the packaged app starts, listens and loads Syphon from inside the bundle.
+
+**Not checked:** a cast received by the packaged app; the `.dmg` on another Mac (Gatekeeper); signing the release APK with the release key and updating over an installed v0.1.0.

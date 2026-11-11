@@ -9,6 +9,13 @@ on:
     branches: [main]
 
 jobs:
+  # One product version (VERSION at the root): the receiver's copies must match it.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/versioning/check_version.sh
+
   desktop:
     runs-on: ubuntu-latest
     defaults:
