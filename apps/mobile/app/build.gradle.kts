@@ -7,6 +7,22 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// The product has one version, in the VERSION file at the repository root
+// (docs/development/release.md, "Versioning"); the Mac receiver carries the same.
+val productVersion: String = rootDir.resolve("../../VERSION").readText().trim()
+
+/**
+ * Android's update order, derived from the version so it cannot be forgotten:
+ * 0.2.0 → 200, 0.2.1 → 201, 1.0.0 → 10000. MINOR and PATCH stay below 100.
+ */
+fun versionCodeOf(version: String): Int {
+    val parts = version.split(".").map { it.toIntOrNull() }
+    require(parts.size == 3 && parts.all { it != null } && parts[1]!! < 100 && parts[2]!! < 100) {
+        "VERSION holds '$version'; expected MAJOR.MINOR.PATCH with MINOR and PATCH below 100"
+    }
+    return parts[0]!! * 10_000 + parts[1]!! * 100 + parts[2]!!
+}
+
 android {
     namespace = "com.zerofriction.localcast"
     compileSdk = 36
@@ -15,8 +31,8 @@ android {
         applicationId = "com.zerofriction.localcast"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionName = productVersion
+        versionCode = versionCodeOf(productVersion)
     }
 
     buildTypes {

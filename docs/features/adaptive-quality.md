@@ -1,5 +1,7 @@
 # Feature: Auto Quality / Adaptive Streaming
 
+> **Superseded (2026-11-11, [ADR-025](../decisions/ADR-025-automatic-quality-acts-on-a-thermal-emergency.md)).** This records Phase12/18 as built and measured. The policy below (thermal and stream-health holds of minutes, the preset ladder, manual recovery from thermal steps) is replaced by the rule in ADR-025. What carries over: the pure controller on the 1 Hz stats tick and the live step path (`changeQuality`, no renegotiation). What does not: the encoder-utilization and dropped-frame signals, which the recorded casts disprove (ADR-025, Context).
+
 Implemented in: **Phase12** (see [roadmap](../development/roadmap.md)). Status: **implemented; mobile JVM 121/121 green, `assembleDebug` green, desktop 74/74 green (untouched)** — the on-device acceptance items (a real step-down observed end-to-end during a warm or throttled cast) need the phone in hand; see *Verification*.
 
 ## What is implemented

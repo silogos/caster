@@ -31,12 +31,17 @@
 2. **Build.**
 
    ```bash
-   python3 -I tools/design/build_mobile_figcraft.py /tmp/zfc-design designs/mobile-app.figcraft --spec designs/mobile-ux-a11y.figcraft
+   python3 -I tools/design/build_custom_profiles_spec.py /tmp/zfc-design/custom-profiles.figcraft
+   python3 -I tools/design/build_mobile_figcraft.py /tmp/zfc-design designs/mobile-app.figcraft \
+     --spec designs/mobile-ux-a11y.figcraft --spec /tmp/zfc-design/custom-profiles.figcraft
    ```
 
-   This produces two pages:
-   - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Settings · Advanced plus Scan: camera permission, pairing, and failed.
+   This produces three pages (one measured, then one per `--spec`):
+   - **Mobile · as shipped:** twelve states. Row 1 is Home: standby, starting, on air, auto quality stepped down, fault, saved/offline, reconnect failed, and mic needs permission. Row 2 is Profile · Edit (one of the user's profiles, ADR-024) plus Scan: camera permission, pairing, and failed.
    - **Group F · UX & a11y:** the accessibility spec, copied in. It comes from `build_group_f_spec.py`, which writes `designs/mobile-ux-a11y.figcraft`. Its layers are auto layout too, placed by `autolayout.solve()`, so nothing is hand-placed; only the annotations (badges, 48dp outlines) are absolute.
+   - **Mobile design v2 · custom profiles (draft, #165):** a proposal, not the shipped UI: the profile list on Home, editing and adding a profile, the row menu, and Home without an Advanced page (a profile holds every picture setting; “Under network pressure” and “Automatic quality” are drawn as one field). Its last frame lists the issue's open questions and what the draft assumes for each. It comes from `build_custom_profiles_spec.py` and lives only as a page of this file.
+
+   Both specs are written with `spec_dsl.py`: the shipped amber tokens, frames with auto-layout parameters, and ports of the app's components. A design that is not built yet goes in as a new page the same way (a builder script, one more `--spec`), named `Mobile design v<n> · <what>`.
 
 3. **Check.**
    - **Auto layout.** FigCraft keeps stored positions until something is edited, so opening the file does not prove the auto layout is right. `check_auto_layout.py` re-runs the layout from the parameters alone (`autolayout.py`, Figma's rules) and fails on any layer that lands more than 1.5dp from where Compose measured it:
@@ -44,10 +49,35 @@
      ```bash
      python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft            # page 1
      python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 1   # group F
+     python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 2   # design v2
      ```
 
-   - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`).
+   - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`; `ui.screenshot` returns the window as a PNG, to look at a page that has no exported render).
    - **Visual.** Compare the frames with the exported PNGs.
+
+## The app icon
+
+`build_app_icon.py` draws Caster's icon once (ADR-027): the receiver's mark on the orange tile, as a Mac icon on Apple's grid, and the mark alone as the menu-bar template.
+
+```bash
+python3 -I tools/design/build_app_icon.py designs/app-icon.figcraft          # prints each frame's id
+FigCraft --control PORT --automation-read-root DIR --automation-write-root DIR designs/app-icon.figcraft
+#   ui.render {path: DIR/mac-1024.png, scale: 1, ids: [<mac icon 1024>]}
+#   ui.render {path: DIR/tray.png,     scale: 2, ids: [<tray template>]}
+cd apps/desktop-native/src-tauri && npx --yes @tauri-apps/cli@2 icon DIR/mac-1024.png -o icons   # keep the png and icns files
+cp DIR/tray.png icons/tray-template.png
+```
+
+macOS 26 draws the Mac icon from a layered icon instead (`apps/desktop-native/src-tauri/icons/AppIcon.icon`: the tile's colour in `icon.json`, the mark as filled paths in `Assets/mark.svg`). Recompile it after a change, with Xcode installed, and commit the result:
+
+```bash
+cd apps/desktop-native/src-tauri/icons
+xcrun actool AppIcon.icon --compile /tmp/appicon --app-icon AppIcon --platform macosx \
+  --minimum-deployment-target 12.0 --output-partial-info-plist /tmp/appicon/partial.plist
+cp /tmp/appicon/Assets.car Assets.car
+```
+
+The phone's launcher icon is the same mark written as a vector (`ic_launcher_foreground.xml`) on the same orange (`ic_launcher_background`); change the three together.
 
 ## Known simplifications
 

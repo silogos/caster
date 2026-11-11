@@ -7,6 +7,7 @@
 //  - pairing:session-updated → QR hero
 //  - pairing:mobile-state    → connected / disconnected / session-info / forgotten
 //  - cast:state {live}       → ON AIR + timecode
+//  - cast:picture {width,height,fps} | null → the live readout: the size and frame rate that arrive
 //  - video:window {open}     → the Open/Close video button
 // Only receiver/environment controls live here — cast settings are the phone's.
 
@@ -28,6 +29,7 @@ const state = {
   live: false,
   liveSince: 0,
   info: null,
+  picture: null, // what the receiver is getting, measured once a second
   videoOpen: false,
 }
 
@@ -40,10 +42,20 @@ function timecode(ms) {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
 }
 
-/** "1920×1200 · 60 fps · balanced" — the phone's own session-info values. */
-function readout(info) {
+/** "1920×1200 · 60 fps · balanced": the cast as the phone set it (its session-info). */
+function settingsLine(info) {
   if (!info) return 'Live'
   return [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile].filter(Boolean).join(' · ')
+}
+
+/**
+ * "640×400 · 59 fps": the picture that is arriving right now. The sender
+ * scales the frame and drops frames under pressure, so it is not always
+ * what the phone set. Until the first measured second: the settings.
+ */
+function liveLine(info, picture) {
+  if (!picture) return settingsLine(info)
+  return `${picture.width}×${picture.height} · ${picture.fps} fps`
 }
 
 function renderDeck() {
@@ -67,14 +79,14 @@ function renderDeck() {
     pill.textContent = `Waiting for ${state.phone ?? 'the phone'} to reconnect…`
     pill.classList.add('reconnecting')
   } else if (state.live) {
-    pill.textContent = `Casting · ${readout(state.info)}`
+    pill.textContent = `Casting · ${settingsLine(state.info)}`
     pill.classList.add('live')
   } else {
     pill.textContent = 'Connected — start casting from your phone'
     pill.classList.add('connected')
   }
 
-  $('readout').textContent = state.live ? readout(state.info) : 'Waiting for the cast'
+  $('readout').textContent = state.live ? liveLine(state.info, state.picture) : 'Waiting for the cast'
   $('timecode').classList.toggle('idle', !state.live)
   if (!state.live) $('timecode').textContent = '00:00:00'
   $('chip-game').classList.toggle('on', state.live && state.info?.gameAudio === true)
@@ -126,6 +138,11 @@ tauri?.event.listen('cast:state', (event) => {
   renderDeck()
 })
 
+tauri?.event.listen('cast:picture', (event) => {
+  state.picture = event.payload ?? null
+  renderDeck()
+})
+
 tauri?.event.listen('video:window', (event) => {
   state.videoOpen = event.payload?.open === true
   renderDeck()
@@ -158,7 +175,7 @@ let syphonOutput = false
 function renderSyphon() {
   $('syphon-switch').classList.toggle('on', syphonOutput)
   $('syphon-sub').textContent = syphonOutput
-    ? 'On. In OBS add a Syphon Client source named "Zero-Friction Local Cast". It keeps working with the video window closed.'
+    ? 'On. In OBS add a Syphon Client source named "Caster". It keeps working with the video window closed.'
     : 'Off. OBS can still capture the video window.'
 }
 $('syphon-switch').addEventListener('click', () => {

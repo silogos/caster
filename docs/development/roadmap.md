@@ -341,6 +341,38 @@ Product owner's listening check in a game: "Bersih" (clean).
 
 **Not done:** no comparison against "Keep resolution" on the same content, no real game, no hot tablet. The late audio chunks that remain are not the video backlog's doing and are not addressed. A 4K stream ran at 38–51 fps for a reason not found. *Bitrate mode: VBR* is still a placebo.
 
+## Feature 2026-11ac — Custom profiles; no Advanced page ⏳ built, walked on the tablet; the bitrate range not yet on the device (2026-11-11)
+*(Not a numbered phase: the product owner's idea after the audio investigation — issue #165.)*
+**Scope:** a setup that started as Sharp and was changed to 60 fps showed as "Custom" and still carried Sharp's 8 Mbps floor and "Keep resolution", with nothing on screen saying so. A profile now holds every cast value (picture, behaviour, encoder, game-audio transport); four built-in profiles are fixed and the user adds their own (name, edit, duplicate, delete; up to 12). Home's quality console is one list of profiles; the `Preset | Custom` tabs, the Advanced page, the gear and Bitrate mode are gone; "Encoder in use" moved to STATUS. Stored settings v7, with every v1–v6 document migrating without losing a value — [ADR-024](../decisions/ADR-024-custom-profiles.md), [cast-settings.md](../features/cast-settings.md).
+
+**Design:** [`designs/mobile-app.figcraft`](../../designs/mobile-app.figcraft), page "Mobile design v2 · custom profiles" (the draft, accepted by the product owner); page "Mobile · as shipped" regenerated from the built UI.
+
+**Walked on the tablet (2026-11-11, TB321FU):** the stored v6 settings became "Custom 1" with every value kept; add from Sharp, edit (60 fps, Keep frame rate, Automatic quality off, low-latency audio, rename), duplicate, delete (selected → Balanced; other → no change of selection) all saved as expected; a cast ran on "Custom 1" (1920×1200, Keep frame rate, low-latency audio; STATUS showed the encoder). Found and fixed: the Add sheet opened at half height in landscape, hiding Create.
+
+**Bitrate range (same day, [ADR-023](../decisions/ADR-023-keep-frame-rate-follows-the-network.md) revised):** in a game cast the hidden 1 Mbps floor of "Keep frame rate" let the picture fall to 640×400. The floor is now the profile's own least, set with a two-thumb slider (1–20 Mbps).
+
+**Accept:** mobile `testDebugUnitTest` 442 (0 failures, 2 skipped).
+
+**Not done:** the fixed Add sheet and the bitrate range are not installed on the tablet yet; picking a profile during a cast was not tried. "Under network pressure" and "Automatic quality" stay two settings: the design's single field needs a new automatic-quality rule (lower on symptoms, not on the temperature alone), which is its own decision and measurement. The list during a cast only steers the picture; a profile's behaviour and encoder values wait for the next cast.
+
+## Feature 2026-11ae — Automatic quality acts on a thermal emergency only ⏳ built and unit-tested; the emergency has never occurred on the device (2026-11-11)
+*(Not a numbered phase: follows the game casts of 2026-11-11.)*
+**Scope:** Automatic quality used to step on a temperature reading (MODERATE for minutes), down to the lowest preset, without coming back. It now acts only at thermal CRITICAL: one step down, a second if the emergency lasts a minute, in the order of the profile's pressure strategy, and back up 30 s after it ends; STATUS says so, with "Restore now". "Under network pressure" stays libwebrtc's, inside the profile's bitrate range. Dropped frames and encoder utilization are no longer inputs: 14,000 s of recorded casts disprove both — [ADR-025](../decisions/ADR-025-automatic-quality-acts-on-a-thermal-emergency.md).
+
+**Tried first, the same day:** one merged field ("When the cast struggles") with the app stepping the picture on four symptoms and libwebrtc's adaptation off. In one game cast it bounded the fall (1920 → 1280 → 960 px, 60 fps restored) and never came back, because the encoder symptom reads "on" at a healthy 60 fps. Split again by the product owner (ADR-025, History). Stored settings v8 from that day map back into v9.
+
+**Accept:** mobile `testDebugUnitTest` 437 (0 failures, 2 skipped).
+
+**Not done:** CRITICAL has never been reached on the tablet, so the rule has not run in a cast. Nothing reacts to an overloaded encoder short of the stall recovery (ADR-022).
+
+## Fix 2026-11ad — The receiver's readout shows the picture that arrives ⏳ built; not seen on the Mac in this form yet (2026-11-11)
+*(Not a numbered phase: reported by the product owner during a cast.)*
+**Scope:** the deck showed the phone's announced size and frame rate in both places. Under "Keep frame rate" the sender scales the frame inside the encoder, so 640×400 arrived under `1920×1200 · 60 fps`. The product owner's split: the **pill** (`Casting · …`) and the tray keep the cast's settings; the **readout** beside the timecode shows the size and frame rate that arrive, measured once a second — [desktop-native.md](../architecture/desktop-native.md).
+
+**Accept:** desktop `cargo test` 94 (unchanged: the change is the frame loop's event and the window's script, which have no unit tests).
+
+**Not done:** not looked at on the Mac in this form. A first version (the measured picture in both places) ran during a game cast and followed the picture down to 640×400. The measured frame rate is not smoothed and can read 61–63.
+
 ## Definition of Done (every phase)
 
 ```text
@@ -353,3 +385,19 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 - Phase 1/2: `development/mobile.md`, `development/desktop.md`
 - Phase 3+: `features/pairing.md`, `features/signaling.md`, `features/screen-capture.md`, `features/game-audio.md`, `features/microphone.md`, `features/cast-session.md`, `features/audio-mixer.md`, `features/cast-settings.md`, `features/thermal.md`, `features/adaptive-quality.md`, `features/obs-streaming.md`
 - Any architecture change → update `architecture/*` and add/supersede an ADR in the same phase.
+
+## Chore 2026-11af — One product version; the release process for the native receiver ⏳ built and checked on the build machine; no release cut yet (2026-11-11)
+
+**Why:** preparing the second release showed every version string still at `0.1.0` (Android `versionCode` 1, so an update would be refused), four hand-kept copies, and a release guide for the obsolete Electron receiver ([ADR-026](../decisions/ADR-026-one-product-version.md)).
+
+**What:** `VERSION` at the root (0.2.0) is the product's version; the Android build reads it and derives `versionCode` (200); the receiver's Cargo copies are written by `tools/versioning/set_version.sh` and checked in CI by `check_version.sh`. The receiver gained bundle settings (Syphon framework embedded, ad-hoc signature over the whole bundle) and [release.md](release.md) is rewritten: two assets, the APK and an Apple Silicon `.dmg`.
+
+**Checked (2026-11-11, build machine):** debug and unsigned release APKs build, `aapt2` reports `versionCode='200' versionName='0.2.0'`; receiver `cargo test` 94 passed, 1 ignored; `tauri build` produced the `.app` and a 10 MB `.dmg`, `codesign --verify --deep --strict` reads "valid on disk" and `Info.plist` reports 0.2.0. **Corrected the same day:** the signed bundle did not start (the hardened runtime refused the bundled Syphon framework; the instance seen running was the earlier unsigned build). With `hardenedRuntime: false` the signed app starts and logs `listening on port`.
+
+**Not checked:** a cast received by the packaged app; the `.dmg` on another Mac (Gatekeeper); signing the release APK with the release key and updating over an installed v0.1.0.
+
+## Chore 2026-11ag — The product is called Caster, with one icon ⏳ built and unit-tested; not yet seen running on the tablet or the Mac (2026-11-11)
+
+**Why:** three names on screen ("Local Cast", "Zero-Friction Cast", "Zero-Friction Local Cast Native"), a placeholder launcher icon and an empty Mac icon, with the second release next ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)).
+
+**What:** every name a person reads is "Caster" on both apps; ids, the signing key and the receiver's data folder are unchanged. One icon, the receiver's mark on an orange tile, drawn in `designs/app-icon.figcraft` and used for the Mac app, the menu-bar template and the phone's adaptive icon. Drawn first in the design file ("The name and the icon", with the other candidates in orange and blue).

@@ -32,7 +32,7 @@ data class QrPayload(
 
 /** Parse/validation failures mapped to the pairing.md failure-mode table. */
 enum class QrPayloadError {
-    /** Not a Zero-Friction Cast QR code (wrong `t`, unparseable JSON, bad fields). */
+    /** Not a Caster QR code (wrong `t`, unparseable JSON, bad fields). */
     NOT_ZFC_QR,
 
     /** Unknown payload version `v` — apps are incompatible. */

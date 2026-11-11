@@ -68,7 +68,8 @@ apps/mobile/
     ├── debug/                        # DebugTestTone launcher glue (debug builds only)
     └── ui/
         ├── home/                    # HomeScreen — the connected hub (on-air hero + share transport + audio cards; "This cast" LED rows while casting) + HomeViewModel
-        ├── settings/                # CastSettingsScreen + CastSettingsPanel (the gear's cast settings) + SettingsViewModel (Phase 10)
+        ├── profiles/                # ProfileEditScreen (one of the user's profiles) + AddProfileSheet (ADR-024)
+        ├── settings/                # SettingsViewModel — the settings in memory, shared by Home and the profile screens
         ├── components/              # shared cast-UI vocabulary (cards, silkscreen labels, icon/LED rows) — designs/mobile-app.html
         ├── pairing/                 # ScanScreen + ScanViewModel + QrCamera (CameraX + ML Kit)
         └── theme/                   # dark-only Material 3 theme (broadcast amber accent; token source: designs/mobile-app.html)

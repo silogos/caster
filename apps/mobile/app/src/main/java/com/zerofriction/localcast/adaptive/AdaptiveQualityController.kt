@@ -1,51 +1,53 @@
 package com.zerofriction.localcast.adaptive
 
+import com.zerofriction.localcast.config.CastSettingChoices
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.thermal.ThermalStatus
 
 /**
- * The auto-quality policy (Phase12, thermal.md "How thermal data is used"):
- * a pure, JVM-testable state machine — no Android types, no WebRTC types.
- * The cast service feeds it ~1 Hz sender stats ([StreamSample]) plus the
- * thermal ladder, and applies the [QualityChange]s it announces (capture
- * format + sender bitrate window — `MediaCastSession.changeQuality`).
+ * Automatic quality (ADR-025): a pure, JVM-testable state machine — no
+ * Android types, no WebRTC types. The cast service feeds it the thermal
+ * ladder once a second and applies the [QualityChange]s it announces
+ * (`MediaCastSession.changeQuality`).
  *
- * Policy, exactly as thermal.md specifies it — conservative, slow, announced,
- * reversible:
- *  - **Step down** one ladder rung only after a *sustained* bad stretch:
- *    thermal `MODERATE`+ ([THERMAL_HOLD_MS] — "minutes, not seconds") or a
- *    struggling stream ([NET_HOLD_MS]; inputs are dropped frames and
- *    encoder utilization — the two encoder-stress signals —, RTT and packet
- *    loss). Any step also respects [DWELL_MS] since the previous one, so
- *    bad conditions cause a slow staircase, never a collapse.
- *  - **Step up** only after a long sustained healthy stretch
- *    ([HEALTHY_HOLD_MS] — deliberately much longer than the way down, the
- *    asymmetry that makes oscillation impossible), and never above the
- *    user's own settings (the ceiling is always their explicit choice,
- *    thermal.md principle 2). Thermal step-downs do **not** recover
- *    automatically — the device got hot under these exact settings, so only
- *    the user decides to go back ([restore]); stream-health step-downs do.
- *  - Encoder utilization (Phase18): the fraction of wall time the encoder
- *    spends encoding, from the `totalEncodeTime` deltas — a *leading*
- *    overload signal that rises before frames start dropping (the drop
- *    signal never fired on the Phase16/17 rig). Deliberately NOT a
- *    per-frame-cost-vs-fps-budget comparison: a 30 fps game under a 60 fps
- *    profile encodes expensive frames with wall time to spare (utilization
- *    ≈ 0.6) — that is content pacing, not overload, and it must not fire.
- *  - Notably *not* an input: measured fps below the target. Screen content
- *    frames follow the game's own pacing (thermal.md heat table) — a 30 fps
- *    game under a 60 fps profile is a quiet encoder, not a struggling one;
- *    acting on it would punish the wrong thing.
+ * It acts on one thing: **a thermal emergency** ([THERMAL_EMERGENCY_STATUS]
+ * and above). Then the picture goes down one step, in the order the
+ * profile's pressure strategy gives things up ([thermalSteps]); if the
+ * emergency is still there after [EMERGENCY_HOLD_MS], one more, and no
+ * further. Once the device is out of the emergency for [COOL_HOLD_MS] it
+ * comes back, a step at a time.
+ *
+ * What it deliberately does not act on, and why:
+ *  - **The network.** That is libwebrtc's ("Under network pressure"): it
+ *    sees the link and reacts in seconds.
+ *  - **Heat below the emergency.** The old rule stepped on MODERATE held for
+ *    minutes; a gaming tablet sits at SEVERE for a whole session while the
+ *    cast runs at 60 fps, so it went to the lowest quality and stayed.
+ *  - **Encoder load and dropped frames.** Neither signal holds on the
+ *    measured device (TB321FU, 14,000 s of casts, 2026-11-10/11): the
+ *    dropped-frame counter never left 0, also with the encoder stalled, and
+ *    the "utilization" figure read 0.95–1.57 at a healthy 60 fps and
+ *    0.55–0.77 while the picture crawled at 20–45 fps.
  */
 class AdaptiveQualityController(
-    /** The user's own settings — auto quality never goes above this rung. */
+    /** The profile's own values — the cast never goes above them. */
     private val ceiling: QualityLevel,
-    /** The preset ladder auto quality walks down (config/QualityProfile.kt). */
-    private val ladder: List<QualityLevel> = QualityLevel.PRESETS,
+    /** The profile's pressure strategy: what is given up first. */
+    private val strategy: DegradationStrategy,
     /** Every announced change — the service applies it and tells the user. */
     private val onLevelChanged: (QualityChange) -> Unit = {},
 ) {
 
-    enum class Reason { THERMAL, STREAM_HEALTH, USER }
+    enum class Reason {
+        /** The device reports a thermal emergency. */
+        THERMAL,
+
+        /** The emergency is over: a step back up. */
+        RECOVERED,
+
+        /** The user's own "Restore now". */
+        USER,
+    }
 
     enum class Direction { DOWN, UP }
 
@@ -57,240 +59,112 @@ class AdaptiveQualityController(
         val reason: Reason,
     )
 
-    /** One ~1 Hz sender-stats tick (cumulative counters, as libwebrtc reports them). */
-    data class StreamSample(
-        val framesEncoded: Long,
-        val framesDropped: Long,
-        /** Remote receiver's reported loss fraction (0..1); null while unknown. */
-        val fractionLost: Double?,
-        /** Nominated candidate pair RTT, ms; null while unknown. */
-        val rttMs: Long?,
-        /**
-         * Cumulative seconds the encoder spent encoding (RTCStats
-         * `totalEncodeTime`); null while the prebuilt does not report it.
-         * Its delta over the tick interval is the encoder-utilization
-         * signal (Phase18) — computed here, so the pc-rebuild reset guard
-         * is JVM-tested like the frame counters'.
-         */
-        val totalEncodeTimeSeconds: Double? = null,
-    )
+    /** The profile's values, then each step below them. */
+    private val steps: List<QualityLevel> = thermalSteps(ceiling, strategy)
+    private var stepIndex = 0
 
-    var current: QualityLevel = ceiling
-        private set
+    val current: QualityLevel get() = steps[stepIndex]
 
     /** The last change, for the UI's "what happened" line — null until one fires. */
     var lastChange: QualityChange? = null
         private set
 
-    /**
-     * Why the last step *down* happened — sticky: a thermal trigger marks the
-     * whole descent thermal, and thermal descents only recover manually.
-     */
-    private var lastDownReason: Reason? = null
+    private var emergencySinceMs: Long? = null
+    private var coolSinceMs: Long? = null
 
-    /** Backdated so the *first* step only waits for its hold, not for a dwell that never started. */
-    private var lastChangeAtMs = -DWELL_MS
-    private var thermalBadSinceMs: Long? = null
-    private var netBadSinceMs: Long? = null
-    private var healthySinceMs: Long? = null
-    private var lastFramesEncoded = 0L
-    private var lastFramesDropped = 0L
-    private var lastEncodeTimeSeconds: Double? = null
-    private var lastTickMs: Long? = null
-
-    /**
-     * One stats tick at [nowMs]. [thermalStatus] is the latest ladder reading;
-     * the holds are evaluated per tick, so the cadence of the caller is the
-     * policy's clock.
-     */
+    /** One tick at [nowMs] with the latest thermal reading; the caller's cadence is the rule's clock. */
     @Synchronized
-    fun onTick(nowMs: Long, sample: StreamSample, thermalStatus: ThermalStatus) {
-        // Cumulative counters in, per-tick deltas out (a counter reset — pc
-        // rebuild — must not fake a drop burst: negative deltas read as zero).
-        val deltaEncoded = (sample.framesEncoded - lastFramesEncoded).coerceAtLeast(0)
-        val deltaDropped = (sample.framesDropped - lastFramesDropped).coerceAtLeast(0)
-        lastFramesEncoded = sample.framesEncoded
-        lastFramesDropped = sample.framesDropped
-
-        val droppedFraction = if (deltaEncoded + deltaDropped > 0) {
-            deltaDropped.toDouble() / (deltaEncoded + deltaDropped)
-        } else {
-            0.0
-        }
-
-        // Encoder utilization (Phase18): encode-time delta over wall time —
-        // the leading overload signal. Null until two ticks with encode time
-        // exist, or while a counter reset made the delta negative (a pc
-        // rebuild must not fake a utilization burst, same rule as above).
-        val utilization = sample.totalEncodeTimeSeconds?.let { now ->
-            lastEncodeTimeSeconds?.let { before ->
-                val dWallSeconds = lastTickMs?.let { (nowMs - it) / 1000.0 }
-                val dEncodeSeconds = now - before
-                if (dWallSeconds != null && dWallSeconds > 0 && dEncodeSeconds >= 0) {
-                    dEncodeSeconds / dWallSeconds
-                } else {
-                    null
+    fun onTick(nowMs: Long, thermalStatus: ThermalStatus) {
+        if (thermalStatus >= THERMAL_EMERGENCY_STATUS) {
+            coolSinceMs = null
+            val since = emergencySinceMs
+            when {
+                // The emergency began: one step, at once.
+                since == null -> {
+                    emergencySinceMs = nowMs
+                    step(nowMs, Direction.DOWN, Reason.THERMAL)
+                }
+                // Still there a hold later: the next step, and the hold starts over.
+                nowMs - since >= EMERGENCY_HOLD_MS -> {
+                    emergencySinceMs = nowMs
+                    step(nowMs, Direction.DOWN, Reason.THERMAL)
                 }
             }
+        } else {
+            emergencySinceMs = null
+            val since = coolSinceMs ?: nowMs.also { coolSinceMs = it }
+            if (stepIndex > 0 && nowMs - since >= COOL_HOLD_MS) {
+                coolSinceMs = nowMs
+                step(nowMs, Direction.UP, Reason.RECOVERED)
+            }
         }
-        lastEncodeTimeSeconds = sample.totalEncodeTimeSeconds
-
-        val netBad = droppedFraction >= DROPPED_FRACTION_BAD ||
-            (sample.fractionLost != null && sample.fractionLost >= PACKET_LOSS_FRACTION_BAD) ||
-            (sample.rttMs != null && sample.rttMs >= RTT_BAD_MS) ||
-            (utilization != null && utilization >= ENCODER_UTILIZATION_BAD)
-        val thermalBad = thermalStatus >= THERMAL_TRIGGER_STATUS
-
-        thermalBadSinceMs = markSince(thermalBadSinceMs, thermalBad, nowMs)
-        netBadSinceMs = markSince(netBadSinceMs, netBad, nowMs)
-        healthySinceMs = markSince(healthySinceMs, !thermalBad && !netBad, nowMs)
-
-        val dwellElapsed = nowMs - lastChangeAtMs >= DWELL_MS
-        val thermalBadForMs = thermalBadSinceMs?.let { nowMs - it }
-        val netBadForMs = netBadSinceMs?.let { nowMs - it }
-        val healthyForMs = healthySinceMs?.let { nowMs - it }
-        when {
-            thermalBadForMs != null && thermalBadForMs >= THERMAL_HOLD_MS && dwellElapsed ->
-                stepDown(nowMs, Reason.THERMAL)
-
-            netBadForMs != null && netBadForMs >= NET_HOLD_MS && dwellElapsed ->
-                stepDown(nowMs, Reason.STREAM_HEALTH)
-
-            healthyForMs != null && healthyForMs >= HEALTHY_HOLD_MS && dwellElapsed &&
-                lastDownReason == Reason.STREAM_HEALTH ->
-                stepUp(nowMs, Reason.STREAM_HEALTH)
-        }
-        lastTickMs = nowMs
     }
 
-    /**
-     * The user takes the cast back to their own settings — always available
-     * while below the ceiling, whatever got the cast down here.
-     */
+    /** The user takes the cast back to the profile's values. */
     @Synchronized
     fun restore(nowMs: Long) {
-        if (current == ceiling) return
-        applyChange(nowMs, ceiling, Direction.UP, Reason.USER)
-        lastDownReason = null
+        if (stepIndex == 0) return
+        apply(0, Direction.UP, Reason.USER)
+        // A restore during an emergency holds for a full hold before the rule may step again.
+        if (emergencySinceMs != null) emergencySinceMs = nowMs
+        coolSinceMs = null
     }
 
-    /**
-     * One rung down: the heaviest preset *below* the current one in ladder
-     * order (cool → balanced → performance → sharp) that is no heavier on
-     * **any** dimension; null at the floor. Ladder order alone is not enough:
-     * sharp (1080p30) → performance (720p60) would *double* the frame rate
-     * on a step meant to shed load (mobile review, group B) — the encoder
-     * and thermal cost scale with fps, so sharp descends to balanced. A
-     * custom ceiling (not a rung) descends by the same rule.
-     */
-    private fun stepDownTarget(): QualityLevel? {
-        val idx = ladder.indexOf(current)
-        val below = if (idx >= 0) ladder.subList(0, idx) else ladder
-        return below.filter { it.isNoHeavierThan(current) && it != current }.maxByOrNull { ladder.indexOf(it) }
+    private fun step(nowMs: Long, direction: Direction, reason: Reason) {
+        val target = if (direction == Direction.DOWN) stepIndex + 1 else stepIndex - 1
+        if (target !in steps.indices) return // the last step down, or already at the profile's values
+        apply(target, direction, reason)
     }
 
-    /**
-     * The next *comparable* preset above the current one that fits within the
-     * ceiling — one controlled step — or the ceiling itself when no preset
-     * rung sits between (e.g. performance → sharp is a ceiling-bound step).
-     */
-    private fun stepUpTarget(): QualityLevel? {
-        val nextPresetAbove = ladder
-            .filter { current.isNoHeavierThan(it) && it != current && it.isNoHeavierThan(ceiling) }
-            .minByOrNull { ladder.indexOf(it) }
-        return nextPresetAbove ?: if (current != ceiling) ceiling else null
-    }
-
-    private fun stepDown(nowMs: Long, reason: Reason) {
-        val target = stepDownTarget() ?: return // floor reached — nothing lower to ask for
-        if (reason == Reason.THERMAL || lastDownReason == null) lastDownReason = reason
-        applyChange(nowMs, target, Direction.DOWN, reason)
-    }
-
-    private fun stepUp(nowMs: Long, reason: Reason) {
-        val target = stepUpTarget() ?: return
-        // The descent's reason stops governing once the cast is back where
-        // the user put it — further recovery rungs (a multi-rung descent)
-        // stay allowed while the stream stays clean.
-        if (target == ceiling) lastDownReason = null
-        applyChange(nowMs, target, Direction.UP, reason)
-    }
-
-    private fun applyChange(nowMs: Long, to: QualityLevel, direction: Direction, reason: Reason) {
-        val change = QualityChange(current, to, direction, reason)
-        current = to
+    private fun apply(index: Int, direction: Direction, reason: Reason) {
+        val change = QualityChange(steps[stepIndex], steps[index], direction, reason)
+        stepIndex = index
         lastChange = change
-        lastChangeAtMs = nowMs
-        // Hysteresis restarts at the new rung: every next step needs its own
-        // full hold at the new settings — the anti-oscillation core.
-        thermalBadSinceMs = null
-        netBadSinceMs = null
-        healthySinceMs = null
         onLevelChanged(change)
     }
 
-    private fun markSince(since: Long?, condition: Boolean, nowMs: Long): Long? =
-        if (condition) since ?: nowMs else null
-
     companion object {
-        /** thermal.md Phase12: step down only on MODERATE and worse, never on LIGHT. */
-        val THERMAL_TRIGGER_STATUS = ThermalStatus.MODERATE
+        /** The platform's "has done all it can to reduce power" and worse. */
+        val THERMAL_EMERGENCY_STATUS = ThermalStatus.CRITICAL
 
-        /**
-         * thermal.md: "minutes, not seconds" of sustained heat before acting.
-         * Relaxed 120 → 180 s (second user-review pass): a gaming tablet
-         * lingers at MODERATE for long stretches while the cast looks fine —
-         * heat alone must not move the rung quickly.
-         */
-        const val THERMAL_HOLD_MS = 180_000L
+        /** An emergency that outlasts this costs the second step. */
+        const val EMERGENCY_HOLD_MS = 60_000L
 
-        /**
-         * Sustained stream trouble (drops/loss/RTT) before a step down.
-         * Relaxed twice on user review — 30 → 60 s with the v3 port, then
-         * 60 → 120 s after the first real gaming session: the policy moves
-         * only on a *bad two minutes*, never a bad minute.
-         */
-        const val NET_HOLD_MS = 120_000L
+        /** Out of the emergency this long brings one step back. */
+        const val COOL_HOLD_MS = 30_000L
 
-        /** Recovery needs a long clean stretch — the asymmetry that beats oscillation. */
-        const val HEALTHY_HOLD_MS = 180_000L
-
-        /**
-         * Minimum spacing between any two steps, either direction — the
-         * user's "give every step a pause of minutes": 90 → 180 s with the
-         * v3 port, then 180 → 300 s after the first real gaming session.
-         */
-        const val DWELL_MS = 300_000L
-
-        /**
-         * Per-tick dropped-frame fraction considered encoder stress (Phase5's
-         * ≈0.3% healthy baseline; relaxed 0.05 → 0.08 → 0.10 across the two
-         * user-review passes — brief drop bursts are common on real games).
-         */
-        const val DROPPED_FRACTION_BAD = 0.10
-
-        /**
-         * Fraction of wall time the encoder may sustain before it counts as
-         * overloaded (Phase18) — the leading encoder-stress signal, still a
-         * re-tunable hypothesis. The recorded evidence it must separate: the
-         * healthy rig ran 0.42–0.68 utilization, the Phase16 fps-placebo era
-         * ~1.83 (the case this signal exists to catch before frames drop).
-         * Relaxed 0.85 → 0.90 → 0.95 across two user-review passes: demanding
-         * games sit high for long stretches while the stream looks fine —
-         * only a truly saturated encoder moves the rung.
-         */
-        const val ENCODER_UTILIZATION_BAD = 0.95
-
-        /**
-         * Remote receiver loss fraction considered a struggling link
-         * (relaxed 0.05 → 0.08 with the second user-review pass).
-         */
-        const val PACKET_LOSS_FRACTION_BAD = 0.08
-
-        /**
-         * RTT (ms) considered a struggling link — Phase5 measured 5–10 ms on
-         * a healthy LAN (relaxed 100 → 150 ms: busy Wi-Fi breathes higher).
-         */
-        const val RTT_BAD_MS = 150L
+        /** How far below the profile the cast may go. */
+        const val MAX_STEPS_DOWN = 2
     }
 }
+
+/**
+ * The profile's values followed by each step below them, in the order its
+ * pressure [strategy] gives things up; at most
+ * [AdaptiveQualityController.MAX_STEPS_DOWN] steps, fewer when there is
+ * nothing lower to go to. The bitrate range is never part of a step.
+ */
+fun thermalSteps(top: QualityLevel, strategy: DegradationStrategy): List<QualityLevel> {
+    val order = when (strategy) {
+        DegradationStrategy.MAINTAIN_FRAMERATE -> listOf(Give.DETAIL, Give.DETAIL)
+        DegradationStrategy.MAINTAIN_RESOLUTION -> listOf(Give.FRAMES, Give.DETAIL)
+        DegradationStrategy.BALANCED -> listOf(Give.DETAIL, Give.FRAMES)
+    }
+    val steps = mutableListOf(top)
+    for (give in order) {
+        val from = steps.last()
+        // What the strategy would give up is used up: the other thing goes instead.
+        val next = (if (give == Give.DETAIL) lessDetail(from) ?: fewerFrames(from) else fewerFrames(from) ?: lessDetail(from))
+            ?: break
+        steps += next
+    }
+    return steps
+}
+
+private enum class Give { DETAIL, FRAMES }
+
+private fun lessDetail(level: QualityLevel): QualityLevel? =
+    CastSettingChoices.LONG_EDGE_CHOICES.filter { it < level.longEdgePx }.maxOrNull()?.let { level.copy(longEdgePx = it) }
+
+private fun fewerFrames(level: QualityLevel): QualityLevel? =
+    CastSettingChoices.FPS_CHOICES.filter { it < level.fps }.maxOrNull()?.let { level.copy(fps = it) }

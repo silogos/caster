@@ -3,6 +3,7 @@ package com.zerofriction.localcast.service
 import android.util.Log
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.webrtc.SenderSample
@@ -36,11 +37,19 @@ internal class LiveQualityCoordinator(
     /** Null when auto quality is off (the user's switch) or without a cast. */
     private var controller: AdaptiveQualityController? = null
 
+    /** The running cast's pressure strategy: the order a thermal step gives things up. */
+    private var strategy: DegradationStrategy = DegradationStrategy.BALANCED
+
     /** The ceiling auto quality may climb back to — the user's settings at cast start (or their live pick). */
     private var ceiling: QualityLevel? = null
 
-    /** Cast start: the readout's baseline is the user's settings; the policy rides only when [autoQuality]. */
-    fun start(startLevel: QualityLevel, autoQuality: Boolean) {
+    /**
+     * Cast start: the readout's baseline is the profile's values; the rule
+     * rides only when [autoQuality], stepping in the order [strategy] gives
+     * things up.
+     */
+    fun start(startLevel: QualityLevel, autoQuality: Boolean, strategy: DegradationStrategy) {
+        this.strategy = strategy
         liveQuality.value = startLevel
         if (autoQuality) startPolicy(startLevel)
     }
@@ -49,20 +58,9 @@ internal class LiveQualityCoordinator(
     fun onSample(sample: SenderSample) {
         encoderImplementation.value = sample.encoderImplementation
         val policy = controller ?: return
-        policy.onTick(
-            nowMs(),
-            AdaptiveQualityController.StreamSample(
-                framesEncoded = sample.framesEncoded,
-                framesDropped = sample.framesDropped,
-                fractionLost = sample.fractionLost,
-                rttMs = sample.rttMs,
-                // Phase18's leading encoder-stress signal — the cumulative
-                // encode time; its delta becomes the utilization in the
-                // (pure, tested) controller.
-                totalEncodeTimeSeconds = sample.totalEncodeTimeSeconds,
-            ),
-            thermalStatus(),
-        )
+        // The ~1 Hz stats tick is the rule's clock; its only input is the
+        // thermal ladder (ADR-025).
+        policy.onTick(nowMs(), thermalStatus())
     }
 
     /** The user puts the cast back at their own settings (auto quality is reversible). */
@@ -89,7 +87,7 @@ internal class LiveQualityCoordinator(
     private fun startPolicy(top: QualityLevel) {
         // The ceiling: auto quality never goes above what the user chose (thermal.md principle 2).
         ceiling = top
-        controller = AdaptiveQualityController(ceiling = top, onLevelChanged = { onPolicyChange(it) })
+        controller = AdaptiveQualityController(ceiling = top, strategy = strategy, onLevelChanged = { onPolicyChange(it) })
         adaptiveState.value = AdaptiveUiState(current = top, ceiling = top)
     }
 

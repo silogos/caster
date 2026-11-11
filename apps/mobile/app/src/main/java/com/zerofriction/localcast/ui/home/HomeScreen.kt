@@ -12,7 +12,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -40,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +47,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -68,7 +66,8 @@ import com.zerofriction.localcast.capture.DisplaySize
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CastSettingsStore
 import com.zerofriction.localcast.config.MicDeviceSource
-import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.ProfileSelection
+import com.zerofriction.localcast.config.ProfileValues
 import com.zerofriction.localcast.hotspot.HotspotControl
 import com.zerofriction.localcast.hotspot.HotspotMachine
 import com.zerofriction.localcast.hotspot.hotspotHintFor
@@ -94,7 +93,9 @@ import com.zerofriction.localcast.ui.components.CastSwitch
 import com.zerofriction.localcast.ui.components.CastTextButton
 import com.zerofriction.localcast.ui.components.IconListRow
 import com.zerofriction.localcast.ui.components.SilkscreenLabel
+import com.zerofriction.localcast.ui.profiles.AddProfileSheet
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
+import com.zerofriction.localcast.ui.settings.settingsFactory
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 /**
@@ -109,7 +110,7 @@ import com.zerofriction.localcast.ui.theme.LocalCastTheme
  */
 @Composable
 fun HomeScreen(
-    onOpenSettings: () -> Unit,
+    onEditProfile: (Int) -> Unit,
     onDisconnected: () -> Unit,
     viewModel: HomeViewModel = viewModel(factory = homeFactory()),
     settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory()),
@@ -127,6 +128,7 @@ fun HomeScreen(
     val vcState by CastService.vcState.collectAsStateWithLifecycle()
     val audioRouting by CastService.audioRouting.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val encoderInUse by CastService.encoderImplementation.collectAsStateWithLifecycle()
 
     // No pairing session → nothing to show here: back to the scan screen.
     LaunchedEffect(connection) {
@@ -254,10 +256,17 @@ fun HomeScreen(
                 CastService.requestSetMicDevice(context, source)
             }
         },
-        onSelectProfile = settingsViewModel::selectProfile,
-        onSelectLongEdge = settingsViewModel::selectLongEdge,
-        onSelectFps = settingsViewModel::selectFps,
-        onSetManualBitrateMax = settingsViewModel::setManualBitrateMax,
+        encoderInUse = encoderInUse,
+        onSelectProfile = { selection ->
+            when (selection) {
+                is ProfileSelection.BuiltIn -> settingsViewModel.selectBuiltIn(selection.profile)
+                is ProfileSelection.Custom -> settingsViewModel.selectCustom(selection.id)
+            }
+        },
+        onCreateProfile = { name, values -> settingsViewModel.addProfile(name, values) },
+        onEditProfile = onEditProfile,
+        onDuplicateProfile = { id -> settingsViewModel.duplicateProfile(id) },
+        onDeleteProfile = settingsViewModel::deleteProfile,
         onApplyLiveQuality = { level -> CastService.requestSetLiveQuality(context, level) },
         vcState = vcState,
         onToggleVirtualCamera = { CastService.requestToggleVirtualCamera(context) },
@@ -277,7 +286,6 @@ fun HomeScreen(
             ConnectedDesktop.clear()
             onDisconnected()
         },
-        onOpenSettings = onOpenSettings,
         hotspotState = hotspotState,
         onStartHotspot = startHotspot,
         onStopHotspot = { HotspotControl.stop() },
@@ -302,10 +310,13 @@ fun HomeContent(
     onSetGameAudio: (Boolean) -> Unit = {},
     onSetMic: (Boolean) -> Unit = {},
     onSetMicDevice: (MicDeviceSource) -> Unit = {},
-    onSelectProfile: (QualityProfile) -> Unit = {},
-    onSelectLongEdge: (Int) -> Unit = {},
-    onSelectFps: (Int) -> Unit = {},
-    onSetManualBitrateMax: (Int) -> Unit = {},
+    /** What libwebrtc actually picked for the running cast; null until it is known. */
+    encoderInUse: String? = null,
+    onSelectProfile: (ProfileSelection) -> Unit = {},
+    onCreateProfile: (String, ProfileValues) -> Unit = { _, _ -> },
+    onEditProfile: (Int) -> Unit = {},
+    onDuplicateProfile: (Int) -> Unit = {},
+    onDeleteProfile: (Int) -> Unit = {},
     onApplyLiveQuality: (QualityLevel) -> Unit = {},
     vcState: VirtualCameraUiState = VirtualCameraUiState(),
     onToggleVirtualCamera: () -> Unit = {},
@@ -318,7 +329,6 @@ fun HomeContent(
         onConnectSaved: () -> Unit = {},
         onScanQr: () -> Unit = {},
         onTerminateSaved: () -> Unit = {},
-        onOpenSettings: () -> Unit = {},
         hotspotState: HotspotMachine.State = HotspotMachine.State.Idle,
         onStartHotspot: () -> Unit = {},
         onStopHotspot: () -> Unit = {},
@@ -360,8 +370,12 @@ fun HomeContent(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                // A 48dp bar under 2dp of air. The minimum is on the whole
+                // row (air included) now that nothing in it is 40dp tall: the
+                // gear that used to set its height left with the Advanced
+                // page (ADR-024).
+                .heightIn(min = 50.dp)
                 .padding(top = 2.dp)
-                .heightIn(min = 48.dp)
                 .drawBehind {
                     val y = size.height - 0.5.dp.toPx()
                     drawLine(
@@ -390,23 +404,6 @@ fun HomeContent(
                 tone = annunc.tone,
                 pulse = annunc == ConsoleAnnunciator.ON_AIR,
             )
-            OutlinedButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.size(40.dp),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(0.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_gear),
-                    contentDescription = stringResource(R.string.advanced_settings_title),
-                    modifier = Modifier.size(19.dp),
-                )
-            }
         }
 
         // ---- Hero: the destination plate — name only, both states; the
@@ -529,29 +526,43 @@ fun HomeContent(
             }
         }
 
-        // ---- The quality console (Preset | Custom) — same card in both
-        // states, 16dp off the transport (the prototype's 16/16 rhythm):
-        // idle = next-cast defaults, casting = the running cast. STATUS
-        // rides with it, casting only. ----
+        // ---- The quality console (the profile list, ADR-024) — same card
+        // in both states, 16dp off the transport (the prototype's 16/16
+        // rhythm): idle = the next cast's profile, casting = the running
+        // cast. STATUS rides with it, casting only. ----
+        var addingProfile by rememberSaveable { mutableStateOf(false) }
         QualityConsoleCard(
             casting = casting,
             settings = settings,
             liveQuality = liveQuality,
             startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
-            onSelectProfile = onSelectProfile,
-            onSelectLongEdge = onSelectLongEdge,
-            onSelectFps = onSelectFps,
-            onSetManualBitrateMax = onSetManualBitrateMax,
+            onSelect = onSelectProfile,
             onApplyLive = onApplyLiveQuality,
+            onAddProfile = { addingProfile = true },
+            onEditProfile = onEditProfile,
+            onDuplicateProfile = onDuplicateProfile,
+            onDeleteProfile = onDeleteProfile,
             modifier = Modifier.padding(top = 16.dp),
             statusRows = {
                 ThermalLedRow(thermalState, topDivider = false)
                 AdaptiveLedRow(adaptiveState, topDivider = true)
+                EncoderInUseRow(encoderInUse, topDivider = true)
                 if (BuildConfig.DEBUG) {
                     DebugToneButton(topDivider = true)
                 }
             },
         )
+
+        if (addingProfile) {
+            AddProfileSheet(
+                settings = settings,
+                onCreate = { name, values ->
+                    addingProfile = false
+                    onCreateProfile(name, values)
+                },
+                onDismiss = { addingProfile = false },
+            )
+        }
 
         // ---- Audio card — one switch per track ----
         SilkscreenLabel(stringResource(R.string.settings_audio))

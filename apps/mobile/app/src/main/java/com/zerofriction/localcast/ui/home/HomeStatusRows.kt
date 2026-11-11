@@ -29,6 +29,8 @@ import com.zerofriction.localcast.config.matchingProfile
 import com.zerofriction.localcast.debug.DebugTestTone
 import com.zerofriction.localcast.service.AdaptiveUiState
 import com.zerofriction.localcast.service.CastService
+import com.zerofriction.localcast.service.isBelow
+import com.zerofriction.localcast.service.qualityChangeLine
 import com.zerofriction.localcast.thermal.ThermalState
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.components.CastTextButton
@@ -44,6 +46,21 @@ internal fun HintText(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 8.dp),
         lineHeight = 18.sp,
+    )
+}
+
+/**
+ * What libwebrtc actually picked for the running cast — a read-only fact,
+ * shown only once it is known, never faked. It sits with the cast's other
+ * facts since the Advanced page went (ADR-024).
+ */
+@Composable
+internal fun EncoderInUseRow(encoderInUse: String?, topDivider: Boolean) {
+    if (encoderInUse === null) return
+    LedListRow(
+        text = stringResource(R.string.status_encoder_in_use, encoderInUse),
+        tone = LedTone.DIM,
+        topDivider = topDivider,
     )
 }
 
@@ -94,17 +111,7 @@ internal fun AdaptiveLedRow(adaptiveState: AdaptiveUiState, topDivider: Boolean)
     if (current == ceiling && adaptiveState.lastChange == null) return
     val down = change.direction == AdaptiveQualityController.Direction.DOWN
     LedListRow(
-        text = when {
-            down && change.reason == AdaptiveQualityController.Reason.THERMAL ->
-                stringResource(R.string.adaptive_lowered_thermal, levelName(change.to))
-
-            down -> stringResource(R.string.adaptive_lowered_stream, levelName(change.to))
-
-            change.reason == AdaptiveQualityController.Reason.USER ->
-                stringResource(R.string.adaptive_restored, levelName(change.to))
-
-            else -> stringResource(R.string.adaptive_raised, levelName(change.to))
-        },
+        text = qualityChangeLine(context, change, belowProfile = current.isBelow(ceiling)),
         tone = if (down) LedTone.ON else LedTone.DIM,
         topDivider = topDivider,
         right = if (current != ceiling) {
@@ -118,18 +125,6 @@ internal fun AdaptiveLedRow(adaptiveState: AdaptiveUiState, topDivider: Boolean)
             null
         },
     )
-}
-
-/** Localized name for a quality level — "your settings" for a tweaked top rung. */
-@Composable
-internal fun levelName(level: QualityLevel): String = when (
-    matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
-) {
-    QualityProfile.COOL -> stringResource(R.string.profile_cool)
-    QualityProfile.BALANCED -> stringResource(R.string.profile_balanced)
-    QualityProfile.PERFORMANCE -> stringResource(R.string.profile_performance)
-    QualityProfile.SHARP -> stringResource(R.string.profile_sharp)
-    null -> stringResource(R.string.adaptive_your_settings)
 }
 
 /**

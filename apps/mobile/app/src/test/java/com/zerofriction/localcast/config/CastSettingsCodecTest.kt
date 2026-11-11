@@ -1,46 +1,70 @@
 package com.zerofriction.localcast.config
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Phase10 persistence: the settings document round-trips, and anything this
- * build can't fully validate (corrupt JSON, wrong version, unknown values)
- * decodes to null — the store then degrades to defaults, never a cast on
- * guessed values (same convention as the desktop mixer's localStorage).
+ * Persistence: the settings document round-trips, anything this build can't
+ * fully validate decodes to null (the store then degrades to defaults, never
+ * a cast on guessed values), and every older document migrates into profiles
+ * without losing a value (ADR-024). The older documents here are written out
+ * the way those versions stored them, not derived from today's encoder.
  */
 class CastSettingsCodecTest {
 
-    private val custom = CastSettings(
-        profile = QualityProfile.PERFORMANCE,
-        longEdgePx = 960,
+    private val smooth = ProfileValues(
+        longEdgePx = 1920,
         fps = 60,
-        bitrateAuto = false,
-        bitrateMinBps = 3_000_000,
-        bitrateMaxBps = 6_000_000,
-        gameAudio = false,
-        mic = true,
-        autoQuality = true,
+        bitrateMinBps = 6_000_000,
+        bitrateMaxBps = 12_000_000,
+        degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
+        autoQuality = false,
+        encoderImpl = EncoderImplementation.SOFTWARE,
+        preferredCodec = PreferredVideoCodec.VP8,
+        h264HighProfile = false,
+        encoderFpsLimit = 30,
+        lowLatencyGameAudio = true,
     )
 
+    private val withProfiles = CastSettings(
+        selection = ProfileSelection.Custom(2),
+        customProfiles = listOf(
+            CustomProfile(1, "Couch", QualityProfile.SHARP.toValues()),
+            CustomProfile(2, "Stream 60", smooth),
+        ),
+        gameAudio = false,
+        mic = true,
+        micDevice = MicDeviceSource.BLUETOOTH,
+    )
+
+    // ---- Today's document ----
+
     @Test
-    fun `round-trips every field`() {
-        val decoded = CastSettingsCodec.decode(CastSettingsCodec.encode(custom))
-        assertEquals(custom, decoded)
+    fun `a document with the user's profiles round-trips every field`() {
+        assertEquals(withProfiles, CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles)))
     }
 
     @Test
-    fun `round-trips the defaults`() {
+    fun `the defaults round-trip`() {
         assertEquals(CastSettings.default(), CastSettingsCodec.decode(CastSettingsCodec.encode(CastSettings.default())))
     }
 
     @Test
+    fun `the document is version 9 and has no bitrate mode or leftover field`() {
+        val document = CastSettingsCodec.encode(withProfiles)
+        assertTrue(document.contains(""""v":9"""))
+        assertFalse(document.contains("struggle"))
+        assertFalse(document.contains("bitrateMode"))
+        assertFalse(document.contains("bitrateAuto"))
+    }
+
+    @Test
     fun `unknown keys are tolerated forward-compatibly`() {
-        val encoded = CastSettingsCodec.encode(custom)
-            .replace(""""v":""", """"zfcFutureField":9,"v":""")
-        assertEquals(custom, CastSettingsCodec.decode(encoded))
+        val document = CastSettingsCodec.encode(withProfiles).replace(""""v":""", """"zfcFutureField":9,"v":""")
+        assertEquals(withProfiles, CastSettingsCodec.decode(document))
     }
 
     @Test
@@ -50,192 +74,219 @@ class CastSettingsCodecTest {
     }
 
     @Test
-    fun `a future version decodes to null`() {
-        val future = CastSettingsCodec.encode(custom).replace(""""v":6""", """"v":7""")
-        assertNull(CastSettingsCodec.decode(future))
+    fun `a version this build does not know decodes to null`() {
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":9""", """"v":10""")))
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles).replace(""""v":9""", """"v":0""")))
     }
 
     @Test
-    fun `an unknown preset label decodes to null`() {
-        val encoded = CastSettingsCodec.encode(custom)
-            .replace(""""profile":"performance"""", """"profile":"ultra"""")
-        assertNull(CastSettingsCodec.decode(encoded))
-    }
-
-    // ---- v1 legacy documents (Phase10 shape, pre-thermal relabels) ----
-
-    /** A v1 document: downgraded version field, pre-rename label, same values. */
-    private fun v1Document(v3Document: String, legacyLabel: String): String = v3Document
-        .replace(""""v":6""", """"v":1""")
-        .replace(""""profile":"${custom.profile.label}"""", """"profile":"$legacyLabel"""")
-
-    @Test
-    fun `a v1 light document decodes as cool with the same values`() {
-        val stored = v1Document(CastSettingsCodec.encode(custom.copy(profile = QualityProfile.COOL)), legacyLabel = "light")
-        assertEquals(custom.copy(profile = QualityProfile.COOL), CastSettingsCodec.decode(stored))
+    fun `a selection that names no profile decodes to null`() {
+        val document = CastSettingsCodec.encode(withProfiles)
+        assertNull(CastSettingsCodec.decode(document.replace("custom:2", "custom:9")))
+        assertNull(CastSettingsCodec.decode(document.replace("custom:2", "builtin:turbo")))
+        assertNull(CastSettingsCodec.decode(document.replace("custom:2", "second")))
     }
 
     @Test
-    fun `a v1 smooth document decodes as performance with the same values`() {
-        val stored = v1Document(CastSettingsCodec.encode(custom), legacyLabel = "smooth")
-        assertEquals(custom, CastSettingsCodec.decode(stored))
+    fun `profiles that break the rules decode to null`() {
+        val document = CastSettingsCodec.encode(withProfiles)
+        // Two profiles with one id.
+        assertNull(CastSettingsCodec.decode(document.replace(""""id":1""", """"id":2""")))
+        // A name a profile may not have: empty, padded, too long.
+        assertNull(CastSettingsCodec.decode(document.replace(""""name":"Couch"""", """"name":""""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""name":"Couch"""", """"name":" Couch"""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""name":"Couch"""", """"name":"${"x".repeat(21)}"""")))
+        // More profiles than the app lets a user make.
+        val many = (1..CustomProfileRules.MAX_PROFILES + 1).map { CustomProfile(it, "P$it", smooth) }
+        assertNull(CastSettingsCodec.decode(CastSettingsCodec.encode(withProfiles.copy(customProfiles = many))))
     }
 
     @Test
-    fun `a v1 document with an unknown label still decodes to null`() {
-        val stored = v1Document(CastSettingsCodec.encode(custom), legacyLabel = "ultra")
-        assertNull(CastSettingsCodec.decode(stored))
-    }
-
-    // ---- v2 legacy documents (Phase11 shape, pre-auto-quality) ----
-
-    /** A v2 document: only the version field downgraded — no `autoQuality` key at all. */
-    private fun v2Document(v3Document: String): String = v3Document
-        .replace(""""v":6""", """"v":2""")
-        .replace(""",""autoQuality":true""", "")
-        .replace(""",""lowLatencyGameAudio":false""", "")
-
-    @Test
-    fun `a v2 document decodes with the auto-quality default on`() {
-        val stored = v2Document(CastSettingsCodec.encode(custom.copy(autoQuality = true)))
-        assertEquals(custom, CastSettingsCodec.decode(stored))
+    fun `a profile with a value this build does not offer decodes to null`() {
+        val document = CastSettingsCodec.encode(withProfiles)
+        assertNull(CastSettingsCodec.decode(document.replace(""""fps":60""", """"fps":24""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""encoderFpsLimit":30""", """"encoderFpsLimit":45""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""encoderImpl":"software"""", """"encoderImpl":"fpga"""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""preferredCodec":"vp8"""", """"preferredCodec":"av2"""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""bitrateMinBps":6000000""", """"bitrateMinBps":13000000""")))
     }
 
     @Test
-    fun `a v3 document with the switch off round-trips it`() {
-        val off = custom.copy(autoQuality = false)
-        assertEquals(off, CastSettingsCodec.decode(CastSettingsCodec.encode(off)))
+    fun `an unknown mic device or a missing field decodes to null`() {
+        val document = CastSettingsCodec.encode(withProfiles)
+        assertNull(CastSettingsCodec.decode(document.replace(""""micDevice":"bluetooth"""", """"micDevice":"telepathy"""")))
+        assertNull(CastSettingsCodec.decode(document.replace(""""mic":true,""", "")))
     }
 
-    @Test
-    fun `the round-trip document carries the v6 version`() {
-        assertTrue(CastSettingsCodec.encode(custom).contains(""""v":6"""))
-    }
+    // ---- Older documents: one flat set of values, migrated into profiles ----
 
-    // ---- v3 legacy documents (pre-Advanced) decode with today's-behavior defaults ----
-
-    /**
-     * A v3 document: the version downgraded and every Advanced key stripped
-     * (leading-comma form — the Advanced fields all follow earlier fields, so
-     * the object's closing brace is never touched).
-     */
-    private fun v3Document(v5Document: String): String =
-        Regex(""","(encoderImpl|h264HighProfile|preferredCodec|degradationStrategy|encoderFpsLimit|bitrateMode)":[^,}]*""")
-            .replace(v5Document.replace(""""v":6""", """"v":3"""), "")
-
-    @Test
-    fun `a v3 document decodes with the Advanced defaults`() {
-        val stored = v3Document(CastSettingsCodec.encode(custom))
-        assertEquals(custom, CastSettingsCodec.decode(stored))
-    }
-
-    // ---- Advanced (v4) round-trips and validation ----
-
-    @Test
-    fun `advanced overrides round-trip`() {
-        val advanced = custom.copy(
-            encoderImpl = EncoderImplementation.SOFTWARE,
-            h264HighProfile = false,
-            preferredCodec = PreferredVideoCodec.VP8,
-            degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE,
-            encoderFpsLimit = 30,
-            bitrateMode = EncoderBitrateMode.VBR,
+    /** A flat document the way version [v] stored it; [changes] override or (with null) drop a field. */
+    private fun flat(v: Int, vararg changes: Pair<String, String?>): String {
+        val fields = linkedMapOf(
+            "v" to "$v",
+            "profile" to "\"balanced\"",
+            "longEdgePx" to "1280",
+            "fps" to "30",
+            "bitrateAuto" to "true",
+            "bitrateMinBps" to "4000000",
+            "bitrateMaxBps" to "6000000",
+            "gameAudio" to "true",
+            "mic" to "false",
         )
-        assertEquals(advanced, CastSettingsCodec.decode(CastSettingsCodec.encode(advanced)))
+        if (v >= 3) fields["autoQuality"] = "true"
+        if (v >= 4) {
+            fields["encoderImpl"] = "\"hardware\""
+            fields["h264HighProfile"] = "true"
+            fields["preferredCodec"] = "\"h264\""
+            fields["degradationStrategy"] = "\"balanced\""
+            fields["encoderFpsLimit"] = "null"
+            fields["bitrateMode"] = "\"cbr\""
+        }
+        if (v >= 5) fields["micDevice"] = "\"builtin\""
+        if (v >= 6) fields["lowLatencyGameAudio"] = "false"
+        for ((key, value) in changes) if (value == null) fields.remove(key) else fields[key] = value
+        return fields.entries.joinToString(",", "{", "}") { "\"${it.key}\":${it.value}" }
     }
 
     @Test
-    fun `unknown Advanced labels decode to null`() {
-        val badEncoder = CastSettingsCodec.encode(custom).replace(""""encoderImpl":"hardware"""", """"encoderImpl":"qti"""")
-        assertNull(CastSettingsCodec.decode(badEncoder))
-
-        val badCodec = CastSettingsCodec.encode(custom).replace(""""preferredCodec":"h264"""", """"preferredCodec":"av1"""")
-        assertNull(CastSettingsCodec.decode(badCodec))
-
-        val badDegradation = CastSettingsCodec.encode(custom).replace(""""degradationStrategy":"balanced"""", """"degradationStrategy":"fluid"""")
-        assertNull(CastSettingsCodec.decode(badDegradation))
-
-        val badMode = CastSettingsCodec.encode(custom).replace(""""bitrateMode":"cbr"""", """"bitrateMode":"abrr"""")
-        assertNull(CastSettingsCodec.decode(badMode))
+    fun `stored values that equal a built-in profile select that profile`() {
+        for (v in 1..6) {
+            assertEquals("v$v", CastSettings.default(), CastSettingsCodec.decode(flat(v)))
+        }
     }
 
     @Test
-    fun `an fps limit outside the choices decodes to null`() {
-        val bad = CastSettingsCodec.encode(custom.copy(encoderFpsLimit = 30))
-            .replace(""""encoderFpsLimit":30""", """"encoderFpsLimit":45""")
-        assertNull(CastSettingsCodec.decode(bad))
+    fun `the setup that prompted profiles becomes Custom 1 with every value kept`() {
+        // Sharp, then 60 fps, auto quality off: shown as "Custom", still carrying Sharp's window and strategy.
+        val stored = flat(
+            6,
+            "profile" to "\"sharp\"", "longEdgePx" to "1920", "fps" to "60",
+            "bitrateMinBps" to "8000000", "bitrateMaxBps" to "12000000",
+            "autoQuality" to "false", "degradationStrategy" to "\"resolution\"",
+        )
+        val settings = CastSettingsCodec.decode(stored)!!
+        val profile = settings.customProfiles.single()
+        assertEquals("Custom 1", profile.name)
+        assertEquals(ProfileSelection.Custom(profile.id), settings.selection)
+        assertEquals(
+            QualityProfile.SHARP.toValues().copy(fps = 60, autoQuality = false),
+            profile.values,
+        )
+        assertEquals("the next cast is unchanged", 8_000_000, settings.toConfig().bitrateMinBps)
+        assertEquals(CastConfig.DEGRADATION_RESOLUTION, settings.toConfig().degradationPreference)
     }
 
     @Test
-    fun `a null fps limit round-trips as off`() {
-        assertEquals(null, CastSettingsCodec.decode(CastSettingsCodec.encode(custom.copy(encoderFpsLimit = null)))?.encoderFpsLimit)
+    fun `a preset with one changed encoder choice becomes Custom 1, not the preset`() {
+        val settings = CastSettingsCodec.decode(flat(6, "encoderImpl" to "\"software\""))!!
+        assertEquals(EncoderImplementation.SOFTWARE, settings.customProfiles.single().values.encoderImpl)
+        assertEquals(EncoderImplementation.SOFTWARE, settings.toConfig().encoderImpl)
     }
 
     @Test
-    fun `values outside the settings screen's choices decode to null`() {
-        val badResolution = CastSettingsCodec.encode(custom).replace(""""longEdgePx":960""", """"longEdgePx":1440""")
-        assertNull(CastSettingsCodec.decode(badResolution))
-
-        val badFps = CastSettingsCodec.encode(custom).replace(""""fps":60""", """"fps":25""")
-        assertNull(CastSettingsCodec.decode(badFps))
+    fun `the dropped bitrate mode and auto-bitrate flag do not make a preset custom`() {
+        val cool = flat(
+            6,
+            "profile" to "\"cool\"", "longEdgePx" to "960", "bitrateMinBps" to "2000000",
+            "bitrateMaxBps" to "3000000", "h264HighProfile" to "false", "bitrateMode" to "\"vbr\"",
+            "bitrateAuto" to "false",
+        )
+        val settings = CastSettingsCodec.decode(cool)!!
+        assertEquals(ProfileSelection.BuiltIn(QualityProfile.COOL), settings.selection)
+        assertTrue(settings.customProfiles.isEmpty())
     }
 
     @Test
-    fun `an inverted or oversized bitrate window decodes to null`() {
-        val inverted = CastSettingsCodec.encode(custom)
-            .replace(""""bitrateMinBps":3000000""", """"bitrateMinBps":7000000""")
-        assertNull(CastSettingsCodec.decode(inverted))
-
-        val oversized = CastSettingsCodec.encode(custom)
-            .replace(""""bitrateMaxBps":6000000""", """"bitrateMaxBps":50000000""")
-        assertNull(CastSettingsCodec.decode(oversized))
+    fun `a v1 document's old preset names are translated`() {
+        val light = flat(
+            1, "profile" to "\"light\"", "longEdgePx" to "960",
+            "bitrateMinBps" to "2000000", "bitrateMaxBps" to "3000000",
+        )
+        // v1 had no H.264 profile choice: Cool's Baseline is not what it ran, so it is kept as the user's own.
+        val settings = CastSettingsCodec.decode(light)!!
+        assertEquals(QualityProfile.COOL.toValues().copy(h264HighProfile = true), settings.active)
+        assertNull(CastSettingsCodec.decode(flat(1, "profile" to "\"turbo\"")))
+        assertNull("the old names are v1's only", CastSettingsCodec.decode(flat(2, "profile" to "\"light\"")))
     }
 
     @Test
-    fun `a missing field decodes to null`() {
-        val encoded = CastSettingsCodec.encode(custom)
-        assertNull(CastSettingsCodec.decode(encoded.substringBefore(""""gameAudio""")))
+    fun `fields a version did not have yet take the default shipped with it`() {
+        val v2 = CastSettingsCodec.decode(flat(2))!!
+        assertEquals(true, v2.active.autoQuality)
+        val v3 = CastSettingsCodec.decode(flat(3, "autoQuality" to "false"))!!
+        assertEquals(false, v3.active.autoQuality)
+        assertEquals(EncoderImplementation.HARDWARE, v3.active.encoderImpl)
+        val v4 = CastSettingsCodec.decode(flat(4))!!
+        assertEquals(MicDeviceSource.BUILTIN, v4.micDevice)
+        val v5 = CastSettingsCodec.decode(flat(5, "micDevice" to "\"bluetooth\""))!!
+        assertEquals(MicDeviceSource.BLUETOOTH, v5.micDevice)
+        assertEquals(false, v5.active.lowLatencyGameAudio)
     }
 
-    // ---- mic device (v5): round-trip, validation, and the v4 ladder ----
-
     @Test
-    fun `the mic device choice round-trips`() {
-        val bluetooth = custom.copy(micDevice = MicDeviceSource.BLUETOOTH)
-        assertEquals(bluetooth, CastSettingsCodec.decode(CastSettingsCodec.encode(bluetooth)))
+    fun `the audio switches and the low-latency choice survive the migration`() {
+        val settings = CastSettingsCodec.decode(
+            flat(6, "gameAudio" to "false", "mic" to "true", "lowLatencyGameAudio" to "true"),
+        )!!
+        assertEquals(false, settings.gameAudio)
+        assertEquals(true, settings.mic)
+        assertEquals("it lives in the profile now", true, settings.customProfiles.single().values.lowLatencyGameAudio)
+        assertEquals(true, settings.toConfig().lowLatencyGameAudio)
     }
 
     @Test
-    fun `an unknown mic device label decodes to null`() {
-        val bad = CastSettingsCodec.encode(custom).replace(""""micDevice":"builtin"""", """"micDevice":"telephony"""")
-        assertNull(CastSettingsCodec.decode(bad))
+    fun `an older document with a value this build does not offer decodes to null`() {
+        assertNull(CastSettingsCodec.decode(flat(6, "longEdgePx" to "1000")))
+        assertNull(CastSettingsCodec.decode(flat(6, "fps" to "24")))
+        assertNull(CastSettingsCodec.decode(flat(6, "bitrateMinBps" to "7000000")))
+        assertNull(CastSettingsCodec.decode(flat(6, "bitrateMaxBps" to "25000000")))
+        assertNull(CastSettingsCodec.decode(flat(6, "encoderFpsLimit" to "45")))
+        assertNull(CastSettingsCodec.decode(flat(6, "degradationStrategy" to "\"vibes\"")))
+        assertNull(CastSettingsCodec.decode(flat(6, "micDevice" to "\"telepathy\"")))
+        assertNull(CastSettingsCodec.decode(flat(6, "fps" to null)))
     }
 
-    /** A v4 document: the version downgraded and the `micDevice` key stripped. */
-    private fun v4Document(v5Document: String): String = v5Document
-        .replace(""""v":6""", """"v":4""")
-        .replace(""",""micDevice":"builtin""", "")
+    // ---- v7 and v8: the earlier profile formats ----
+
+    private val v7 = """{"v":7,"selected":"custom:1","profiles":[{"id":1,"name":"Custom 1","values":{"longEdgePx":1920,"fps":60,"bitrateMinBps":8000000,"bitrateMaxBps":12000000,"degradationStrategy":"framerate","autoQuality":false,"encoderImpl":"hardware","preferredCodec":"h264","h264HighProfile":true,"encoderFpsLimit":null,"lowLatencyGameAudio":true}}],"gameAudio":true,"mic":false,"micDevice":"builtin"}"""
+
+    /** The tablet's own document after the one-day build with a single "struggle" choice. */
+    private val v8 = """{"v":8,"selected":"custom:1","profiles":[{"id":1,"name":"Custom 1","values":{"longEdgePx":1920,"fps":60,"bitrateMinBps":8000000,"bitrateMaxBps":12000000,"struggle":"smooth","degradationStrategy":null,"encoderImpl":"hardware","preferredCodec":"h264","h264HighProfile":true,"encoderFpsLimit":null,"lowLatencyGameAudio":true}}],"gameAudio":true,"mic":false,"micDevice":"builtin"}"""
 
     @Test
-    fun `a v4 document decodes with the built-in mic default`() {
-        assertEquals(custom, CastSettingsCodec.decode(v4Document(CastSettingsCodec.encode(custom))))
+    fun `a v7 document reads as it was stored`() {
+        val values = CastSettingsCodec.decode(v7)!!.customProfiles.single().values
+        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE, values.degradationStrategy)
+        assertEquals("the switch the user set is kept", false, values.autoQuality)
+        assertEquals(8_000_000 to 12_000_000, values.bitrateMinBps to values.bitrateMaxBps)
     }
 
-    // ---- low latency (v6): round-trip, and the v5 ladder ----
-
     @Test
-    fun `the low-latency choice round-trips`() {
-        val low = custom.copy(lowLatencyGameAudio = true)
-        assertEquals(low, CastSettingsCodec.decode(CastSettingsCodec.encode(low)))
+    fun `a v8 document's single choice becomes the two settings it stood for`() {
+        fun valuesOf(choice: String) = CastSettingsCodec.decode(v8.replace("smooth", choice))!!.customProfiles.single().values
+        assertEquals(DegradationStrategy.MAINTAIN_FRAMERATE to true, valuesOf("smooth").let { it.degradationStrategy to it.autoQuality })
+        assertEquals(DegradationStrategy.MAINTAIN_RESOLUTION to true, valuesOf("sharp").let { it.degradationStrategy to it.autoQuality })
+        assertEquals(DegradationStrategy.BALANCED to true, valuesOf("balanced").let { it.degradationStrategy to it.autoQuality })
+        assertEquals("don't adjust was the switch turned off", DegradationStrategy.BALANCED to false, valuesOf("fixed").let { it.degradationStrategy to it.autoQuality })
+        val kept = CastSettingsCodec.decode(v8)!!
+        assertEquals("Custom 1", kept.customProfiles.single().name)
+        assertEquals(true, kept.active.lowLatencyGameAudio)
+        assertEquals(8_000_000, kept.toConfig().bitrateMinBps)
     }
 
-    /** A v5 document: the version downgraded and the `lowLatencyGameAudio` key stripped. */
-    private fun v5Document(v6Document: String): String = v6Document
-        .replace(""""v":6""", """"v":5""")
-        .replace(""",""lowLatencyGameAudio":false""", "")
+    @Test
+    fun `a v8 document with an unknown choice, or a profile with neither form, decodes to null`() {
+        assertNull(CastSettingsCodec.decode(v8.replace("smooth", "vibes")))
+        assertNull(CastSettingsCodec.decode(v8.replace(""""struggle":"smooth",""", "")))
+    }
 
     @Test
-    fun `a v5 document decodes with the low-latency default off`() {
-        assertEquals(custom, CastSettingsCodec.decode(v5Document(CastSettingsCodec.encode(custom))))
+    fun `a migrated document is written back as today's and reads the same`() {
+        for (old in listOf(v7, v8)) {
+            val migrated = CastSettingsCodec.decode(old)!!
+            assertEquals(migrated, CastSettingsCodec.decode(CastSettingsCodec.encode(migrated)))
+        }
+        val migrated = CastSettingsCodec.decode(flat(6, "fps" to "60"))!!
+        assertEquals(migrated, CastSettingsCodec.decode(CastSettingsCodec.encode(migrated)))
     }
 }

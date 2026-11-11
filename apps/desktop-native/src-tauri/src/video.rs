@@ -154,7 +154,7 @@ const POOL_ALLOCATION_THRESHOLD: i64 = 10;
 /// Sample times in nanoseconds (the host clock's own timescale).
 const PTS_TIMESCALE: i32 = 1_000_000_000;
 const INITIAL_WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
-const WINDOW_TITLE: &str = "Zero-Friction Cast";
+const WINDOW_TITLE: &str = "Caster";
 /// Frameless (product choice, 2026-11-09 — the Electron receiver's
 /// frameless spec): no title bar, no traffic lights, square corners; OBS
 /// captures pure video. Moved by dragging the video, resized from the
@@ -316,7 +316,7 @@ unsafe fn build_no_input_card(display_layer: Id, (w, h): (f64, f64), scale: f64)
     let sub = text_layer("Start casting from your phone", "HelveticaNeue", 15.0, CARD_SUB,
         NSRect::new(NSPoint::new(cx - 250.0, cy - 28.0), NSSize::new(500.0, 22.0)), KEEP_CENTERED, scale);
     let _: () = msg_send![card, addSublayer: sub];
-    let brand = text_layer("LOCAL CAST", "Menlo-Bold", 11.0, CARD_BRAND,
+    let brand = text_layer("CASTER", "Menlo-Bold", 11.0, CARD_BRAND,
         NSRect::new(NSPoint::new(cx - 100.0, 24.0), NSSize::new(200.0, 16.0)), KEEP_AT_BOTTOM, scale);
     let _: () = msg_send![card, addSublayer: brand];
     let _: () = msg_send![card, setHidden: LIVE.load(Ordering::Relaxed)];

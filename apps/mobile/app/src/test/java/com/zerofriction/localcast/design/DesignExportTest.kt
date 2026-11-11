@@ -46,6 +46,9 @@ import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.config.CastSettings
+import com.zerofriction.localcast.config.DegradationStrategy
+import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.toValues
 import com.zerofriction.localcast.config.MicDeviceSource
 import com.zerofriction.localcast.hotspot.HotspotMachine
 import com.zerofriction.localcast.pairing.PairingClient
@@ -63,7 +66,7 @@ import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.ui.home.HomeContent
 import com.zerofriction.localcast.ui.home.MicPermission
 import com.zerofriction.localcast.ui.pairing.ScanContent
-import com.zerofriction.localcast.ui.settings.CastSettingsContent
+import com.zerofriction.localcast.ui.profiles.ProfileEditContent
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 import org.json.JSONArray
 import org.json.JSONObject
@@ -108,6 +111,11 @@ class DesignExportTest {
     private val balanced = QualityLevel.PRESETS[1]
     private val cool = QualityLevel.PRESETS[0]
 
+    /** Home with two profiles of the user's own (ADR-024), the first one selected for editing's sake. */
+    private val withOwnProfiles = CastSettings.default()
+        .withProfileAdded("Stream 60", QualityProfile.SHARP.toValues().copy(fps = 60, degradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE).withBitrateRange(4_000_000, 12_000_000))
+        .withProfileAdded("Couch", QualityProfile.SHARP.toValues().copy(autoQuality = false))
+
     /** Scrolling screens: a tall window, the frame as tall as the content. */
     @Test
     fun exportScrollingScreens() = export(scrollingScreens(), fixedHeight = null)
@@ -124,7 +132,7 @@ class DesignExportTest {
     )
 
     private fun scrollingScreens(): List<Pair<String, @Composable () -> Unit>> = listOf(
-            "01 Home · Standby" to { home(CastState.Idle) },
+            "01 Home · Standby" to { home(CastState.Idle, settings = withOwnProfiles) },
             "02 Home · Starting" to { home(CastState.Starting("Gaming PC")) },
             "03 Home · On air" to {
                 home(
@@ -179,18 +187,15 @@ class DesignExportTest {
                     settings = CastSettings.default().copy(mic = true),
                 )
             },
-            "09 Settings · Advanced" to {
-                CastSettingsContent(
-                    settings = CastSettings.default(),
-                    encoderInUse = "c2.qti.avc.encoder",
-                    onSetAutoQuality = {},
-                    onSetLowLatencyGameAudio = {},
-                    onSetEncoderImpl = {},
-                    onSetH264HighProfile = {},
-                    onSetPreferredCodec = {},
-                    onSetDegradationStrategy = {},
-                    onSetEncoderFpsLimit = {},
-                    onSetBitrateMode = {},
+            "09 Profile · Edit" to {
+                ProfileEditContent(
+                    profile = withOwnProfiles.customProfiles.first(),
+                    selected = true,
+                    canDuplicate = true,
+                    onRename = {},
+                    onEdit = {},
+                    onDuplicate = {},
+                    onDelete = {},
                 )
             },
         )

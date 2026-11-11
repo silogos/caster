@@ -1,407 +1,169 @@
 package com.zerofriction.localcast.adaptive
 
-import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.adaptive.AdaptiveQualityController.Direction
+import com.zerofriction.localcast.adaptive.AdaptiveQualityController.QualityChange
+import com.zerofriction.localcast.adaptive.AdaptiveQualityController.Reason
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.thermal.ThermalStatus
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The auto-quality policy's acceptance matrix (roadmap Phase12): controlled
- * step-downs/ups without oscillation. Every scenario runs the pure machine
- * with a synthetic ~1 Hz tick cadence — the policy's clock is the caller's —
- * and cumulative counters, exactly as libwebrtc reports them.
- *
- * Timelines track the twice-relaxed constants (user review): thermal hold
- * 180 s, net hold 120 s, healthy hold 180 s, dwell 300 s.
+ * Automatic quality (ADR-025): the picture is lowered only in a thermal
+ * emergency, one step and then at most one more, in the order the profile's
+ * pressure strategy gives things up, and it comes back once the device is
+ * out of the emergency. Driven by a one-second clock.
  */
 class AdaptiveQualityControllerTest {
 
-    companion object {
-        private val ladder = QualityLevel.PRESETS
-        private val cool = ladder[0]
-        private val balanced = ladder[1]
-        private val performance = ladder[2]
-        private val sharp = ladder[3]
-    }
+    private val profile = QualityLevel(1920, 60, 4_000_000, 12_000_000)
 
-    /**
-     * Tick harness: per-tick *deltas* in, cumulative counters out — the shape
-     * `getStats` actually produces. `absolute` overrides the counters (a pc
-     * rebuild resets them to zero mid-stream).
-     */
-    private class Harness(val ceiling: QualityLevel) {
-        val changes = mutableListOf<AdaptiveQualityController.QualityChange>()
-        val controller = AdaptiveQualityController(
-            ceiling = ceiling,
-            ladder = ladder,
-            onLevelChanged = { changes.add(it) },
-        )
-        private var encoded = 0L
-        private var dropped = 0L
-        private var encodeSeconds: Double? = null
+    private class Cast(top: QualityLevel, strategy: DegradationStrategy = DegradationStrategy.MAINTAIN_FRAMERATE) {
+        val changes = mutableListOf<QualityChange>()
+        val controller = AdaptiveQualityController(top, strategy) { changes += it }
+        var nowMs = 0L
 
-        fun tick(
-            nowMs: Long,
-            encodedDelta: Long = 30,
-            droppedDelta: Long = 0,
-            fractionLost: Double? = null,
-            rttMs: Long? = 5L,
-            thermal: ThermalStatus = ThermalStatus.NONE,
-            absolute: Pair<Long, Long>? = null,
-            encodeTimeDelta: Double? = null,
-            absoluteEncodeSeconds: Double? = null,
-        ) {
-            if (absolute != null) {
-                encoded = absolute.first
-                dropped = absolute.second
-            } else {
-                encoded += encodedDelta
-                dropped += droppedDelta
+        fun run(seconds: Int, thermal: ThermalStatus = ThermalStatus.NONE) {
+            repeat(seconds) {
+                nowMs += 1_000
+                controller.onTick(nowMs, thermal)
             }
-            if (absoluteEncodeSeconds != null) {
-                encodeSeconds = absoluteEncodeSeconds
-            } else if (encodeTimeDelta != null) {
-                encodeSeconds = (encodeSeconds ?: 0.0) + encodeTimeDelta
-            }
-            controller.onTick(
-                nowMs,
-                AdaptiveQualityController.StreamSample(
-                    framesEncoded = encoded,
-                    framesDropped = dropped,
-                    fractionLost = fractionLost,
-                    rttMs = rttMs,
-                    totalEncodeTimeSeconds = encodeSeconds,
-                ),
-                thermal,
-            )
         }
+
+        val sizes get() = changes.map { it.to.longEdgePx to it.to.fps }
     }
 
-    // ---- the good default: no bad stretch, no change ever ----
+    private fun steps(level: QualityLevel, strategy: DegradationStrategy) =
+        thermalSteps(level, strategy).map { it.longEdgePx to it.fps }
+
+    // ---- The steps a pressure strategy gives ----
 
     @Test
-    fun `healthy ticks never change the level`() {
-        val h = Harness(balanced)
-        for (second in 0..600) h.tick(second * 1_000L)
-        assertEquals(balanced, h.controller.current)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    // ---- thermal: sustained MODERATE+ steps down, minutes not seconds ----
-
-    @Test
-    fun `sustained MODERATE steps down after the thermal hold`() {
-        val h = Harness(balanced)
-        for (second in 0..179) h.tick(second * 1_000L, thermal = ThermalStatus.MODERATE)
-        assertTrue(h.changes.isEmpty())
-
-        h.tick(180_000L, thermal = ThermalStatus.MODERATE)
-        assertEquals(listOf(AdaptiveQualityController.Direction.DOWN), h.changes.map { it.direction })
-        assertEquals(cool, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.THERMAL, h.changes.single().reason)
+    fun `keep frame rate gives up detail twice and never the frame rate`() {
+        assertEquals(listOf(1920 to 60, 1280 to 60, 960 to 60), steps(profile, DegradationStrategy.MAINTAIN_FRAMERATE))
     }
 
     @Test
-    fun `LIGHT never triggers a thermal step down`() {
-        val h = Harness(performance)
-        for (second in 0..600) h.tick(second * 1_000L, thermal = ThermalStatus.LIGHT)
-        assertEquals(performance, h.controller.current)
-        assertTrue(h.changes.isEmpty())
+    fun `keep resolution gives up the frame rate first, then one step of detail`() {
+        assertEquals(listOf(1920 to 60, 1920 to 30, 1280 to 30), steps(profile, DegradationStrategy.MAINTAIN_RESOLUTION))
     }
 
     @Test
-    fun `sustained heat walks the staircase, one rung per hold`() {
-        val h = Harness(performance)
-        for (second in 0..600) h.tick(second * 1_000L, thermal = ThermalStatus.SEVERE)
-        // 180 s hold → balanced; hysteresis restarts and the 300 s dwell gates
-        // the next rung → cool at 480 s; the floor stops it there.
-        assertEquals(listOf(balanced, cool), h.changes.map { it.to })
-        assertEquals(cool, h.controller.current)
+    fun `balanced gives up a step of detail, then the frame rate`() {
+        assertEquals(listOf(1920 to 60, 1280 to 60, 1280 to 30), steps(profile, DegradationStrategy.BALANCED))
     }
 
     @Test
-    fun `heat ending does not recover automatically`() {
-        val h = Harness(balanced)
-        for (second in 0..600) {
-            val thermal = if (second < 190) ThermalStatus.MODERATE else ThermalStatus.NONE
-            h.tick(second * 1_000L, thermal = thermal)
+    fun `when what the strategy would give up is used up, the other thing goes instead`() {
+        assertEquals(listOf(960 to 60, 960 to 30), steps(profile.copy(longEdgePx = 960), DegradationStrategy.MAINTAIN_FRAMERATE))
+        assertEquals(listOf(1920 to 30, 1280 to 30, 960 to 30), steps(profile.copy(fps = 30), DegradationStrategy.MAINTAIN_RESOLUTION))
+        assertEquals(1, steps(profile.copy(longEdgePx = 960, fps = 30), DegradationStrategy.BALANCED).size)
+    }
+
+    @Test
+    fun `a step never touches the bitrate range`() {
+        assertTrue(thermalSteps(profile, DegradationStrategy.BALANCED).all { it.bitrateMinBps == 4_000_000 && it.bitrateMaxBps == 12_000_000 })
+    }
+
+    // ---- When it acts ----
+
+    @Test
+    fun `game heat below the emergency never lowers the picture`() {
+        val cast = Cast(profile)
+        // A whole session at SEVERE, the way this tablet runs a game.
+        cast.run(3_600, ThermalStatus.SEVERE)
+        assertTrue(cast.changes.isEmpty())
+    }
+
+    @Test
+    fun `a thermal emergency costs one step at once`() {
+        val cast = Cast(profile)
+        cast.run(120, ThermalStatus.SEVERE)
+        cast.run(1, ThermalStatus.CRITICAL)
+        assertEquals(QualityChange(profile, profile.copy(longEdgePx = 1280), Direction.DOWN, Reason.THERMAL), cast.changes.single())
+    }
+
+    @Test
+    fun `an emergency that lasts a minute costs a second step, and no more however long it lasts`() {
+        val cast = Cast(profile)
+        cast.run(59, ThermalStatus.CRITICAL)
+        assertEquals(listOf(1280 to 60), cast.sizes)
+        cast.run(2, ThermalStatus.CRITICAL)
+        assertEquals(listOf(1280 to 60, 960 to 60), cast.sizes)
+        cast.run(1_800, ThermalStatus.EMERGENCY)
+        assertEquals(2, cast.changes.size)
+    }
+
+    @Test
+    fun `the order is the profile's pressure strategy`() {
+        val cast = Cast(profile, DegradationStrategy.MAINTAIN_RESOLUTION)
+        cast.run(70, ThermalStatus.CRITICAL)
+        assertEquals(listOf(1920 to 30, 1280 to 30), cast.sizes)
+    }
+
+    // ---- Coming back ----
+
+    @Test
+    fun `thirty seconds out of the emergency bring one step back, and thirty more the next`() {
+        val cast = Cast(profile)
+        cast.run(70, ThermalStatus.CRITICAL)
+        cast.run(29, ThermalStatus.SEVERE)
+        assertEquals("not yet", 2, cast.changes.size)
+        cast.run(2, ThermalStatus.SEVERE)
+        assertEquals(QualityChange(profile.copy(longEdgePx = 960), profile.copy(longEdgePx = 1280), Direction.UP, Reason.RECOVERED), cast.changes.last())
+        cast.run(31, ThermalStatus.SEVERE)
+        assertEquals(profile, cast.changes.last().to)
+        cast.run(600, ThermalStatus.SEVERE)
+        assertEquals("back at the profile's values: nothing more to do", 4, cast.changes.size)
+    }
+
+    @Test
+    fun `nothing comes back while the emergency lasts`() {
+        val cast = Cast(profile)
+        cast.run(600, ThermalStatus.CRITICAL)
+        assertTrue(cast.changes.none { it.direction == Direction.UP })
+    }
+
+    @Test
+    fun `an emergency that flickers does not take the picture down a step each time`() {
+        val cast = Cast(profile)
+        // Ten seconds critical, ten seconds not, for five minutes.
+        repeat(15) {
+            cast.run(10, ThermalStatus.CRITICAL)
+            cast.run(10, ThermalStatus.SEVERE)
         }
-        // Stepped down once, and several minutes of clean air after never goes
-        // back up: the device got hot under these settings — thermal.md,
-        // recovery is manual only.
-        assertEquals(listOf(cool), h.changes.map { it.to })
-        assertEquals(cool, h.controller.current)
+        // One step at the first emergency; ten cool seconds are never enough to
+        // come back, so the next emergencies have nothing new to take... but one more.
+        assertTrue("never below two steps", cast.changes.count { it.direction == Direction.DOWN } <= 2)
+        assertEquals(0, cast.changes.count { it.direction == Direction.UP })
+    }
+
+    // ---- The user ----
+
+    @Test
+    fun `restore now goes straight back to the profile's values`() {
+        val cast = Cast(profile)
+        cast.run(70, ThermalStatus.CRITICAL)
+        cast.controller.restore(cast.nowMs)
+        assertEquals(QualityChange(profile.copy(longEdgePx = 960), profile, Direction.UP, Reason.USER), cast.changes.last())
     }
 
     @Test
-    fun `a thermal descent is marked thermal even if drops arrive later`() {
-        val h = Harness(balanced)
-        for (second in 0..180) h.tick(second * 1_000L, thermal = ThermalStatus.MODERATE)
-        assertEquals(cool, h.controller.current)
-        // Recovery needs 3 clean minutes — which then would be a stream-health
-        // recovery, but the descent was marked thermal: it must stay down.
-        for (second in 181..600) h.tick(second * 1_000L)
-        assertEquals(1, h.changes.size)
-        assertEquals(cool, h.controller.current)
-    }
-
-    // ---- stream health: drops / loss / RTT ----
-
-    @Test
-    fun `sustained dropped frames step down after the net hold`() {
-        val h = Harness(balanced)
-        for (second in 0..119) h.tick(second * 1_000L, droppedDelta = 30)
-        assertTrue(h.changes.isEmpty())
-
-        h.tick(120_000L, droppedDelta = 30)
-        assertEquals(cool, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
+    fun `a restore during an emergency holds for a minute before the rule steps again`() {
+        val cast = Cast(profile)
+        cast.run(10, ThermalStatus.CRITICAL)
+        cast.controller.restore(cast.nowMs)
+        cast.run(59, ThermalStatus.CRITICAL)
+        assertEquals("the user's restore stands", profile, cast.controller.current)
+        cast.run(2, ThermalStatus.CRITICAL)
+        assertEquals(1280, cast.controller.current.longEdgePx)
     }
 
     @Test
-    fun `sustained packet loss steps down`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, fractionLost = 0.2)
-        assertEquals(cool, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
-    }
-
-    @Test
-    fun `sustained high RTT steps down`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, rttMs = 200L)
-        assertEquals(cool, h.controller.current)
-    }
-
-    @Test
-    fun `single bad ticks do not step down`() {
-        val h = Harness(balanced)
-        h.tick(5_000L, droppedDelta = 100)
-        h.tick(6_000L)
-        for (second in 7..600) h.tick(second * 1_000L)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    @Test
-    fun `healthy stretch recovers a stream-health descent`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30)
-        assertEquals(cool, h.controller.current)
-        // Clean from the change onward; recovery fires after the healthy
-        // hold (180 s) — and no sooner than the dwell (300 s since the step):
-        // up at 420 s.
-        for (second in 121..420) h.tick(second * 1_000L)
-        assertEquals(
-            listOf(AdaptiveQualityController.Direction.DOWN, AdaptiveQualityController.Direction.UP),
-            h.changes.map { it.direction },
-        )
-        assertEquals(balanced, h.controller.current)
-    }
-
-    @Test
-    fun `recovery is a controlled staircase, never a jump`() {
-        val h = Harness(performance)
-        // Continuous drops walk down the ladder order: performance → balanced
-        // (at 120 s, the net hold) → cool (at 420 s — hysteresis restarts and
-        // the 300 s dwell gates the second rung); the floor stops it there.
-        for (second in 0..420) h.tick(second * 1_000L, droppedDelta = 30)
-        assertEquals(listOf(balanced, cool), h.changes.map { it.to })
-
-        // Recovery climbs one comparable rung at a time, each also waiting out
-        // the dwell: cool → balanced (up at 720 s), then balanced →
-        // performance, the ceiling (up at 1020 s).
-        for (second in 421..1020) h.tick(second * 1_000L)
-        assertEquals(listOf(balanced, cool, balanced, performance), h.changes.map { it.to })
-        assertEquals(performance, h.controller.current)
-    }
-
-    @Test
-    fun `sharp steps down to balanced, never up to 60 fps - and recovers to sharp in one step`() {
-        // sharp (1080p30) and performance (720p60) are not comparable: a step
-        // meant to shed load must not double the frame rate, so sharp skips
-        // performance. Recovery goes to the ceiling itself, in one step.
-        val h = Harness(sharp)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30) // down: sharp → balanced
-        assertEquals(listOf(balanced), h.changes.map { it.to })
-        assertTrue(h.changes.single().to.fps <= sharp.fps)
-        for (second in 121..420) h.tick(second * 1_000L) // up: balanced → sharp at 420 s
-        assertEquals(listOf(balanced, sharp), h.changes.map { it.to })
-        assertEquals(sharp, h.controller.current)
-    }
-
-    @Test
-    fun `the ceiling is respected — never above the user's settings`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30)
-        for (second in 121..500) h.tick(second * 1_000L)
-        assertEquals(balanced, h.controller.current)
-        assertTrue(h.changes.all { it.to.isNoHeavierThan(balanced) })
-    }
-
-    @Test
-    fun `the ladder floor stops the descent`() {
-        val h = Harness(performance)
-        for (second in 0..600) h.tick(second * 1_000L, droppedDelta = 30, thermal = ThermalStatus.MODERATE)
-        assertEquals(cool, h.controller.current)
-    }
-
-    // ---- encoder utilization (Phase18): the leading encoder-stress signal ----
-
-    @Test
-    fun `sustained encoder overload steps down with zero drops and a perfect network`() {
-        val h = Harness(balanced)
-        // 0.97 s of encode work per 1 s tick — 97% utilization, comfortably
-        // over the 0.95 threshold (float-rounded 0.95 deltas can dip a ulp
-        // below it), nothing dropped, RTT/loss perfect: the utilization
-        // signal alone must carry the step. (Known from the second tick on —
-        // utilization needs a previous sample, so the bad stretch effectively
-        // starts at t=1 s and the hold completes on the 121 s tick.)
-        for (second in 0..120) h.tick(second * 1_000L, encodeTimeDelta = 0.97)
-        assertTrue(h.changes.isEmpty())
-
-        h.tick(121_000L, encodeTimeDelta = 0.97)
-        assertEquals(cool, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
-    }
-
-    @Test
-    fun `expensive frames at content pacing are not overload`() {
-        val h = Harness(performance)
-        // A 30 fps game under the 60 fps rung: ~15 frames/s at 20 ms each —
-        // utilization 0.3. A per-frame-cost-vs-fps-budget threshold would
-        // misfire here (20 ms ≥ 12.5 ms budget); utilization must not.
-        for (second in 0..120) h.tick(second * 1_000L, encodedDelta = 15, encodeTimeDelta = 0.3)
-        assertEquals(performance, h.controller.current)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    @Test
-    fun `the healthy rig's recorded utilization never fires`() {
-        val h = Harness(balanced)
-        // Phase17's measured healthy ceiling: encode p90 22.7 ms/f × 30 fps ≈ 0.68.
-        for (second in 0..600) h.tick(second * 1_000L, encodeTimeDelta = 0.68)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    @Test
-    fun `the fps-placebo era's overload fires`() {
-        val h = Harness(balanced)
-        // Phase16's found-and-fixed bug: a 30 fps target encoding 61 frames/s
-        // at 30 ms/f — 1.83 s of encode work per wall second. This is the
-        // case the leading signal exists to catch before frames drop.
-        for (second in 0..121) h.tick(second * 1_000L, encodedDelta = 61, encodeTimeDelta = 1.83)
-        assertEquals(cool, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.STREAM_HEALTH, h.changes.single().reason)
-    }
-
-    @Test
-    fun `isolated overload ticks do not step down`() {
-        val h = Harness(balanced)
-        h.tick(5_000L, encodeTimeDelta = 0.97)
-        h.tick(6_000L, encodeTimeDelta = 0.97)
-        h.tick(7_000L, encodeTimeDelta = 0.97)
-        for (second in 8..600) h.tick(second * 1_000L, encodeTimeDelta = 0.5)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    @Test
-    fun `a counter reset does not fake a utilization burst`() {
-        val h = Harness(balanced)
-        for (second in 0..29) h.tick(second * 1_000L, encodeTimeDelta = 0.97)
-        // A pc rebuild resets the cumulative encode time — the negative delta
-        // reads as unknown (never a burst), and the healthy stretch after it
-        // stays healthy. (0.97 is over the threshold, so it is the reset —
-        // not a benign threshold — that keeps this stretch quiet; 30 bad
-        // ticks are far short of the 120 s hold anyway.)
-        h.tick(30_000L, absolute = 0L to 0L, absoluteEncodeSeconds = 0.0)
-        for (second in 31..211) h.tick(second * 1_000L, encodeTimeDelta = 0.5)
-        assertTrue(h.changes.isEmpty())
-    }
-
-    @Test
-    fun `an overload descent recovers once the encoder keeps up again`() {
-        val h = Harness(performance)
-        for (second in 0..121) h.tick(second * 1_000L, encodeTimeDelta = 0.97)
-        assertEquals(balanced, h.controller.current)
-        // At the 30 fps rung the same workload is ~0.47 utilization — healthy,
-        // so the stream-health recovery path climbs back after the hold and
-        // the dwell (down at 121 s, up at 421 s).
-        for (second in 122..421) h.tick(second * 1_000L, encodeTimeDelta = 0.47)
-        assertEquals(
-            listOf(AdaptiveQualityController.Direction.DOWN, AdaptiveQualityController.Direction.UP),
-            h.changes.map { it.direction },
-        )
-        assertEquals(performance, h.controller.current)
-    }
-
-    // ---- oscillation guards ----
-
-    @Test
-    fun `a fresh bad stretch right after a recovery waits out the dwell`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30) // down at 120 s
-        for (second in 121..420) h.tick(second * 1_000L) // recovery at 420 s
-        assertEquals(2, h.changes.size)
-        // Trouble again immediately: the dwell (300 s since the recovery)
-        // blocks the next step even though the net hold is long satisfied.
-        for (second in 421..719) h.tick(second * 1_000L, droppedDelta = 30)
-        assertEquals(2, h.changes.size)
-        h.tick(720_000L, droppedDelta = 30)
-        assertEquals(3, h.changes.size)
-        assertEquals(cool, h.controller.current)
-    }
-
-    // ---- user restore ----
-
-    @Test
-    fun `restore returns to the ceiling and restarts the hysteresis`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30)
-        assertEquals(cool, h.controller.current)
-        h.controller.restore(121_000L)
-        assertEquals(balanced, h.controller.current)
-        assertEquals(AdaptiveQualityController.Reason.USER, h.controller.lastChange?.reason)
-        // Hysteresis restarted: the heat stretch needs its full 180 s hold
-        // again — and the step also waits out the dwell since the restore
-        // (300 s: blocked at 420 s, fires on the 421 s tick).
-        for (second in 122..420) h.tick(second * 1_000L, thermal = ThermalStatus.MODERATE)
-        assertEquals(2, h.changes.size) // the step-down and the restore
-        h.tick(421_000L, thermal = ThermalStatus.MODERATE)
-        assertEquals(3, h.changes.size)
-        assertEquals(cool, h.controller.current)
-    }
-
-    @Test
-    fun `restore at the ceiling is a no-op`() {
-        val h = Harness(balanced)
-        h.controller.restore(0L)
-        assertNull(h.controller.lastChange)
-    }
-
-    // ---- counter resets (pc rebuild) must not fake a drop burst ----
-
-    @Test
-    fun `a counter reset does not fake a bad stretch`() {
-        val h = Harness(balanced)
-        for (second in 0..120) h.tick(second * 1_000L, droppedDelta = 30)
-        assertEquals(cool, h.controller.current)
-        for (second in 121..150) h.tick(second * 1_000L)
-        // A pc rebuild resets the cumulative counters — the deltas clamp to zero.
-        h.tick(151_000L, absolute = 0L to 0L)
-        for (second in 152..420) h.tick(second * 1_000L)
-        assertEquals(
-            listOf(AdaptiveQualityController.Direction.DOWN, AdaptiveQualityController.Direction.UP),
-            h.changes.map { it.direction },
-        )
-    }
-
-    // ---- ladder sanity: the rungs the policy walks are the shipped presets ----
-
-    @Test
-    fun `the preset ladder mirrors the shipped profiles`() {
-        assertEquals(QualityProfile.entries.size, ladder.size)
-        assertEquals(QualityProfile.entries.map { it.longEdgePx }, ladder.map { it.longEdgePx })
+    fun `restore at the profile's values does nothing`() {
+        val cast = Cast(profile)
+        cast.controller.restore(0)
+        assertTrue(cast.changes.isEmpty())
     }
 }

@@ -54,35 +54,7 @@ internal class CastNotifications(private val context: Context) {
     /** The ongoing notification's text follows an auto-quality transition. */
     fun announceQualityChange(desktopName: String, change: AdaptiveQualityController.QualityChange) {
         context.getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, build(desktopName, qualityChangeText(change)))
-    }
-
-    private fun qualityChangeText(change: AdaptiveQualityController.QualityChange): String {
-        val name = levelName(change.to)
-        return when {
-            change.direction == AdaptiveQualityController.Direction.DOWN &&
-                change.reason == AdaptiveQualityController.Reason.THERMAL ->
-                context.getString(R.string.adaptive_notification_lowered_thermal, name)
-
-            change.direction == AdaptiveQualityController.Direction.DOWN ->
-                context.getString(R.string.adaptive_notification_lowered_stream, name)
-
-            change.reason == AdaptiveQualityController.Reason.USER ->
-                context.getString(R.string.adaptive_notification_restored)
-
-            else -> context.getString(R.string.adaptive_notification_raised, name)
-        }
-    }
-
-    /** Localized profile name for a level — "your settings" for a tweaked top rung. */
-    private fun levelName(level: QualityLevel): String = when (
-        matchingProfile(level.longEdgePx, level.fps, level.bitrateMinBps, level.bitrateMaxBps)
-    ) {
-        QualityProfile.COOL -> context.getString(R.string.profile_cool)
-        QualityProfile.BALANCED -> context.getString(R.string.profile_balanced)
-        QualityProfile.PERFORMANCE -> context.getString(R.string.profile_performance)
-        QualityProfile.SHARP -> context.getString(R.string.profile_sharp)
-        null -> context.getString(R.string.adaptive_your_settings)
+            .notify(NOTIFICATION_ID, build(desktopName, qualityChangeNotification(context, change)))
     }
 
     companion object {

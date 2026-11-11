@@ -1,15 +1,16 @@
 package com.zerofriction.localcast.config
 
 /**
- * The advanced cast settings (designs/mobile-app.html, the settings screen's
- * Advanced section): encoder-level knobs for the contention cases the presets
- * don't cover — e.g. a SoC whose video hardware competes with a game
- * (risk-register R5: drop to software per-device, on evidence).
+ * A profile's encoder and pressure choices ([ProfileValues]): the knobs for
+ * the contention cases the built-in profiles don't cover — e.g. a SoC whose
+ * video hardware competes with a game (risk-register R5: drop to software
+ * per-device, on evidence).
  *
- * Every default reproduces today's cast exactly (hardware-with-fallback
- * encoder, H.264 first, H.264 High profile, BALANCED degradation, no
- * encoder-side fps cap, CBR) — a fresh install behaves identically to the
- * pre-Advanced app, and each knob is an explicit user override.
+ * The built-in profiles carry the shipped defaults (hardware-with-fallback
+ * encoder, H.264 first, no encoder-side fps cap); the user changes them in a
+ * profile of their own. There is no rate-control choice: libwebrtc fixes the
+ * hardware encoder to CBR, and the bitrate follows the network through the
+ * profile's window (ADR-023, ADR-024).
  *
  * Stored as labels (not enum names) via [CastSettingsCodec] — renaming a
  * constant can't silently change what users stored (same convention as the
@@ -52,22 +53,7 @@ enum class DegradationStrategy(val label: String) {
     }
 }
 
-/**
- * The encoder's rate-control mode. CBR (libwebrtc's hardcoded realtime mode)
- * works at full effort every frame; VBR spends fewer bits on easy frames,
- * lowering the encoder's average load. Phase-limited: VBR needs the forked
- * encoder (see docs/decisions/) — until it lands, everything encodes CBR.
- */
-enum class EncoderBitrateMode(val label: String) {
-    CBR("cbr"),
-    VBR("vbr");
-
-    companion object {
-        fun fromLabel(label: String): EncoderBitrateMode? = entries.firstOrNull { it.label == label }
-    }
-}
-
-/** The discrete choices of the Advanced section — named, not magic (AGENTS.md). */
+/** The discrete choices of a profile's encoder card — named, not magic (AGENTS.md). */
 object AdvancedSettingChoices {
     /** Encoder-side fps caps; null (Off) follows the capture frame rate. */
     val ENCODER_FPS_LIMIT_CHOICES = listOf(15, 30, 60)

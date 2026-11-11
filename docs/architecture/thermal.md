@@ -1,5 +1,7 @@
 # Thermal Strategy
 
+> **Superseded in part (2026-11-11, [ADR-025](../decisions/ADR-025-automatic-quality-acts-on-a-thermal-emergency.md)).** The auto-quality policy described under *How thermal data is used* (steps on thermal MODERATE held for minutes, a preset ladder, no automatic recovery from a thermal step) is replaced: Automatic quality acts only on a thermal emergency (CRITICAL and above): one step down, a second if it lasts a minute, back once it cools. The thermal monitor, the read-out and the built-in profiles' heat rationale stand.
+
 Status: Phase12 (profiles are the settings presets; monitoring is read-only diagnostics; auto quality — the conservative adaptation — is implemented; measurements in Phase 15).
 
 ## Principles
@@ -22,7 +24,7 @@ The cast's goal: **keep added thermal load small enough that the cast is not wha
 
 ## Initial profiles (tuned in Phase11; to be re-tuned from Phase15 measurements)
 
-Phase11 shipped these as the app's named profiles (`config/QualityProfile.kt`) — the settings screen's one-tap presets, applied at cast start from the config module. `light`/`smooth` from Phase10 were relabeled into the thermal vocabulary; the values are the tuned windows the app shipped with (codec v2 translates stored v1 documents). "540p/720p" name the *short* edge of a 16:9 frame; the capture target in the settings is the long edge in px.
+Phase11 shipped these as the app's named profiles (`config/QualityProfile.kt`) — Home's built-in profiles, applied at cast start from the config module. `light`/`smooth` from Phase10 were relabeled into the thermal vocabulary; the values are the tuned windows the app shipped with (codec v2 translates stored v1 documents). "540p/720p" name the *short* edge of a 16:9 frame; the capture target in the settings is the long edge in px.
 
 | Profile | Capture (long edge) | FPS | Bitrate window | Intent |
 |---|---|---|---|---|

@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -15,7 +16,7 @@ import com.zerofriction.localcast.service.CastService
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.ui.home.HomeScreen
 import com.zerofriction.localcast.ui.pairing.ScanScreen
-import com.zerofriction.localcast.ui.settings.CastSettingsScreen
+import com.zerofriction.localcast.ui.profiles.ProfileEditScreen
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 
 class MainActivity : ComponentActivity() {
@@ -44,14 +45,23 @@ class MainActivity : ComponentActivity() {
                 // nav library (docs/development/mobile.md: add libraries when
                 // the need is real).
                 var screen by rememberSaveable { mutableStateOf(initialScreen()) }
+                // Which of the user's profiles the edit screen shows (ADR-024).
+                var editingProfileId by rememberSaveable { mutableIntStateOf(NO_PROFILE) }
                 when (screen) {
                     SCREEN_SCAN -> ScanScreen(onPaired = { screen = SCREEN_HOME })
                     SCREEN_HOME -> HomeScreen(
-                        onOpenSettings = { screen = SCREEN_SETTINGS },
+                        onEditProfile = { id ->
+                            editingProfileId = id
+                            screen = SCREEN_PROFILE
+                        },
                         onDisconnected = { screen = SCREEN_SCAN },
                     )
 
-                    else -> CastSettingsScreen(onBack = { screen = SCREEN_HOME })
+                    else -> ProfileEditScreen(
+                        profileId = editingProfileId,
+                        onBack = { screen = SCREEN_HOME },
+                        onOpenProfile = { id -> editingProfileId = id },
+                    )
                 }
             }
         }
@@ -74,6 +84,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val SCREEN_SCAN = "scan"
         private const val SCREEN_HOME = "home"
-        private const val SCREEN_SETTINGS = "settings"
+        private const val SCREEN_PROFILE = "profile"
+
+        /** No profile is open for editing. */
+        private const val NO_PROFILE = 0
     }
 }

@@ -2,6 +2,7 @@ package com.zerofriction.localcast.service
 
 import com.zerofriction.localcast.adaptive.AdaptiveQualityController
 import com.zerofriction.localcast.adaptive.QualityLevel
+import com.zerofriction.localcast.config.DegradationStrategy
 import com.zerofriction.localcast.thermal.ThermalStatus
 import com.zerofriction.localcast.webrtc.SenderSample
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,56 +51,68 @@ class LiveQualityCoordinatorTest {
         )
     }
 
+    private val stepped = performance.copy(longEdgePx = 960)
+    private val smooth = DegradationStrategy.MAINTAIN_FRAMERATE
+
     @Test
-    fun `auto quality off - the readout shows the start level and the policy never acts`() {
+    fun `auto quality off - the readout shows the start level and the rule never acts`() {
         val rig = Rig()
-        rig.coordinator.start(performance, autoQuality = false)
-        rig.thermal = ThermalStatus.SEVERE
+        rig.coordinator.start(performance, autoQuality = false, strategy = smooth)
+        rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(600)
 
         assertEquals(performance, rig.liveQuality.value)
         assertEquals(AdaptiveUiState(), rig.adaptiveState.value)
         assertTrue(rig.applied.isEmpty())
-        assertEquals("c2.hw.avc", rig.encoder.value) // the encoder readout is policy-independent
+        assertEquals("c2.hw.avc", rig.encoder.value) // the encoder readout does not depend on the rule
     }
 
     @Test
-    fun `a policy step down is applied, published and announced`() {
+    fun `game heat with auto quality on changes nothing`() {
         val rig = Rig()
-        rig.coordinator.start(performance, autoQuality = true)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.thermal = ThermalStatus.SEVERE
-        rig.runFor(200)
+        rig.runFor(600)
+        assertTrue(rig.applied.isEmpty())
+    }
 
-        assertEquals(listOf(balanced), rig.applied)
-        assertEquals(balanced, rig.liveQuality.value)
-        assertEquals(balanced, rig.adaptiveState.value.current)
+    @Test
+    fun `a thermal step is applied, published and announced`() {
+        val rig = Rig()
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
+        rig.thermal = ThermalStatus.CRITICAL
+        rig.runFor(30)
+
+        assertEquals(listOf(stepped), rig.applied)
+        assertEquals(stepped, rig.liveQuality.value)
+        assertEquals(stepped, rig.adaptiveState.value.current)
         assertEquals(performance, rig.adaptiveState.value.ceiling)
         assertEquals(AdaptiveQualityController.Reason.THERMAL, rig.announced.single().reason)
     }
 
     @Test
-    fun `a user live pick resets auto quality onto the pick as its new ceiling`() {
+    fun `a user live pick starts the rule over with the pick as its top`() {
         val rig = Rig()
-        rig.coordinator.start(performance, autoQuality = true)
-        rig.thermal = ThermalStatus.SEVERE
-        rig.runFor(200)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
+        rig.thermal = ThermalStatus.CRITICAL
+        rig.runFor(30)
 
         rig.coordinator.applyUserLevel(cool)
 
-        assertEquals(listOf(balanced, cool), rig.applied)
+        assertEquals(listOf(stepped, cool), rig.applied)
         assertEquals(cool, rig.liveQuality.value)
         assertEquals(AdaptiveUiState(current = cool, ceiling = cool), rig.adaptiveState.value)
-        // Restore climbs back to the user's pick, not the cast-start settings.
+        // Restore goes back to the user's pick, not the cast-start values.
         rig.coordinator.restore()
         assertEquals(cool, rig.liveQuality.value)
     }
 
     @Test
-    fun `restore puts the cast back at the user's settings`() {
+    fun `restore puts the cast back at the profile's values`() {
         val rig = Rig()
-        rig.coordinator.start(performance, autoQuality = true)
-        rig.thermal = ThermalStatus.SEVERE
-        rig.runFor(200)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
+        rig.thermal = ThermalStatus.CRITICAL
+        rig.runFor(30)
         rig.thermal = ThermalStatus.NONE
 
         rig.coordinator.restore()
@@ -111,14 +124,14 @@ class LiveQualityCoordinatorTest {
     @Test
     fun `stop clears every readout`() {
         val rig = Rig()
-        rig.coordinator.start(performance, autoQuality = true)
+        rig.coordinator.start(performance, autoQuality = true, strategy = smooth)
         rig.runFor(3)
         rig.coordinator.stop()
 
         assertNull(rig.liveQuality.value)
         assertNull(rig.encoder.value)
         assertEquals(AdaptiveUiState(), rig.adaptiveState.value)
-        rig.thermal = ThermalStatus.SEVERE
+        rig.thermal = ThermalStatus.CRITICAL
         rig.runFor(600) // a late stats tick after teardown changes nothing
         assertTrue(rig.applied.isEmpty())
     }

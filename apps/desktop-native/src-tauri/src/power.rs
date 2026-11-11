@@ -11,7 +11,7 @@ use std::sync::Mutex;
 const ASSERTION_TYPE: &str = "PreventUserIdleDisplaySleep";
 /// `kIOPMAssertionLevelOn`.
 const ASSERTION_LEVEL_ON: u32 = 255;
-const ASSERTION_NAME: &str = "Zero-Friction Cast — receiving a cast";
+const ASSERTION_NAME: &str = "Caster — receiving a cast";
 const IO_RETURN_SUCCESS: i32 = 0;
 
 #[link(name = "IOKit", kind = "framework")]

@@ -22,11 +22,13 @@ import com.zerofriction.localcast.adaptive.QualityLevel
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.MicState
 import com.zerofriction.localcast.config.CastSettings
+import com.zerofriction.localcast.config.QualityProfile
+import com.zerofriction.localcast.config.toValues
 import com.zerofriction.localcast.service.CastState
 import com.zerofriction.localcast.service.ConnectedDesktop
 import com.zerofriction.localcast.ui.home.HomeContent
 import com.zerofriction.localcast.ui.home.MicPermission
-import com.zerofriction.localcast.ui.settings.CastSettingsContent
+import com.zerofriction.localcast.ui.profiles.ProfileEditContent
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -54,6 +56,9 @@ class AccessibilityUiTest {
     val compose = createComposeRule()
 
     private var openedMicSettings = 0
+
+    private val withOwnProfile = CastSettings.default()
+        .withProfileAdded("Stream 60", QualityProfile.SHARP.toValues().copy(fps = 60))
 
     private fun showHome(
         castState: CastState = CastState.Casting("Gaming PC", startedAtMillis = 0L),
@@ -99,12 +104,11 @@ class AccessibilityUiTest {
     }
 
     @Test
-    fun `tabs and chips say which one is selected`() {
-        showHome(castState = CastState.Idle)
-        compose.onNode(hasText("Preset") and isSelected()).assertExists()
-        compose.onNode(hasText("Custom") and isNotSelected()).assertExists()
-        compose.onNodeWithText("Custom").performClick()
-        // The mic picker / custom chips: every chip carries a selected state.
+    fun `profile rows and chips say which one is selected`() {
+        showHome(castState = CastState.Idle, settings = withOwnProfile.copy(mic = true))
+        compose.onNode(hasText("Stream 60") and isSelected()).assertExists()
+        compose.onNode(hasText("Balanced") and isNotSelected()).assertExists()
+        // The profile rows and the mic picker's chips: every one carries a selected state.
         val chips = compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
             .fetchSemanticsNodes()
         assertTrue(chips.isNotEmpty())
@@ -113,20 +117,17 @@ class AccessibilityUiTest {
     }
 
     @Test
-    fun `the settings back button is announced as Back, not as the screen title`() {
+    fun `the profile screen's back button is announced as Back, not as the screen title`() {
         compose.setContent {
             LocalCastTheme {
-                CastSettingsContent(
-                    settings = CastSettings.default(),
-                    encoderInUse = null,
-                    onSetAutoQuality = {},
-                    onSetLowLatencyGameAudio = {},
-                    onSetEncoderImpl = {},
-                    onSetH264HighProfile = {},
-                    onSetPreferredCodec = {},
-                    onSetDegradationStrategy = {},
-                    onSetEncoderFpsLimit = {},
-                    onSetBitrateMode = {},
+                ProfileEditContent(
+                    profile = withOwnProfile.customProfiles.single(),
+                    selected = true,
+                    canDuplicate = true,
+                    onRename = {},
+                    onEdit = {},
+                    onDuplicate = {},
+                    onDelete = {},
                 )
             }
         }
@@ -140,26 +141,23 @@ class AccessibilityUiTest {
     // custom-drawn ever drops below it.
     @Test
     fun `every tappable control on Home is at least 48dp`() {
-        showHome(castState = CastState.Idle)
-        compose.onNodeWithText("Custom").performClick()
+        // With a profile of the user's own: its menu button is drawn 40dp.
+        showHome(castState = CastState.Idle, settings = withOwnProfile)
         assertAllTargetsAtLeast48dp()
     }
 
     @Test
-    fun `every tappable control in settings is at least 48dp`() {
+    fun `every tappable control on the profile screen is at least 48dp`() {
         compose.setContent {
             LocalCastTheme {
-                CastSettingsContent(
-                    settings = CastSettings.default(),
-                    encoderInUse = null,
-                    onSetAutoQuality = {},
-                    onSetLowLatencyGameAudio = {},
-                    onSetEncoderImpl = {},
-                    onSetH264HighProfile = {},
-                    onSetPreferredCodec = {},
-                    onSetDegradationStrategy = {},
-                    onSetEncoderFpsLimit = {},
-                    onSetBitrateMode = {},
+                ProfileEditContent(
+                    profile = withOwnProfile.customProfiles.single(),
+                    selected = true,
+                    canDuplicate = true,
+                    onRename = {},
+                    onEdit = {},
+                    onDuplicate = {},
+                    onDelete = {},
                 )
             }
         }

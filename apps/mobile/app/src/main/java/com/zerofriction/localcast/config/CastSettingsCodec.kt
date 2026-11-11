@@ -6,32 +6,50 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Versioned JSON codec for persisted cast settings (Phase10) — pure, so the
- * persistence behaviors (round-trip, corrupt storage, unknown values) are
- * plain-JVM unit-testable; [CastSettingsStore] is a thin wrapper. Follows the
- * repo's storage convention (same as the desktop mixer's `localStorage`): any
- * document this build can't fully validate degrades to defaults, logged by
- * the caller — a cast must never run on guessed values. Older documents are
- * still accepted through the migration ladder: v1 → v2 was the Phase11 preset
- * relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added `autoQuality` (Phase12)
- * with the on default, v3 → v4 added the Advanced knobs, v4 → v5 added
- * `micDevice` with the built-in default, v5 → v6 added `lowLatencyGameAudio`
- * with the off default — every other shape stays fully valid.
+ * Versioned JSON codec for persisted cast settings — pure, so the
+ * persistence behaviors (round-trip, corrupt storage, unknown values,
+ * migration) are plain-JVM unit-testable; [CastSettingsStore] is a thin
+ * wrapper. Follows the repo's storage convention: any document this build
+ * can't fully validate degrades to defaults, logged by the caller — a cast
+ * must never run on guessed values.
+ *
+ * **v9** stores the selected profile, the user's own profiles and the audio
+ * switches (ADR-024). **v7** has the same shape and reads as is. **v8**
+ * lived for a day (ADR-025's first form): it had one `struggle` field where
+ * a profile has `degradationStrategy` and `autoQuality`; it maps back
+ * ([STRUGGLE_V8]).
+ *
+ * **v1–v6** stored one flat set of values (a preset pick overwrote it; the
+ * rest was an unnamed "Custom" state). They are still accepted and migrate
+ * without losing a value: a flat set that equals a built-in profile selects
+ * that profile; anything else becomes the user's first profile, "Custom 1",
+ * selected. Two flat fields have no successor and are dropped: `bitrateAuto`
+ * (a profile's window is simply its window) and `bitrateMode` (the setting
+ * never took effect and is gone). The flat ladder itself: v1 → v2 was the
+ * Phase11 preset relabels ([LEGACY_PROFILE_LABELS]), v2 → v3 added
+ * `autoQuality`, v3 → v4 the encoder choices, v4 → v5 `micDevice`, v5 → v6
+ * `lowLatencyGameAudio` — each with the default that was shipped then.
  */
 object CastSettingsCodec {
 
-    /** Storage format version; a mismatch is "not ours" → defaults. */
-    const val VERSION = 6
+    /** Storage format version; an unknown one is "not ours" → defaults. */
+    const val VERSION = 9
 
-    /** The Phase10/11 formats — accepted through [LEGACY_PROFILE_LABELS]/[LEGACY_DEFAULT_AUTO_QUALITY]. */
-    const val LEGACY_VERSION = 1
-    const val LEGACY_VERSION_2 = 2
-    const val LEGACY_VERSION_3 = 3
-    const val LEGACY_VERSION_4 = 4
-    const val LEGACY_VERSION_5 = 5
+    /** Older profile formats still read (see the class comment). */
+    const val PROFILES_V7 = 7
+    const val PROFILES_V8 = 8
 
-    /** Older documents predate the auto-quality switch — the shipped default applies. */
-    private const val LEGACY_DEFAULT_AUTO_QUALITY = CastConfig.DEFAULT_AUTO_QUALITY
+    /** v8's one choice → the pressure strategy's label and the auto-quality switch it stood for. */
+    private val STRUGGLE_V8 = mapOf(
+        "smooth" to ("framerate" to true),
+        "sharp" to ("resolution" to true),
+        "balanced" to ("balanced" to true),
+        "fixed" to ("balanced" to false),
+    )
+
+    /** The flat formats (see the class comment). */
+    const val FIRST_FLAT_VERSION = 1
+    const val LAST_FLAT_VERSION = 6
 
     /**
      * Phase11 preset relabels (`light`→`cool`, `smooth`→`performance`) —
@@ -43,115 +61,198 @@ object CastSettingsCodec {
         "smooth" to "performance",
     )
 
+    /** How the selected profile is written: `builtin:<label>` or `custom:<id>`. */
+    private const val SELECTED_BUILT_IN = "builtin:"
+    private const val SELECTED_CUSTOM = "custom:"
+
     // encodeDefaults: the document carries every field explicitly — a version's
     // shape stays readable and future migration ladders strip what they know.
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        // A field another version had (v8's `struggle`) is left out, not written as null.
+        explicitNulls = false
     }
 
-    /**
-     * The stored document. The preset travels as its label (not the enum
-     * name) so renaming a constant can't silently change what users stored.
-     */
+    /** Every document starts with its version; the rest depends on it. */
+    @Serializable
+    private data class Versioned(val v: Int)
+
+    /** Enums travel as labels (not names), so renaming a constant can't silently change what users stored. */
+    @Serializable
+    private data class StoredValues(
+        val longEdgePx: Int,
+        val fps: Int,
+        val bitrateMinBps: Int,
+        val bitrateMaxBps: Int,
+        /** Absent in v8 documents, which had [struggle] instead of these two. */
+        val degradationStrategy: String? = null,
+        val autoQuality: Boolean? = null,
+        val struggle: String? = null,
+        val encoderImpl: String,
+        val preferredCodec: String,
+        val h264HighProfile: Boolean,
+        val encoderFpsLimit: Int? = null,
+        val lowLatencyGameAudio: Boolean,
+    )
+
+    @Serializable
+    private data class StoredProfile(val id: Int, val name: String, val values: StoredValues)
+
     @Serializable
     private data class Stored(
+        val v: Int,
+        val selected: String,
+        val profiles: List<StoredProfile>,
+        val gameAudio: Boolean,
+        val mic: Boolean,
+        val micDevice: String,
+    )
+
+    /** A v1–v6 document. Fields a version did not have yet take the default shipped with it. */
+    @Serializable
+    private data class FlatStored(
         val v: Int,
         val profile: String,
         val longEdgePx: Int,
         val fps: Int,
-        val bitrateAuto: Boolean,
         val bitrateMinBps: Int,
         val bitrateMaxBps: Int,
         val gameAudio: Boolean,
         val mic: Boolean,
-        /** Absent in pre-v5 documents — the built-in mic default applies. */
         val micDevice: String = MicDeviceSource.BUILTIN.label,
-        /** Absent in v1/v2 documents — the default applies (kotlinx fills defaults). */
-        val autoQuality: Boolean = LEGACY_DEFAULT_AUTO_QUALITY,
-        /** Absent in pre-v6 documents — the off default applies (AAC stays the default wire). */
+        val autoQuality: Boolean = CastConfig.DEFAULT_AUTO_QUALITY,
         val lowLatencyGameAudio: Boolean = CastConfig.DEFAULT_LOW_LATENCY_GAME_AUDIO,
-        /** Absent in pre-v4 documents — today's-behavior defaults apply (AdvancedCastSettings.kt). */
         val encoderImpl: String = EncoderImplementation.HARDWARE.label,
         val h264HighProfile: Boolean = true,
         val preferredCodec: String = PreferredVideoCodec.H264.label,
         val degradationStrategy: String = DegradationStrategy.BALANCED.label,
         val encoderFpsLimit: Int? = null,
-        val bitrateMode: String = EncoderBitrateMode.CBR.label,
     )
 
     fun encode(settings: CastSettings): String = json.encodeToString(
         Stored(
             v = VERSION,
-            profile = settings.profile.label,
-            longEdgePx = settings.longEdgePx,
-            fps = settings.fps,
-            bitrateAuto = settings.bitrateAuto,
-            bitrateMinBps = settings.bitrateMinBps,
-            bitrateMaxBps = settings.bitrateMaxBps,
+            selected = when (val selection = settings.selection) {
+                is ProfileSelection.BuiltIn -> SELECTED_BUILT_IN + selection.profile.label
+                is ProfileSelection.Custom -> SELECTED_CUSTOM + selection.id
+            },
+            profiles = settings.customProfiles.map { StoredProfile(it.id, it.name, it.values.toStored()) },
             gameAudio = settings.gameAudio,
             mic = settings.mic,
             micDevice = settings.micDevice.label,
-            autoQuality = settings.autoQuality,
-            lowLatencyGameAudio = settings.lowLatencyGameAudio,
-            encoderImpl = settings.encoderImpl.label,
-            h264HighProfile = settings.h264HighProfile,
-            preferredCodec = settings.preferredCodec.label,
-            degradationStrategy = settings.degradationStrategy.label,
-            encoderFpsLimit = settings.encoderFpsLimit,
-            bitrateMode = settings.bitrateMode.label,
         ),
     )
 
     /** Null on anything this build can't fully validate — caller falls back to defaults. */
-    fun decode(document: String): CastSettings? {
-        val stored = try {
-            json.decodeFromString<Stored>(document)
-        } catch (_: SerializationException) {
-            return null
-        } catch (_: IllegalArgumentException) {
-            return null
+    fun decode(document: String): CastSettings? = try {
+        when (json.decodeFromString<Versioned>(document).v) {
+            VERSION, PROFILES_V7, PROFILES_V8 -> decodeCurrent(json.decodeFromString(document))
+            in FIRST_FLAT_VERSION..LAST_FLAT_VERSION -> decodeFlat(json.decodeFromString(document))
+            else -> null
         }
-        if (stored.v != VERSION && stored.v != LEGACY_VERSION && stored.v != LEGACY_VERSION_2 &&
-            stored.v != LEGACY_VERSION_3 && stored.v != LEGACY_VERSION_4 && stored.v != LEGACY_VERSION_5
-        ) return null
-        // v1 documents predate the Phase11 thermal relabels — translate, don't guess.
-        val label = if (stored.v == LEGACY_VERSION) {
+    } catch (_: SerializationException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun decodeCurrent(stored: Stored): CastSettings? {
+        if (stored.profiles.size > CustomProfileRules.MAX_PROFILES) return null
+        val profiles = stored.profiles.map { profile ->
+            if (profile.id <= 0 || CustomProfileRules.cleanName(profile.name) != profile.name) return null
+            CustomProfile(profile.id, profile.name, profile.values.toValues() ?: return null)
+        }
+        if (profiles.map { it.id }.toSet().size != profiles.size) return null
+        val selection = when {
+            stored.selected.startsWith(SELECTED_BUILT_IN) -> {
+                val label = stored.selected.removePrefix(SELECTED_BUILT_IN)
+                ProfileSelection.BuiltIn(QualityProfile.entries.firstOrNull { it.label == label } ?: return null)
+            }
+            stored.selected.startsWith(SELECTED_CUSTOM) -> {
+                val id = stored.selected.removePrefix(SELECTED_CUSTOM).toIntOrNull() ?: return null
+                if (profiles.none { it.id == id }) return null
+                ProfileSelection.Custom(id)
+            }
+            else -> return null
+        }
+        return CastSettings(
+            selection = selection,
+            customProfiles = profiles,
+            gameAudio = stored.gameAudio,
+            mic = stored.mic,
+            micDevice = MicDeviceSource.fromLabel(stored.micDevice) ?: return null,
+        )
+    }
+
+    private fun decodeFlat(stored: FlatStored): CastSettings? {
+        // The flat formats named the last preset picked; an unknown name is "not ours".
+        val label = if (stored.v == FIRST_FLAT_VERSION) {
             LEGACY_PROFILE_LABELS[stored.profile] ?: stored.profile
         } else {
             stored.profile
         }
-        val profile = QualityProfile.entries.firstOrNull { it.label == label } ?: return null
-        if (stored.longEdgePx !in CastSettingChoices.LONG_EDGE_CHOICES) return null
-        if (stored.fps !in CastSettingChoices.FPS_CHOICES) return null
-        if (stored.bitrateMinBps !in 1 until stored.bitrateMaxBps) return null
-        if (stored.bitrateMaxBps > CastSettingChoices.MANUAL_BITRATE_MAX_BPS) return null
-        // Advanced (v4): unknown labels and out-of-choice caps are "not ours".
-        val encoderImpl = EncoderImplementation.fromLabel(stored.encoderImpl) ?: return null
-        val preferredCodec = PreferredVideoCodec.fromLabel(stored.preferredCodec) ?: return null
-        val degradationStrategy = DegradationStrategy.fromLabel(stored.degradationStrategy) ?: return null
-        val bitrateMode = EncoderBitrateMode.fromLabel(stored.bitrateMode) ?: return null
-        val micDevice = MicDeviceSource.fromLabel(stored.micDevice) ?: return null
-        val encoderFpsLimit = stored.encoderFpsLimit
-        if (encoderFpsLimit !== null && encoderFpsLimit !in AdvancedSettingChoices.ENCODER_FPS_LIMIT_CHOICES) return null
-        return CastSettings(
-            profile = profile,
+        if (QualityProfile.entries.none { it.label == label }) return null
+        val values = StoredValues(
             longEdgePx = stored.longEdgePx,
             fps = stored.fps,
-            bitrateAuto = stored.bitrateAuto,
             bitrateMinBps = stored.bitrateMinBps,
             bitrateMaxBps = stored.bitrateMaxBps,
+            degradationStrategy = stored.degradationStrategy,
+            autoQuality = stored.autoQuality,
+            encoderImpl = stored.encoderImpl,
+            preferredCodec = stored.preferredCodec,
+            h264HighProfile = stored.h264HighProfile,
+            encoderFpsLimit = stored.encoderFpsLimit,
+            lowLatencyGameAudio = stored.lowLatencyGameAudio,
+        ).toValues() ?: return null
+        val settings = CastSettings(
+            selection = ProfileSelection.BuiltIn(CustomProfileRules.FALLBACK),
             gameAudio = stored.gameAudio,
             mic = stored.mic,
-            micDevice = micDevice,
-            autoQuality = stored.autoQuality,
-            lowLatencyGameAudio = stored.lowLatencyGameAudio,
-            encoderImpl = encoderImpl,
-            h264HighProfile = stored.h264HighProfile,
-            preferredCodec = preferredCodec,
-            degradationStrategy = degradationStrategy,
-            encoderFpsLimit = encoderFpsLimit,
-            bitrateMode = bitrateMode,
+            micDevice = MicDeviceSource.fromLabel(stored.micDevice) ?: return null,
         )
+        val builtIn = QualityProfile.entries.firstOrNull { it.toValues() == values }
+        return if (builtIn !== null) {
+            settings.copy(selection = ProfileSelection.BuiltIn(builtIn))
+        } else {
+            settings.withProfileAdded(CustomProfileRules.nextName(emptyList()), values)
+        }
+    }
+
+    private fun ProfileValues.toStored() = StoredValues(
+        longEdgePx = longEdgePx,
+        fps = fps,
+        bitrateMinBps = bitrateMinBps,
+        bitrateMaxBps = bitrateMaxBps,
+        degradationStrategy = degradationStrategy.label,
+        autoQuality = autoQuality,
+        encoderImpl = encoderImpl.label,
+        preferredCodec = preferredCodec.label,
+        h264HighProfile = h264HighProfile,
+        encoderFpsLimit = encoderFpsLimit,
+        lowLatencyGameAudio = lowLatencyGameAudio,
+    )
+
+    /** Null for an unknown label or a value this build does not offer. */
+    private fun StoredValues.toValues(): ProfileValues? {
+        // v8 named one choice; everything else names the two settings.
+        val fromStruggle = struggle?.let { STRUGGLE_V8[it] ?: return null }
+        val pressure = degradationStrategy ?: fromStruggle?.first
+        val auto = autoQuality ?: fromStruggle?.second
+        val values = ProfileValues(
+            longEdgePx = longEdgePx,
+            fps = fps,
+            bitrateMinBps = bitrateMinBps,
+            bitrateMaxBps = bitrateMaxBps,
+            degradationStrategy = DegradationStrategy.fromLabel(pressure ?: return null) ?: return null,
+            autoQuality = auto ?: return null,
+            encoderImpl = EncoderImplementation.fromLabel(encoderImpl) ?: return null,
+            preferredCodec = PreferredVideoCodec.fromLabel(preferredCodec) ?: return null,
+            h264HighProfile = h264HighProfile,
+            encoderFpsLimit = encoderFpsLimit,
+            lowLatencyGameAudio = lowLatencyGameAudio,
+        )
+        return values.takeIf { it.isValid }
     }
 }

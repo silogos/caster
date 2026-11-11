@@ -51,7 +51,7 @@ data class CastConfig(
      * shape (the `pcm16` announce already exists in the channel sub-protocol).
      */
     val lowLatencyGameAudio: Boolean = DEFAULT_LOW_LATENCY_GAME_AUDIO,
-    // ---- Advanced (designs/mobile-app.html, AdvancedCastSettings.kt) ----
+    // ---- The profile's encoder choices (AdvancedCastSettings.kt) ----
     /** Hardware-with-fallback (today's behavior) or software-only encoders. */
     val encoderImpl: EncoderImplementation = EncoderImplementation.HARDWARE,
     /** H.264 High profile in the offer; false stays on (Constrained) Baseline. */
@@ -60,8 +60,6 @@ data class CastConfig(
     val preferredCodec: PreferredVideoCodec = PreferredVideoCodec.H264,
     /** Encoder-side fps cap; null follows the capture frame rate. */
     val encoderFpsLimit: Int? = null,
-    /** Rate-control mode; CBR is libwebrtc's (today's) realtime mode. */
-    val bitrateMode: EncoderBitrateMode = EncoderBitrateMode.CBR,
 ) {
     companion object {
         /** webrtc.md: initial sender targets (adjusted in Phases 10–12). */

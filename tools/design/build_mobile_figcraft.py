@@ -19,10 +19,11 @@ designer builds it in Figma), not absolutely placed layers:
 
 Pages:
   - "Mobile · as shipped": every exported screen state;
-  - "Group F · UX & a11y": copied from designs/mobile-ux-a11y.figcraft (--spec).
+  - one per --spec, copied in: "Group F · UX & a11y" (designs/mobile-ux-a11y.figcraft)
+    and "Mobile design v2 · custom profiles" (build_custom_profiles_spec.py's output).
 
 Usage:
-  python3 -I build_mobile_figcraft.py EXPORT_DIR OUT.figcraft [--spec SPEC.figcraft]
+  python3 -I build_mobile_figcraft.py EXPORT_DIR OUT.figcraft [--spec SPEC.figcraft]...
 """
 import copy
 import json
@@ -483,8 +484,13 @@ def build(node, parent_id, parent_node, parent_auto):
     decorate(fid, frame, node)
     for t in texts:
         text_node(fid, t, t["x"] - ox, t["y"] - oy, "fill" if h == "fill" else "hug")
+    # Several drawings in one node are drawn over each other (a Slider's
+    # track: its active and inactive halves share one box). Auto layout would
+    # stack them, so each is an absolute layer where it is drawn.
+    overlaid = len(vectors) > 1
     for vec in vectors:
-        icon(fid, vec, vec["x"] - ox, vec["y"] - oy, child_layout() if auto else None)
+        icon(fid, vec, vec["x"] - ox, vec["y"] - oy,
+             (child_layout(absolute=True) if overlaid else child_layout()) if auto else None)
     for c in kids:
         build(c, fid, node, auto)
     # Nothing in the flow (only drawings or absolute layers): hugging would
@@ -550,7 +556,7 @@ def caption(parent, chars, x, y):
 
 
 def copy_spec_pages(spec_path):
-    """Appends the pages of another FigCraft file (the group F spec), renumbering its ids."""
+    """Appends the pages of another FigCraft file (a hand-written spec), renumbering its ids."""
     doc = json.loads(zipfile.ZipFile(spec_path).read("document.json"))
     offset = next_id[0]
     remap = {int(k): int(k) + offset for k in doc["nodes"]}
@@ -568,7 +574,7 @@ def copy_spec_pages(spec_path):
 
 def main():
     export_dir, out = Path(sys.argv[1]), sys.argv[2]
-    spec = sys.argv[sys.argv.index("--spec") + 1] if "--spec" in sys.argv else None
+    specs = [sys.argv[i + 1] for i, arg in enumerate(sys.argv) if arg == "--spec"]
     page = nid()
     nodes[page] = {"id": page, "name": "Mobile · as shipped", "type": "page", "background": PAGE_BG, "flows": [],
                    "prototype": {"device": "None", "background": {"r": 0.118, "g": 0.118, "b": 0.118, "a": 1.0},
@@ -584,7 +590,7 @@ def main():
             tallest = max(tallest, screen(page, data, x, y + LABEL_GAP))
             x += data["width"] + FRAME_GAP
         y += LABEL_GAP + tallest + ROW_GAP
-    pages = [page] + (copy_spec_pages(spec) if spec else [])
+    pages = [page] + [p for spec in specs for p in copy_spec_pages(spec)]
     doc = {"format": "figcraft", "version": 1, "imageIndex": [], "name": Path(out).stem, "pages": pages,
            "nodes": {str(k): v for k, v in nodes.items()}, "next_id": next_id[0], "styles": [],
            "variables": {"collections": [], "variables": []}, "current_page": page, "document_colors": [],

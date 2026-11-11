@@ -4,7 +4,7 @@ package com.zerofriction.localcast.ui.pairing
  * Decides which camera detections reach the pairing flow. The camera sees
  * the same code ~30 times a second; delivering every frame would restart a
  * failed attempt at frame rate. The first version delivered ONCE per screen,
- * so after a wrong QR ("not a Local Cast code") the right one was ignored
+ * so after a wrong QR ("not a Caster code") the right one was ignored
  * until the user left the screen (review 2026-11-09).
  *
  * Rule: a different code is delivered at once; the same code again only
