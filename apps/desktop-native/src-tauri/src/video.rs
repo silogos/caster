@@ -194,6 +194,9 @@ unsafe impl Sync for VideoWindow {}
 static VIDEO_WINDOW: OnceLock<VideoWindow> = OnceLock::new();
 /// Published by the main thread ([`refresh_visibility`]), read per frame.
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// The window is on screen but another window covers it (log only: a
+/// covered window keeps rendering — see [`window_state`]).
+static WINDOW_COVERED: AtomicBool = AtomicBool::new(false);
 /// The user wants the video window: set by "Open video", cleared by
 /// "Close video" or the window's own close button. A closed window renders
 /// nothing (and the app keeps its audio silent — lib.rs).
@@ -526,7 +529,7 @@ pub fn restore_video_window() {
     show_video_window();
 }
 
-/// Main thread: publishes whether the window is actually composited.
+/// Main thread: publishes whether the window should be rendered.
 /// Returns `true` when it found the user closed an open window with its
 /// own close button (the caller silences the audio and tells the UI).
 pub fn refresh_visibility() -> bool {
@@ -538,7 +541,11 @@ pub fn refresh_visibility() -> bool {
         unoccluded = occlusion & OCCLUSION_VISIBLE != 0;
     });
     let close_requested = CLOSE_REQUESTED.swap(false, Ordering::Relaxed);
-    let (closed_by_user, visible) = window_state(is_open(), close_requested, on_screen, unoccluded);
+    let (closed_by_user, visible) = window_state(is_open(), close_requested, on_screen);
+    let covered = visible && !unoccluded;
+    if WINDOW_COVERED.swap(covered, Ordering::Relaxed) != covered {
+        log::info!(target: "video", "window {}", if covered { "covered by another window — still rendering" } else { "uncovered" });
+    }
     if closed_by_user {
         VIDEO_OPEN.store(false, Ordering::Relaxed);
     }
@@ -552,12 +559,18 @@ pub fn refresh_visibility() -> bool {
 }
 
 /// What the window's state means: (the user closed it, frames should be
-/// composited). Only an explicit close closes it. A window minimized to
+/// rendered). Only an explicit close closes it. A window minimized to
 /// the Dock, or hidden with its app, is still open — its sound keeps
 /// playing and it comes back — it just shows nothing.
-fn window_state(open: bool, close_requested: bool, on_screen: bool, unoccluded: bool) -> (bool, bool) {
+///
+/// A window another window covers keeps rendering: the receiver is the
+/// cast's output device and OBS Window Capture records it while it is
+/// covered; dropping its frames froze that picture (issue #178, the same
+/// defect the Electron receiver had). The memory the old gate guarded
+/// against is bounded elsewhere (pool threshold, layer back-pressure).
+fn window_state(open: bool, close_requested: bool, on_screen: bool) -> (bool, bool) {
     let closed_by_user = open && close_requested;
-    let visible = open && !closed_by_user && on_screen && unoccluded;
+    let visible = open && !closed_by_user && on_screen;
     (closed_by_user, visible)
 }
 
@@ -1076,12 +1089,12 @@ mod tests {
 
     #[test]
     fn a_minimized_window_is_open_but_shows_nothing() {
-        // (open, close requested, on screen, unoccluded) → (closed by the user, composited)
-        assert_eq!(window_state(true, false, true, true), (false, true), "in front: rendering");
-        assert_eq!(window_state(true, false, true, false), (false, false), "covered: open, nothing composited");
-        assert_eq!(window_state(true, false, false, false), (false, false), "in the Dock or app hidden: still open — the sound stays on");
-        assert_eq!(window_state(true, true, false, false), (true, false), "Cmd+W: the user closed it");
-        assert_eq!(window_state(true, true, true, true), (true, false), "closing wins even if the window is still on screen this instant");
-        assert_eq!(window_state(false, true, false, false), (false, false), "already closed: nothing to report");
+        // (open, close requested, on screen) → (closed by the user, rendered)
+        assert_eq!(window_state(true, false, true), (false, true), "on screen: rendering");
+        assert_eq!(window_state(true, false, false), (false, false), "in the Dock or app hidden: still open — the sound stays on");
+        assert_eq!(window_state(true, true, false), (true, false), "Cmd+W: the user closed it");
+        assert_eq!(window_state(true, true, true), (true, false), "closing wins even if the window is still on screen this instant");
+        assert_eq!(window_state(false, true, false), (false, false), "already closed: nothing to report");
+        assert_eq!(window_state(false, false, true), (false, false), "never opened: nothing to render");
     }
 }

@@ -404,6 +404,14 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **What:** every name a person reads is "Caster" on both apps; ids, the signing key and the receiver's data folder are unchanged. One icon, the receiver's mark on an orange tile, drawn in `designs/app-icon.figcraft` and used for the Mac app, the menu-bar template and the phone's adaptive icon. Drawn first in the design file ("The name and the icon", with the other candidates in orange and blue).
 
+## Fix 2026-11ah — A covered video window keeps rendering ⏳ measured on the Mac and tablet, not yet merged (2026-11-11)
+
+**Why:** the receiver's picture froze while its window was behind another one, which is when OBS Window Capture records it (issue #178; the Electron receiver had the same defect, fixed in #48 with `backgroundThrottling: false`). The native gate dropped every frame while `occlusionState` was not Visible.
+
+**What:** `window_state` renders a window that is open, not closed by the user and on screen; minimized and app-hidden windows still render nothing. The occlusion bit only feeds a `covered` / `uncovered` log line. [ADR-028](../decisions/ADR-028-a-covered-window-keeps-rendering.md).
+
+**Checked:** `cargo test` 94 passed, 1 ignored. On the device: ~7.5 minutes with the window covered (21 600 frames shown in the run), 0 hidden drops, receiver memory flat at ~150 MB. **Not checked:** a capture of the covered window, minimize and restore, runs over ~8 minutes.
+
 ## Release v0.2.0 — Caster ✅ published (2026-11-11)
 
 The second release, and the first under one product version ([release.md](release.md), ADR-026): tag `v0.2.0` on `main` (the merge of PR #173, CI green), two assets — `Caster-v0.2.0.apk` (signed with the release key) and `Caster_0.2.0_aarch64.dmg` (the native Mac receiver, ad-hoc signed, not notarized). It closes #165, #170, #171 and #172.
