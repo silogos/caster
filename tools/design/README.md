@@ -68,6 +68,15 @@ cd apps/desktop-native/src-tauri && npx --yes @tauri-apps/cli@2 icon DIR/mac-102
 cp DIR/tray.png icons/tray-template.png
 ```
 
+macOS 26 draws the Mac icon from a layered icon instead (`apps/desktop-native/src-tauri/icons/AppIcon.icon`: the tile's colour in `icon.json`, the mark as filled paths in `Assets/mark.svg`). Recompile it after a change, with Xcode installed, and commit the result:
+
+```bash
+cd apps/desktop-native/src-tauri/icons
+xcrun actool AppIcon.icon --compile /tmp/appicon --app-icon AppIcon --platform macosx \
+  --minimum-deployment-target 12.0 --output-partial-info-plist /tmp/appicon/partial.plist
+cp /tmp/appicon/Assets.car Assets.car
+```
+
 The phone's launcher icon is the same mark written as a vector (`ic_launcher_foreground.xml`) on the same orange (`ic_launcher_background`); change the three together.
 
 ## Known simplifications

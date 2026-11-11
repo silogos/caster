@@ -23,6 +23,7 @@ Before the second release the product carried three names: "Local Cast" on the p
 
 - **OBS:** the Syphon source is now "Caster". A scene that used "Zero-Friction Local Cast" must pick the source again once.
 - The menu-bar image is its own template file (`icons/tray-template.png`): the app icon is a filled tile, which a template would draw as a square.
+- **macOS 26 icon styles.** With the system's icon style set to Dark, macOS redraws a flat icon by its own guess: the orange tile came out as a black tile with a grey mark (seen on the product owner's Mac, 2026-11-11). The Mac app therefore also ships a layered icon (`icons/AppIcon.icon`, compiled to `Assets.car`, named by `CFBundleIconName`): Default style shows the orange tile with the white mark, Dark style a dark tile with the orange mark. `icon.icns` stays for older systems. Not looked at: the Clear and Tinted styles.
 - Older documents (ADRs, roadmap entries, measurements) keep the name they were written under.
 - The phone's app bar still writes the name in mixed case ("Caster") and the receiver's nameplate in capitals ("CASTER"), as before the rename.
 - **Revisit if** the app is published to a store: "Caster" is a common name there.
