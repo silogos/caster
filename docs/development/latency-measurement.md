@@ -6,6 +6,8 @@ How to measure the cast's glass-to-glass latency — video from the phone's scre
 
 **Video on the Mac appears at the same moment as on the phone's own screen** (median 0–1 ms against SurfaceFlinger's actual present time, range about −18 to +20 ms). Earlier figures of 46–117 ms "phone screen → Mac screen" were inflated by an assumption in the tool: Android holds an app's frames 2–4 vsyncs before its own panel shows them (SurfaceFlinger `actual − desired` present 47–64 ms, varying per activity instance), while the virtual display captures them earlier. **Game audio on the Mac trails the phone's own speaker by ~150 ms** (click → phone speaker ~101 ms, click → Mac playout ~250 ms). Nearly all of it is Android's playback-capture path, about 220 ms from the click entering a track to leaving the capture record; it does not move with the capture record's buffer size. Wi-Fi adds ~4 ms and the Mac ring ~28 ms (its 40 ms target was a mean; arriving audio waits less). Nothing left on the video side is worth cutting. On the audio side, the Mac was the only part this app controls: [ADR-020](../decisions/ADR-020-audio-playout-steers-the-trough.md) took 8 ms out of the output buffer and made gaps shorter, and found the ring itself had nothing safe left to give.
 
+**Update (2026-11-12):** the ~150 ms is the click track's delay against the phone speaker, not the gap between a game's sound and its picture. In a real PUBG live recording, gunshot sound and muzzle flash were within ±40 ms of each other with no sync offset set — see "Game audio vs picture in a real live recording" below.
+
 ## How it works
 
 | Piece | Where | What it marks |
@@ -156,6 +158,29 @@ The 13 ms at 96 kHz was that probe's tee buffer happening to start lower (1 920�
 - Lateness beyond ~10 ms is common enough on this network that a 10 ms margin triples the gaps for ~8 ms.
 - The IO buffer is the real saving: 512 → 128 frames, 8 ms less output delay. That figure comes from the buffer sizes (cpal reports the callback → playback delay as the buffer length), not from an acoustic measurement.
 - Wi-Fi was busier than in the night runs above, where the old playout had 0 underruns in ~70 s.
+
+## Game audio vs picture in a real live recording (2026-11-12)
+
+The figures above use the debug pattern's click track. To check what a viewer actually gets, the product owner's own live-stream recording of a PUBG session was measured, `Record_2026-11-12-20-17-40_001.mp4`: 1920×1080 at 60 fps, AAC 48 kHz stereo, about 24 minutes. The cast was Lenovo TB321FU → Mac, and the recorder had **no audio sync offset** set.
+
+**Method.** Gunshots fired through a scope give a clean marker on both sides. The muzzle flash appears in a fixed area under the scope, and the shot has a sharp sound onset.
+- Picture: per-frame mean of bright, warm pixels (`R > 200`, `G > 120`, weighted by `R − B`) in that area, from frames decoded at 60 fps.
+- Sound: peak amplitude in 1 ms bins of the mono downmix. The onset is the first bin where the level jumps from near silence to full scale.
+- Both were taken from the same ffmpeg seek. The source frame timestamps were checked around the shots: no gaps, 16.7 ms apart.
+
+| Moment in the recording | First flash | Sound onset | Sound vs picture |
+|---|---|---|---|
+| 16:57.9, full-auto burst (first shot) | 16:57.933 (faint), 16:57.950 (bright) | 16:57.964 | **+15 to +30 ms** |
+| 03:48.0, single shot | 03:48.067 | 03:48.069 | **~0 ms** |
+| 03:48.9, single shot | 03:48.917 | 03:48.876 | **−40 ms** (sound first) |
+
+- All three are within ±40 ms, one or two frames, with no lean towards audio being late. That is below what people notice; broadcast practice (ITU-R BT.1359) puts the detectable lag of audio at around 125 ms.
+- One orange glow at 03:48.58–03:48.80 was left out. It lasts ~230 ms with no new shot sound, which is too long for a muzzle flash. The picture was not frozen: the view kept moving, and the timestamps have no gap.
+- It matches the product owner's listening check during live play, with a headset plugged into the Mac.
+
+**What this means for the ~150 ms above.** The click-track figure is real for that track, but it does not describe a game's sound against its own picture. The click and the white flip are issued together, and the phone's speaker path for that test track holds ~80 ms in the track's own buffer (see "Where the audio delay sits inside Android"). A game's audio and frames each have their own queues, and in this recording they arrive together. **Why the two differ has not been worked out.** Until it has, the in-game recording is the figure to quote for A/V sync, and the click track remains the tool for comparing builds.
+
+**Limits.** One device, one game, one recording, three shots. The offset is measured between the flash and the sound as the game produces them, so any offset inside PUBG itself is included, which is also what viewers get.
 
 ## Audio starves in a long game cast (2026-11-10/11, open)
 
