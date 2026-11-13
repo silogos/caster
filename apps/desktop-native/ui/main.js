@@ -168,25 +168,47 @@ const tracks = {
   mic: { id: 'mic', command: 'set_mic_audio', volume: 'micVolume', muted: 'micMuted', playsOn: 'micPlaysOn', device: 'Caster Mic' },
 }
 let saved = { gameVolume: 1, gameMuted: false, gamePlaysOn: 'speaker', micVolume: 1, micMuted: true, micPlaysOn: 'speaker' }
-let casterDevices = { audio: null, mic: null } // the installed virtual devices, null = not installed
+// `audio`/`mic`: the installed Caster device (null: not installed);
+// `canInstall`: this build carries the plug-in (ADR-030).
+let casterDevices = { audio: null, mic: null, canInstall: false }
+// Installing the Caster devices from a "Plays on" click (ADR-030): the
+// track whose click started it, and the track whose install failed.
+let installingFor = null
+let installFailedFor = null
 
 function renderTrack(name) {
   const t = tracks[name]
   $(`${t.id}-volume`).value = String(Math.round(saved[t.volume] * 100))
   $(`${t.id}-volume-value`).textContent = saved[t.muted] ? 'off' : `${$(`${t.id}-volume`).value}%`
   $(`${t.id}-switch`).classList.toggle('on', !saved[t.muted])
-  const installed = casterDevices[name]
+  const own = casterDevices[name] !== null
+  const offerInstall = !own && casterDevices.canInstall
+  const installing = installingFor === name
   for (const button of $(`${t.id}-plays-on`).querySelectorAll('button')) {
-    const on = button.dataset.playsOn === saved[t.playsOn]
+    const caster = button.dataset.playsOn === 'caster'
+    // While installing, Speaker keeps playing and stays selected; so does a
+    // saved Caster choice whose device is gone (the receiver plays on the
+    // speaker then).
+    const shown = installing || !own ? 'speaker' : saved[t.playsOn]
+    const on = button.dataset.playsOn === shown
     button.classList.toggle('on', on)
     button.setAttribute('aria-checked', String(on))
-    button.disabled = button.dataset.playsOn === 'caster' && !installed
+    if (!caster) continue
+    button.disabled = !own && !casterDevices.canInstall
+    button.classList.toggle('needs-install', offerInstall && !installing && !on)
+    button.classList.toggle('installing', installing)
+    button.setAttribute('aria-busy', String(installing))
+    button.querySelector('.seg-label').textContent = installing ? 'Installing…' : t.device
+    if (offerInstall && !installing && !on) button.setAttribute('aria-describedby', `${t.id}-caster-tip`)
+    else button.removeAttribute('aria-describedby')
   }
-  // Until the Caster devices ship with the app, the Electron receiver's
-  // devices stand in (ADR-029) — name the one OBS will list.
-  $(`${t.id}-plays-on-note`).textContent = !installed
-    ? `${t.device} isn't installed on this Mac.`
-    : installed !== t.device ? `In OBS: "${installed}".` : ''
+  const note = $(`${t.id}-plays-on-note`)
+  note.classList.toggle('fault', installFailedFor === name)
+  if (installing) note.textContent = 'macOS is asking for your password.'
+  else if (installFailedFor === name) note.textContent = `Couldn't install ${t.device}. Try again.`
+  // A build without the driver: say what is missing.
+  else if (!own && !casterDevices.canInstall) note.textContent = `${t.device} isn't installed on this Mac.`
+  else note.textContent = ''
 }
 function renderTracks() {
   renderTrack('audio')
@@ -206,15 +228,47 @@ for (const name of Object.keys(tracks)) {
   $(`${t.id}-switch`).addEventListener('click', () => applyLevel(name, saved[t.volume], !saved[t.muted], true))
   $(`${t.id}-plays-on`).addEventListener('click', (event) => {
     const playsOn = event.target.closest('button')?.dataset.playsOn
-    if (!playsOn || playsOn === saved[t.playsOn]) return
-    invoke('set_plays_on', { track: name, playsOn })
-      .then((next) => { saved = next; renderTracks() })
-      .catch((err) => { console.error('set_plays_on failed:', err); loadCasterDevices() })
+    if (!playsOn || installingFor) return
+    installFailedFor = null
+    if (playsOn === 'caster' && casterDevices[name] === null && casterDevices.canInstall) {
+      installCasterDevices(name)
+      return
+    }
+    if (playsOn === saved[t.playsOn]) { renderTracks(); return }
+    setPlaysOn(name, playsOn)
   })
+}
+function setPlaysOn(name, playsOn) {
+  return invoke('set_plays_on', { track: name, playsOn })
+    .then((next) => { saved = next; renderTracks() })
+    .catch((err) => { console.error('set_plays_on failed:', err); loadCasterDevices() })
+}
+// One install brings both devices; the clicked track then moves to Caster.
+// Cancelling the password is the user's choice: back to rest, no message.
+function installCasterDevices(name) {
+  installingFor = name
+  renderTracks()
+  invoke('install_caster_devices')
+    .then(async (outcome) => {
+      installingFor = null
+      if (outcome === 'installed') {
+        await loadCasterDevices()
+        await setPlaysOn(name, 'caster')
+      } else if (outcome === 'failed') {
+        installFailedFor = name
+      }
+      renderTracks()
+    })
+    .catch((err) => {
+      console.error('install_caster_devices failed:', err)
+      installingFor = null
+      installFailedFor = name
+      renderTracks()
+    })
 }
 // Re-read when this window gains focus: a device installed meanwhile.
 function loadCasterDevices() {
-  invoke('caster_devices')
+  return invoke('caster_devices')
     .then((devices) => { casterDevices = devices; renderTracks(); renderSyphon() })
     .catch((err) => console.error('caster_devices failed:', err))
 }
@@ -224,7 +278,7 @@ window.addEventListener('focus', loadCasterDevices)
 function renderSyphon() {
   $('syphon-switch').classList.toggle('on', state.syphonOutput)
   $('syphon-sub').textContent = state.syphonOutput
-    ? `On. In OBS add a Syphon Client source named "Caster", and Audio Input Captures of "${casterDevices.audio ?? 'Caster Audio'}" and "${casterDevices.mic ?? 'Caster Mic'}".`
+    ? `On. In OBS add a Syphon Client source named "Caster", and Audio Input Captures of "Caster Audio" and "Caster Mic".`
     : 'Off. OBS can still capture the video window.'
   renderGameSub()
 }

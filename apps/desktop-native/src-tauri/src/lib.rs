@@ -10,6 +10,7 @@ mod signaling;
 mod syphon;
 mod tray;
 mod video;
+mod virtual_audio;
 mod webrtc;
 
 use futures_util::future::LocalBoxFuture;
@@ -141,15 +142,13 @@ fn set_mic_audio(
 }
 
 /// Points a track's engine at its output: the system default, or its Caster
-/// virtual device. Returns whether the choice could be honored (a Caster
-/// device that is not installed plays on the speaker instead).
+/// virtual device. Returns whether the Caster device is installed. A saved
+/// Caster choice without it plays on the speaker until the device appears
+/// (the install restarts coreaudiod, and the reopened output finds it).
 fn apply_plays_on(track: audio::Track, choice: settings::PlaysOn) -> bool {
     let (device, honored) = match choice {
-        settings::PlaysOn::Speaker => (None, true),
-        settings::PlaysOn::Caster => match audio::caster_device(track) {
-            Some(name) => (Some(name), true),
-            None => (None, false),
-        },
+        settings::PlaysOn::Speaker => (audio::Destination::SystemDefault, true),
+        settings::PlaysOn::Caster => (audio::Destination::Caster, audio::caster_device(track).is_some()),
     };
     if !honored {
         log::warn!(target: "audio", "{track:?}: no Caster device installed — playing on the speaker");
@@ -158,14 +157,41 @@ fn apply_plays_on(track: audio::Track, choice: settings::PlaysOn) -> bool {
     honored
 }
 
-/// Which Caster virtual devices this Mac has (null: not installed), for the
-/// "Plays on" choices.
+/// The Caster virtual devices for the "Plays on" choices: per track, the
+/// installed device (`audio`/`mic`, null: not installed), and whether this
+/// build can install them (`canInstall`, ADR-030).
 #[tauri::command]
-fn caster_devices() -> Value {
+fn caster_devices(app: tauri::AppHandle) -> Value {
+    let names = audio::output_device_names();
     serde_json::json!({
-        "audio": audio::caster_device(audio::Track::Game),
-        "mic": audio::caster_device(audio::Track::Mic),
+        "audio": audio::pick_caster_device(audio::Track::Game, &names),
+        "mic": audio::pick_caster_device(audio::Track::Mic, &names),
+        "canInstall": bundled_caster_driver(&app).is_some(),
     })
+}
+
+fn bundled_caster_driver(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().resource_dir().ok().and_then(|dir| virtual_audio::bundled_driver(&dir))
+}
+
+/// Installs Caster Audio and Caster Mic (ADR-030): macOS asks for the
+/// password. Resolves to "installed" (both devices enumerate), "declined"
+/// (the dialog was cancelled) or "failed" (details in the log). An install
+/// already running resolves to "busy".
+#[tauri::command]
+async fn install_caster_devices(app: tauri::AppHandle) -> Result<&'static str, String> {
+    let Some(source) = bundled_caster_driver(&app) else {
+        log::error!(target: "virtual-audio", "{} is not in this build's resources", virtual_audio::DRIVER_BUNDLE);
+        return Ok(virtual_audio::Outcome::Failed.as_str());
+    };
+    let present = || {
+        let names = audio::output_device_names();
+        virtual_audio::DEVICE_NAMES.iter().all(|d| names.iter().any(|n| n == d))
+    };
+    let outcome = tauri::async_runtime::spawn_blocking(move || virtual_audio::install(&source, present))
+        .await
+        .map_err(|e| format!("install task: {e}"))?;
+    Ok(outcome.map_or("busy", virtual_audio::Outcome::as_str))
 }
 
 /// Where a track plays (ADR-029): `track` is "audio" or "mic", `playsOn`
@@ -336,6 +362,7 @@ pub fn run() {
             set_syphon_output,
             set_mic_audio,
             caster_devices,
+            install_caster_devices,
             set_plays_on,
             open_video,
             close_video

@@ -75,6 +75,15 @@ const MAX_RATE_CORRECTION: f64 = 0.01;
 /// The documented fallback window: DataChannel quiet this long hands the
 /// ear output to the dual-mono track.
 const FALLBACK_AFTER_DC_QUIET: Duration = Duration::from_secs(3);
+/// A running output whose callback has not run for this long, while audio
+/// keeps arriving, is dead and gets reopened: restarting `coreaudiod` (as
+/// installing the Caster devices does) stops every stream without an error.
+/// A failed reopen is retried after the same time.
+const OUTPUT_STALL_MS: u64 = 1_000;
+/// Reopen attempts in a row that are logged one by one; later ones only
+/// every [`REOPEN_LOG_EVERY`]th, so an outage does not flood the log.
+const REOPEN_LOG_FIRST: u32 = 3;
+const REOPEN_LOG_EVERY: u32 = 10;
 
 /// The ring: the producer (under [`Producer`]'s lock) owns `head`, the
 /// callback owns `tail`. Per-slot atomics — safe Rust, no allocation on the
@@ -97,6 +106,8 @@ struct Ring {
     starved_frames: AtomicU64,
     callback_frames: AtomicUsize,
     device_delay_us: AtomicU64,
+    /// When the device last called back ([`clock_ms`]; 0 = never).
+    last_callback_ms: AtomicU64,
 }
 
 const NO_FLUSH: usize = usize::MAX;
@@ -115,6 +126,7 @@ impl Ring {
             starved_frames: AtomicU64::new(0),
             callback_frames: AtomicUsize::new(0),
             device_delay_us: AtomicU64::new(0),
+            last_callback_ms: AtomicU64::new(0),
         }
     }
 
@@ -238,12 +250,29 @@ struct Engine {
     output: Mutex<OutputSlot>,
     /// Set when the output must be (re)opened by the next fed chunk.
     output_stale: AtomicBool,
+    /// When the output was last opened or tried ([`clock_ms`]; 0 = never).
+    output_opened_ms: AtomicU64,
+}
+
+/// Where a track should play.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Destination {
+    /// The system default output.
+    SystemDefault,
+    /// The track's Caster device, looked up each time the output opens: it
+    /// appears under a running cast when the user installs it (ADR-030).
+    Caster,
+    /// One output device by name.
+    #[allow(dead_code)] // the device-switch test; the UI offers only the two above
+    Named(String),
 }
 
 /// The playing stream and the device asked for.
 struct OutputSlot {
-    wanted: Option<String>,
+    wanted: Destination,
     stream: Option<Output>,
+    /// Reopens in a row since the last user choice or working open.
+    reopens: u32,
 }
 
 impl Engine {
@@ -254,8 +283,9 @@ impl Engine {
             producer: Mutex::new(Producer { active: None, last_dc: None }),
             stereo_energy: Mutex::new((0.0, 0.0)),
             gain_bits: AtomicU32::new(1.0f32.to_bits()),
-            output: Mutex::new(OutputSlot { wanted: None, stream: None }),
+            output: Mutex::new(OutputSlot { wanted: Destination::SystemDefault, stream: None, reopens: 0 }),
             output_stale: AtomicBool::new(true),
+            output_opened_ms: AtomicU64::new(0),
         }
     }
 
@@ -311,10 +341,10 @@ fn output_gain(level: f32, plays: bool) -> f32 {
     if plays { level } else { 0.0 }
 }
 
-/// Plays a track on the output device named `device` (`None`: the system
-/// default). The running stream stops now; the next chunk opens the new
-/// one from a flushed ring, so the switch never replays a backlog.
-pub fn set_output_device(track: Track, device: Option<String>) {
+/// Plays a track on `device`. The running stream stops now; the next chunk
+/// opens the new one from a flushed ring, so the switch never replays a
+/// backlog.
+pub fn set_output_device(track: Track, device: Destination) {
     let e = engine(track);
     let mut slot = e.output.lock().expect("audio output");
     if slot.wanted == device && slot.stream.is_some() {
@@ -326,24 +356,29 @@ pub fn set_output_device(track: Track, device: Option<String>) {
     e.output_stale.store(true, Ordering::Release);
 }
 
-/// Each track's own virtual device for OBS, best name first: Caster's
-/// devices, then the Electron receiver's ADR-008 devices they replace. Never
-/// one shared device — the two tracks stay apart (ADR-003).
-const CASTER_AUDIO_DEVICES: [&str; 2] = ["Caster Audio", "Zero-Friction Game Audio"];
-const CASTER_MIC_DEVICES: [&str; 2] = ["Caster Mic", "Zero-Friction Mic"];
+/// Each track's own virtual device for OBS, from Caster's plug-in (ADR-030).
+/// Never one shared device — the two tracks stay apart (ADR-003) — and no
+/// other driver's devices stand in for them.
+pub const CASTER_AUDIO_DEVICE: &str = "Caster Audio";
+pub const CASTER_MIC_DEVICE: &str = "Caster Mic";
 
-/// The installed virtual device for a track, if any.
+/// A track's Caster device, whether or not it is installed.
+pub fn caster_device_name(track: Track) -> &'static str {
+    match track {
+        Track::Game => CASTER_AUDIO_DEVICE,
+        Track::Mic => CASTER_MIC_DEVICE,
+    }
+}
+
+/// The track's Caster device, if installed.
 pub fn caster_device(track: Track) -> Option<String> {
     let names = output_device_names();
     pick_caster_device(track, &names)
 }
 
-fn pick_caster_device(track: Track, installed: &[String]) -> Option<String> {
-    let wanted: &[&str] = match track {
-        Track::Game => &CASTER_AUDIO_DEVICES,
-        Track::Mic => &CASTER_MIC_DEVICES,
-    };
-    wanted.iter().find(|w| installed.iter().any(|n| n == *w)).map(|w| (*w).to_string())
+pub fn pick_caster_device(track: Track, installed: &[String]) -> Option<String> {
+    let wanted = caster_device_name(track);
+    installed.iter().any(|n| n == wanted).then(|| wanted.to_string())
 }
 
 /// The names of this Mac's output devices, for the receiver's picker.
@@ -513,24 +548,64 @@ impl Drop for Output {
     }
 }
 
-/// Opens the output on the first fed chunk, and again after the device
-/// changed. One attempt per change: a device that fails stays silent
-/// rather than retrying on every chunk.
+/// Milliseconds on a monotonic clock that starts with the first call (so
+/// 0 can mean "never").
+fn clock_ms() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// Whether the output must be reopened although nobody changed it: it was
+/// opened (or tried) at `opened_ms`, and neither then nor since has the
+/// device called back for [`OUTPUT_STALL_MS`]. Never-opened outputs are the
+/// first chunk's job, not this one's.
+fn output_stalled(opened_ms: u64, last_callback_ms: u64, now_ms: u64) -> bool {
+    opened_ms != 0 && now_ms.saturating_sub(opened_ms.max(last_callback_ms)) >= OUTPUT_STALL_MS
+}
+
+/// Opens the output on the first fed chunk and after the user changed it,
+/// and reopens it when its callback has stopped (a `coreaudiod` restart) or
+/// a reopen failed — at most once per [`OUTPUT_STALL_MS`], never on every
+/// chunk.
 fn ensure_output(e: &'static Engine) {
-    if !e.output_stale.load(Ordering::Acquire) {
+    let stalled = || {
+        output_stalled(e.output_opened_ms.load(Ordering::Acquire), e.ring.last_callback_ms.load(Ordering::Relaxed), clock_ms())
+    };
+    if !e.output_stale.load(Ordering::Acquire) && !stalled() {
         return;
     }
     let Ok(mut slot) = e.output.try_lock() else { return };
-    if !e.output_stale.swap(false, Ordering::AcqRel) {
+    let chosen = e.output_stale.swap(false, Ordering::AcqRel);
+    if !chosen && !stalled() {
         return;
     }
     let wanted = slot.wanted.clone();
-    slot.stream = open_output(e, wanted.as_deref());
+    let track = e.track.label();
+    if chosen {
+        slot.reopens = 0;
+    } else {
+        slot.reopens += 1;
+        if slot.reopens <= REOPEN_LOG_FIRST || slot.reopens % REOPEN_LOG_EVERY == 0 {
+            log::warn!(target: "audio", "{track}: output stopped calling back — reopening (attempt {})", slot.reopens);
+        }
+    }
+    // The dead stream goes first: never two streams pulling from the ring.
+    slot.stream = None;
+    // A reopen never trades a missing chosen device for the speakers: right
+    // after a coreaudiod restart the virtual devices take a moment to come
+    // back, and the track must not leak into the room meanwhile.
+    slot.stream = open_output(e, &wanted, chosen);
+    if slot.stream.is_some() && !chosen {
+        log::info!(target: "audio", "{track}: output reopened after {} attempt(s)", slot.reopens);
+        slot.reopens = 0;
+    }
+    e.output_opened_ms.store(clock_ms(), Ordering::Release);
 }
 
-/// The device named `wanted`, or the system default when it is `None` or
-/// no longer present (a virtual device uninstalled, a USB DAC unplugged).
-fn find_output_device(wanted: Option<&str>) -> Option<cpal::Device> {
+/// The device named `wanted`, or the system default when it is `None` —
+/// or, with `fall_back`, when it is no longer present (a virtual device
+/// uninstalled, a USB DAC unplugged).
+fn find_output_device(wanted: Option<&str>, fall_back: bool) -> Option<cpal::Device> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     if let Some(name) = wanted {
@@ -538,7 +613,7 @@ fn find_output_device(wanted: Option<&str>) -> Option<cpal::Device> {
             .output_devices()
             .ok()
             .and_then(|mut devices| devices.find(|d| d.name().is_ok_and(|n| n == name)));
-        if found.is_some() {
+        if found.is_some() || !fall_back {
             return found;
         }
         log::warn!(target: "audio", "output \"{name}\" not found — playing on the system default");
@@ -546,11 +621,31 @@ fn find_output_device(wanted: Option<&str>) -> Option<cpal::Device> {
     host.default_output_device()
 }
 
-fn open_output(e: &'static Engine, wanted: Option<&str>) -> Option<Output> {
+fn open_output(e: &'static Engine, wanted: &Destination, fall_back: bool) -> Option<Output> {
     use cpal::traits::{DeviceTrait, StreamTrait};
     let track = e.track.label();
-    let device = find_output_device(wanted).or_else(|| {
-        log::error!(target: "audio", "{track}: no output device — not played");
+    let named = match wanted {
+        Destination::SystemDefault => None,
+        Destination::Named(name) => Some(name.clone()),
+        Destination::Caster => match caster_device(e.track) {
+            Some(name) => Some(name),
+            None if fall_back => {
+                log::warn!(target: "audio", "{track}: no Caster device installed — playing on the system default");
+                None
+            }
+            None => {
+                log::debug!(target: "audio", "{track}: no Caster device yet");
+                return None;
+            }
+        },
+    };
+    let device = find_output_device(named.as_deref(), fall_back).or_else(|| {
+        if fall_back {
+            log::error!(target: "audio", "{track}: no output device — not played");
+        } else {
+            // A reopen waiting for its device; ensure_output logs the attempts.
+            log::debug!(target: "audio", "{track}: \"{}\" not there yet", named.as_deref().unwrap_or("system default"));
+        }
         None
     })?;
     let name = device.name().unwrap_or_default();
@@ -570,6 +665,7 @@ fn open_output(e: &'static Engine, wanted: Option<&str>) -> Option<Output> {
         device.build_output_stream(
             config,
             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                ring.last_callback_ms.store(clock_ms(), Ordering::Relaxed);
                 let stamp = info.timestamp();
                 if let Some(delay) = stamp.playback.duration_since(&stamp.callback) {
                     ring.device_delay_us.store(delay.as_micros() as u64, Ordering::Relaxed);
@@ -1092,9 +1188,9 @@ mod tests {
         };
         feed_for(500);
         for _ in 0..4 {
-            set_output_device(Track::Game, Some(a.clone()));
+            set_output_device(Track::Game, Destination::Named(a.clone()));
             feed_for(250);
-            set_output_device(Track::Game, Some(b.clone()));
+            set_output_device(Track::Game, Destination::Named(b.clone()));
             feed_for(250);
         }
         let before = engine(Track::Game).ring.underruns.load(Ordering::Relaxed);
@@ -1109,14 +1205,29 @@ mod tests {
     #[test]
     fn each_track_gets_its_own_caster_device() {
         let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-        let old = names(&["MacBook Pro Speakers", "Zero-Friction Game Audio", "Zero-Friction Mic", "BlackHole 2ch"]);
-        assert_eq!(pick_caster_device(Track::Game, &old).as_deref(), Some("Zero-Friction Game Audio"));
-        assert_eq!(pick_caster_device(Track::Mic, &old).as_deref(), Some("Zero-Friction Mic"));
-        let both = names(&["Zero-Friction Game Audio", "Caster Audio", "Caster Mic"]);
-        assert_eq!(pick_caster_device(Track::Game, &both).as_deref(), Some("Caster Audio"), "Caster's own name wins");
+        let installed = names(&["MacBook Pro Speakers", "Caster Audio", "Caster Mic"]);
+        assert_eq!(pick_caster_device(Track::Game, &installed).as_deref(), Some("Caster Audio"));
+        assert_eq!(pick_caster_device(Track::Mic, &installed).as_deref(), Some("Caster Mic"));
+        // ADR-030: the Electron receiver's devices do not stand in.
+        let old = names(&["MacBook Pro Speakers", "Zero-Friction Game Audio", "Zero-Friction Mic"]);
+        assert_eq!(pick_caster_device(Track::Game, &old), None);
+        assert_eq!(pick_caster_device(Track::Mic, &old), None);
         let shared_only = names(&["MacBook Pro Speakers", "BlackHole 2ch"]);
         assert_eq!(pick_caster_device(Track::Game, &shared_only), None, "never a shared cable: the tracks would mix");
         assert_eq!(pick_caster_device(Track::Mic, &shared_only), None);
+    }
+
+    #[test]
+    fn an_output_that_stops_calling_back_is_reopened_once_a_second() {
+        let opened = 10_000;
+        assert!(!output_stalled(0, 0, 99_000), "never opened: the first chunk opens it");
+        assert!(!output_stalled(opened, opened + 500, opened + 1_400), "calling back");
+        assert!(output_stalled(opened, opened + 500, opened + 1_500), "quiet for a second (coreaudiod restarted)");
+        assert!(!output_stalled(opened, 0, opened + 999), "just opened: give its first callback a moment");
+        assert!(output_stalled(opened, 0, opened + 1_000), "never called back: retry");
+        // A callback from the stream before the reopen does not count
+        // against the new one's first second.
+        assert!(!output_stalled(opened, opened - 5_000, opened + 200));
     }
 
     #[test]

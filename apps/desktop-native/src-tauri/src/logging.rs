@@ -11,7 +11,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 use std::io::Write;
 
 /// The app's own log scopes (the `target:` of every call site).
-const APP_SCOPES: &[&str] = &["signaling", "webrtc", "audio", "video", "pairing", "power", "settings", "tray", "latency", "syphon"];
+const APP_SCOPES: &[&str] = &["signaling", "webrtc", "audio", "video", "pairing", "power", "settings", "tray", "latency", "syphon", "virtual-audio"];
 const LEVEL_ENV: &str = "ZFC_LOG";
 
 struct Logger {
@@ -80,6 +80,9 @@ mod tests {
         assert!(logger.enabled_for("libwebrtc::peer_connection", Level::Warn));
         let debug = Logger { app_level: LevelFilter::Debug };
         assert!(debug.enabled_for("video", Level::Debug));
+        // Found live (2026-11-14): the installer's lines were dropped as a
+        // dependency's until its scope was listed.
+        assert!(logger.enabled_for("virtual-audio", Level::Info));
     }
 
     #[test]
