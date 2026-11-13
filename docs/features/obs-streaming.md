@@ -4,6 +4,8 @@ Implemented in: **Phase14** (see [roadmap](../development/roadmap.md)). Status: 
 
 ## Audio routing recipes for the stream (Feature 2026-11d)
 
+> **Native receiver + Syphon (ADR-029, ADR-030):** the Syphon Client source carries no sound. In the receiver set **Audio → Plays on: Caster Audio** and **Mic → Plays on: Caster Mic**, then add an **Audio Input Capture** of each device in OBS. The first click on Caster installs both devices (macOS asks for the password once). Installing them removes the Electron receiver's "Zero-Friction Game Audio" and "Zero-Friction Mic": an OBS scene that captured those must be pointed at "Caster Audio" and "Caster Mic" once. In the recipes below, read "Zero-Friction Game Audio" as "Caster Audio" and "Zero-Friction Mic" as "Caster Mic". Sound plays while the video window is open or Syphon is on; a track on Caster is silent on the speakers (listen on the phone, or monitor the source in OBS). The recipes below were written for the Electron receiver.
+
 The streamer's PC mixes more than the cast — donation alerts (Saweria and friends) play through the **default output**. One rule prevents the classic double-game-audio:
 
 > **Game audio reaches OBS through exactly ONE source.** Capturing the desktop audio (speaker loopback) *and* the "Zero-Friction Game Audio" device at the same time records the game twice ([audio-mixer.md](audio-mixer.md) — in `both` routing the mix plays to the default output *and* the per-track device).

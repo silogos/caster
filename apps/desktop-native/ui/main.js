@@ -1,8 +1,9 @@
 // The receiver's main window — the mobile app's "Signal Deck" look:
 //  - QR hero while no phone is paired;
 //  - the deck once one is: source, ON AIR / STANDBY, the cast's status, and
-//    "Open video", which opens the native video window. Video AND sound play
-//    only while that window is open (the phone keeps sending either way).
+//    "Open video", which opens the native video window. Video plays only while
+//    that window is open; sound while it is open or the Syphon output is on
+//    (ADR-029), on the device chosen under "Plays on".
 // Events from the Rust core:
 //  - pairing:session-updated → QR hero
 //  - pairing:mobile-state    → connected / disconnected / session-info / forgotten
@@ -31,6 +32,7 @@ const state = {
   info: null,
   picture: null, // what the receiver is getting, measured once a second
   videoOpen: false,
+  syphonOutput: false, // the receiver's Syphon switch (ADR-021)
 }
 
 function pad(n) {
@@ -95,9 +97,14 @@ function renderDeck() {
   const toggle = $('video-toggle')
   toggle.textContent = state.videoOpen ? 'Close video' : 'Open video'
   toggle.className = `btn ${state.videoOpen ? 'btn-secondary' : 'btn-primary'}`
-  $('game-sub').textContent = state.videoOpen
+  renderGameSub()
+}
+
+// Sound plays while something shows the cast: the window or Syphon (ADR-029).
+function renderGameSub() {
+  $('game-sub').textContent = state.videoOpen || state.syphonOutput
     ? 'Playing on this computer.'
-    : 'Plays while the video window is open.'
+    : 'Plays while the video window is open or Syphon is on.'
 }
 
 setInterval(() => {
@@ -154,44 +161,143 @@ $('video-toggle').addEventListener('click', () => {
   invoke(state.videoOpen ? 'close_video' : 'open_video').catch((err) => console.error('video toggle failed:', err))
 })
 
-let gameAudio = { gameVolume: 1, gameMuted: false }
-function renderGameAudio() {
-  $('game-volume').value = String(Math.round(gameAudio.gameVolume * 100))
-  $('game-volume-value').textContent = gameAudio.gameMuted ? 'off' : `${$('game-volume').value}%`
-  $('game-switch').classList.toggle('on', !gameAudio.gameMuted)
+// The two tracks the receiver plays, each with its own level, mute and
+// output (ADR-003: never mixed; ADR-029: "Plays on").
+const tracks = {
+  audio: { id: 'game', command: 'set_game_audio', volume: 'gameVolume', muted: 'gameMuted', playsOn: 'gamePlaysOn', device: 'Caster Audio' },
+  mic: { id: 'mic', command: 'set_mic_audio', volume: 'micVolume', muted: 'micMuted', playsOn: 'micPlaysOn', device: 'Caster Mic' },
 }
-function applyGameAudio(volume, muted, persist) {
-  invoke('set_game_audio', { volume, muted, persist })
-    .then((saved) => { gameAudio = saved; renderGameAudio() })
-    .catch((err) => console.error('set_game_audio failed:', err))
+let saved = { gameVolume: 1, gameMuted: false, gamePlaysOn: 'speaker', micVolume: 1, micMuted: true, micPlaysOn: 'speaker' }
+// `audio`/`mic`: the installed Caster device (null: not installed);
+// `canInstall`: this build carries the plug-in (ADR-030).
+let casterDevices = { audio: null, mic: null, canInstall: false }
+// Installing the Caster devices from a "Plays on" click (ADR-030): the
+// track whose click started it, and the track whose install failed.
+let installingFor = null
+let installFailedFor = null
+
+function renderTrack(name) {
+  const t = tracks[name]
+  $(`${t.id}-volume`).value = String(Math.round(saved[t.volume] * 100))
+  $(`${t.id}-volume-value`).textContent = saved[t.muted] ? 'off' : `${$(`${t.id}-volume`).value}%`
+  $(`${t.id}-switch`).classList.toggle('on', !saved[t.muted])
+  const own = casterDevices[name] !== null
+  const offerInstall = !own && casterDevices.canInstall
+  const installing = installingFor === name
+  for (const button of $(`${t.id}-plays-on`).querySelectorAll('button')) {
+    const caster = button.dataset.playsOn === 'caster'
+    // While installing, Speaker keeps playing and stays selected; so does a
+    // saved Caster choice whose device is gone (the receiver plays on the
+    // speaker then).
+    const shown = installing || !own ? 'speaker' : saved[t.playsOn]
+    const on = button.dataset.playsOn === shown
+    button.classList.toggle('on', on)
+    button.setAttribute('aria-checked', String(on))
+    if (!caster) continue
+    button.disabled = !own && !casterDevices.canInstall
+    button.classList.toggle('needs-install', offerInstall && !installing && !on)
+    button.classList.toggle('installing', installing)
+    button.setAttribute('aria-busy', String(installing))
+    button.querySelector('.seg-label').textContent = installing ? 'Installing…' : t.device
+    if (offerInstall && !installing && !on) button.setAttribute('aria-describedby', `${t.id}-caster-tip`)
+    else button.removeAttribute('aria-describedby')
+  }
+  const note = $(`${t.id}-plays-on-note`)
+  note.classList.toggle('fault', installFailedFor === name)
+  if (installing) note.textContent = 'macOS is asking for your password.'
+  else if (installFailedFor === name) note.textContent = `Couldn't install ${t.device}. Try again.`
+  // A build without the driver: say what is missing.
+  else if (!own && !casterDevices.canInstall) note.textContent = `${t.device} isn't installed on this Mac.`
+  else note.textContent = ''
 }
-// Live while dragging; saved once on release.
-$('game-volume').addEventListener('input', () => applyGameAudio(Number($('game-volume').value) / 100, false, false))
-$('game-volume').addEventListener('change', () => applyGameAudio(Number($('game-volume').value) / 100, false, true))
-$('game-switch').addEventListener('click', () => applyGameAudio(gameAudio.gameVolume, !gameAudio.gameMuted, true))
+function renderTracks() {
+  renderTrack('audio')
+  renderTrack('mic')
+}
+function applyLevel(name, volume, muted, persist) {
+  invoke(tracks[name].command, { volume, muted, persist })
+    .then((next) => { saved = next; renderTracks() })
+    .catch((err) => console.error(`${tracks[name].command} failed:`, err))
+}
+for (const name of Object.keys(tracks)) {
+  const t = tracks[name]
+  const level = () => Number($(`${t.id}-volume`).value) / 100
+  // Live while dragging; saved once on release.
+  $(`${t.id}-volume`).addEventListener('input', () => applyLevel(name, level(), false, false))
+  $(`${t.id}-volume`).addEventListener('change', () => applyLevel(name, level(), false, true))
+  $(`${t.id}-switch`).addEventListener('click', () => applyLevel(name, saved[t.volume], !saved[t.muted], true))
+  $(`${t.id}-plays-on`).addEventListener('click', (event) => {
+    const playsOn = event.target.closest('button')?.dataset.playsOn
+    if (!playsOn || installingFor) return
+    installFailedFor = null
+    if (playsOn === 'caster' && casterDevices[name] === null && casterDevices.canInstall) {
+      installCasterDevices(name)
+      return
+    }
+    if (playsOn === saved[t.playsOn]) { renderTracks(); return }
+    setPlaysOn(name, playsOn)
+  })
+}
+function setPlaysOn(name, playsOn) {
+  return invoke('set_plays_on', { track: name, playsOn })
+    .then((next) => { saved = next; renderTracks() })
+    .catch((err) => { console.error('set_plays_on failed:', err); loadCasterDevices() })
+}
+// One install brings both devices; the clicked track then moves to Caster.
+// Cancelling the password is the user's choice: back to rest, no message.
+function installCasterDevices(name) {
+  installingFor = name
+  renderTracks()
+  invoke('install_caster_devices')
+    .then(async (outcome) => {
+      installingFor = null
+      if (outcome === 'installed') {
+        await loadCasterDevices()
+        await setPlaysOn(name, 'caster')
+      } else if (outcome === 'failed') {
+        installFailedFor = name
+      }
+      renderTracks()
+    })
+    .catch((err) => {
+      console.error('install_caster_devices failed:', err)
+      installingFor = null
+      installFailedFor = name
+      renderTracks()
+    })
+}
+// Re-read when this window gains focus: a device installed meanwhile.
+function loadCasterDevices() {
+  return invoke('caster_devices')
+    .then((devices) => { casterDevices = devices; renderTracks(); renderSyphon() })
+    .catch((err) => console.error('caster_devices failed:', err))
+}
+window.addEventListener('focus', loadCasterDevices)
 
 // The Syphon output for OBS: a receiver control, saved with the others.
-let syphonOutput = false
 function renderSyphon() {
-  $('syphon-switch').classList.toggle('on', syphonOutput)
-  $('syphon-sub').textContent = syphonOutput
-    ? 'On. In OBS add a Syphon Client source named "Caster". It keeps working with the video window closed.'
+  $('syphon-switch').classList.toggle('on', state.syphonOutput)
+  $('syphon-sub').textContent = state.syphonOutput
+    ? `On. In OBS add a Syphon Client source named "Caster", and Audio Input Captures of "Caster Audio" and "Caster Mic".`
     : 'Off. OBS can still capture the video window.'
+  renderGameSub()
 }
 $('syphon-switch').addEventListener('click', () => {
-  invoke('set_syphon_output', { enabled: !syphonOutput })
-    .then((saved) => { syphonOutput = saved.syphonOutput === true; renderSyphon() })
+  invoke('set_syphon_output', { enabled: !state.syphonOutput })
+    .then((saved) => { state.syphonOutput = saved.syphonOutput === true; renderSyphon() })
     .catch((err) => console.error('set_syphon_output failed:', err))
 })
 
 invoke('receiver_settings')
-  .then((saved) => {
-    gameAudio = saved
-    syphonOutput = saved.syphonOutput === true
-    renderGameAudio()
+  .then((settings) => {
+    saved = settings
+    state.syphonOutput = settings.syphonOutput === true
+    renderTracks()
     renderSyphon()
   })
   .catch(() => {})
+
+loadCasterDevices()
 
 // Disconnect forgets the phone (it must scan again) — a two-step link
 // instead of a dialog, so a stray click cannot end a cast.
@@ -223,6 +329,6 @@ invoke('pairing_payload')
   .then((session) => { if (session?.qrDataUrl) $('qr-img').src = session.qrDataUrl })
   .catch((err) => console.error('pairing_payload failed:', err))
 
-renderGameAudio()
+renderTracks()
 renderDeck()
 showStage('waiting')

@@ -124,6 +124,47 @@
       input[type="range"] { width: 100%; accent-color: var(--signal); }
       .volume { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
       .volume-value { font-family: var(--mono); font-size: 12px; color: var(--muted); width: 52px; text-align: right; }
+      .output-row { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+      .output-row .row-title { flex: 1; }
+      .segmented {
+        display: flex; width: 300px; max-width: 60%; padding: 3px; gap: 0; border-radius: 10px;
+        background: var(--well); border: 1px solid var(--hairline);
+      }
+      .segmented button {
+        flex: 1; height: 30px; border: none; border-radius: 8px; background: none; cursor: pointer;
+        font: 600 14px var(--body); color: var(--muted);
+      }
+      .segmented button.on { color: #062a24; background: linear-gradient(180deg, var(--signal-top), var(--signal-bottom)); }
+      .segmented button:disabled { cursor: default; color: var(--faint); }
+      /* The Caster half while its device is missing (ADR-030): still
+         clickable — a click installs it — with a round "i" and a tooltip. */
+      .segmented { position: relative; }
+      .segmented button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+      .segmented .info, .segmented .spinner { display: none; flex: none; width: 14px; height: 14px; }
+      .segmented button.needs-install .info { display: block; }
+      .segmented button.installing { color: var(--signal); box-shadow: inset 0 0 0 1px var(--signal); cursor: default; }
+      .segmented button.installing .spinner {
+        display: block; box-sizing: border-box; border-radius: 50%;
+        border: 2px solid var(--signal); border-right-color: transparent;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .tooltip {
+        display: none; position: absolute; z-index: 10; top: calc(100% + 9px); right: -4px; width: 262px;
+        box-sizing: border-box; padding: 12px; border-radius: 8px;
+        background: #1e242b; border: 1px solid #2a313a; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        font: 400 12px/16px var(--body); color: var(--text); text-align: left; pointer-events: none;
+      }
+      .tooltip::before {
+        content: ""; position: absolute; top: -6px; right: 30px; width: 10px; height: 10px;
+        background: #1e242b; border-left: 1px solid #2a313a; border-top: 1px solid #2a313a; transform: rotate(45deg);
+      }
+      .segmented button.needs-install:hover ~ .tooltip,
+      .segmented button.needs-install:focus-visible ~ .tooltip { display: block; }
+      .output-note { text-align: right; min-height: 0; }
+      .output-note:empty { display: none; }
+      .output-note.fault { color: var(--tally); }
+      .divider { height: 1px; background: var(--hairline); margin: 16px 0 6px; }
       .switch {
         width: 52px; height: 30px; border-radius: 999px; border: none; cursor: pointer; position: relative;
         background: #2a313a; flex: none;
@@ -183,7 +224,7 @@
         </div>
 
         <button id="video-toggle" class="btn btn-primary">Open video</button>
-        <div class="hint">Video and sound play while the video window is open.</div>
+        <div class="hint">Video plays while the video window is open.</div>
 
         <div class="card">
           <div class="card-head"><span class="label">Status</span></div>
@@ -192,7 +233,7 @@
             <span id="readout" class="readout">Waiting for the cast</span>
           </div>
           <div class="chips">
-            <span id="chip-game" class="chip">Game audio</span>
+            <span id="chip-game" class="chip">Audio</span>
             <span id="chip-mic" class="chip">Mic</span>
           </div>
         </div>
@@ -202,15 +243,48 @@
           <div class="row">
             <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15 12h.01M18 13h.01"/></svg></div>
             <div style="flex: 1">
-              <div class="row-title">Game audio</div>
-              <div id="game-sub" class="row-sub">Plays while the video window is open.</div>
+              <div class="row-title">Audio</div>
+              <div id="game-sub" class="row-sub">Plays while the video window is open or Syphon is on.</div>
             </div>
-            <button id="game-switch" class="switch on" aria-label="Game audio on/off"></button>
+            <button id="game-switch" class="switch on" aria-label="Audio on/off"></button>
           </div>
           <div class="volume">
-            <input id="game-volume" type="range" min="0" max="100" step="1" aria-label="Game audio volume" />
+            <input id="game-volume" type="range" min="0" max="100" step="1" aria-label="Audio volume" />
             <span id="game-volume-value" class="volume-value"></span>
           </div>
+          <div class="output-row">
+            <span class="row-title">Plays on</span>
+            <div id="game-plays-on" class="segmented" role="radiogroup" aria-label="Audio plays on">
+              <button data-plays-on="speaker" role="radio">Speaker</button>
+              <button data-plays-on="caster" role="radio"><span class="seg-label">Caster Audio</span><svg class="info" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="6.2"/><path d="M7 6.3v3.6"/><circle cx="7" cy="4.3" r="0.4" fill="currentColor"/></svg><span class="spinner" aria-hidden="true"></span></button>
+              <div id="game-caster-tip" class="tooltip" role="tooltip">Caster Audio isn't installed on this Mac yet. Click it to install — macOS asks for your password once.</div>
+            </div>
+          </div>
+          <div id="game-plays-on-note" class="row-sub output-note" aria-live="polite"></div>
+
+          <div class="divider"></div>
+
+          <div class="row">
+            <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>
+            <div style="flex: 1">
+              <div class="row-title">Mic</div>
+              <div class="row-sub">The phone's mic — its own track, never mixed with the audio.</div>
+            </div>
+            <button id="mic-switch" class="switch" aria-label="Mic on/off"></button>
+          </div>
+          <div class="volume">
+            <input id="mic-volume" type="range" min="0" max="100" step="1" aria-label="Mic volume" />
+            <span id="mic-volume-value" class="volume-value"></span>
+          </div>
+          <div class="output-row">
+            <span class="row-title">Plays on</span>
+            <div id="mic-plays-on" class="segmented" role="radiogroup" aria-label="Mic plays on">
+              <button data-plays-on="speaker" role="radio">Speaker</button>
+              <button data-plays-on="caster" role="radio"><span class="seg-label">Caster Mic</span><svg class="info" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="6.2"/><path d="M7 6.3v3.6"/><circle cx="7" cy="4.3" r="0.4" fill="currentColor"/></svg><span class="spinner" aria-hidden="true"></span></button>
+              <div id="mic-caster-tip" class="tooltip" role="tooltip">Caster Mic isn't installed on this Mac yet. Click it to install — macOS asks for your password once.</div>
+            </div>
+          </div>
+          <div id="mic-plays-on-note" class="row-sub output-note" aria-live="polite"></div>
         </div>
 
         <div class="card">

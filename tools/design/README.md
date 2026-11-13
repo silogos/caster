@@ -55,6 +55,18 @@
    - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`; `ui.screenshot` returns the window as a PNG, to look at a page that has no exported render).
    - **Visual.** Compare the frames with the exported PNGs.
 
+## The desktop receiver's sound and the Caster devices
+
+`designs/desktop-signal-deck.figcraft` holds the native receiver's deck. Two builders add proposals to it as absolute layers copied from the existing frames. They do not use auto layout, so `check_auto_layout.py` does not apply.
+
+- `build_desktop_audio_output.py` writes **frame 07**: Audio and Mic, each with **Plays on: Speaker | Caster Audio/Mic** (ADR-029), and the Syphon card.
+- `build_desktop_caster_install.py` writes **frames 08–09**. This is the install flow the product owner chose on 2026-11-14: no Install button. While the driver is missing, the Caster segment stays clickable and shows a round ⓘ, and hovering or focusing it explains what is missing. Clicking the segment installs the driver (one macOS password prompt). Frame 08 is the deck with nothing installed, hovered. Frame 09 is the row state by state: not installed, hover, installing, installed, cancelled, failed. Renders: `designs/preview/desktop-08-caster-not-installed.png`, `designs/preview/desktop-09-caster-install-states.png`.
+
+```bash
+python3 -I tools/design/build_desktop_audio_output.py designs/desktop-signal-deck.figcraft    # 07
+python3 -I tools/design/build_desktop_caster_install.py designs/desktop-signal-deck.figcraft  # 08–09 (needs 07)
+```
+
 ## The app icon
 
 `build_app_icon.py` draws Caster's icon once (ADR-027): the receiver's mark on the orange tile, as a Mac icon on Apple's grid, and the mark alone as the menu-bar template.

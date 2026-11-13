@@ -79,7 +79,7 @@ impl TrayModel {
     }
 }
 
-/// `Connected to <name> — 1920×1200 · 60 fps · balanced · game audio · mic`
+/// `Connected to <name> — 1920×1200 · 60 fps · balanced · audio · mic`
 /// — the exact separators of the Electron receiver's `sessionInfoLine.ts`
 /// (× U+00D7, · U+00B7, — U+2014).
 pub fn session_info_line(name: &str, info: &Value) -> String {
@@ -93,7 +93,7 @@ pub fn session_info_line(name: &str, info: &Value) -> String {
     if let Some(profile) = info["profile"].as_str().filter(|p| !p.is_empty()) {
         parts.push(profile.to_string());
     }
-    let sources: Vec<&str> = [("gameAudio", "game audio"), ("mic", "mic")]
+    let sources: Vec<&str> = [("gameAudio", "audio"), ("mic", "mic")]
         .iter()
         .filter(|(key, _)| info[*key].as_bool() == Some(true))
         .map(|(_, label)| *label)
@@ -276,7 +276,7 @@ mod tests {
         m.apply(&json!({ "state": "connected", "name": "Pixel 8" }));
         assert_eq!(m.status_line(), "Connected to Pixel 8");
         m.apply(&json!({ "state": "session-info", "info": { "profile": "balanced", "width": 1920, "height": 1200, "fps": 60, "gameAudio": true, "mic": false } }));
-        assert_eq!(m.status_line(), "Connected to Pixel 8 — 1920×1200 · 60 fps · balanced · game audio");
+        assert_eq!(m.status_line(), "Connected to Pixel 8 — 1920×1200 · 60 fps · balanced · audio");
         m.apply(&json!({ "state": "disconnected" }));
         assert_eq!(m.status_line(), "Waiting for Pixel 8 to reconnect…");
     }
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn session_info_line_matches_the_receiver_ui() {
         let info = json!({ "profile": "performance", "width": 1280, "height": 720, "fps": 30, "gameAudio": true, "mic": true });
-        assert_eq!(session_info_line("TB321FU", &info), "Connected to TB321FU — 1280×720 · 30 fps · performance · game audio · mic");
+        assert_eq!(session_info_line("TB321FU", &info), "Connected to TB321FU — 1280×720 · 30 fps · performance · audio · mic");
     }
     #[test]
     fn the_dock_icon_follows_either_window() {

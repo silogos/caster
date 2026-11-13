@@ -43,7 +43,8 @@
       "hardenedRuntime": false
     },
     "resources": {
-      "icons/Assets.car": "Assets.car"
+      "icons/Assets.car": "Assets.car",
+      "../caster-audio/CasterAudio.driver/": "CasterAudio.driver/"
     }
   }
 }

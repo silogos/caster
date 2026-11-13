@@ -412,6 +412,14 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **Checked:** `cargo test` 94 passed, 1 ignored. On the device: ~7.5 minutes with the window covered (21 600 frames shown in the run), 0 hidden drops, receiver memory flat at ~150 MB. **Not checked:** a capture of the covered window, minimize and restore, runs over ~8 minutes.
 
+## Feature 2026-11ai — Caster Audio and Caster Mic, installed from "Plays on" ⏳ implemented and verified on the Mac (2026-11-14); not committed
+
+*(Not a numbered phase: the follow-up [ADR-029](../decisions/ADR-029-sound-follows-syphon-and-a-chosen-output.md) names. Decision record: [ADR-030](../decisions/ADR-030-caster-audio-devices-installed-from-plays-on.md).)*
+
+**Scope:** Caster's own HAL plug-in `CasterAudio.driver` (devices "Caster Audio" and "Caster Mic"; source and build in `apps/desktop-native/caster-audio/`), carried in the receiver's bundle and installed from the Caster half of each track's **Plays on** choice with macOS's password dialog (frames 08–09 of `designs/desktop-signal-deck.figcraft`). The install removes the Electron receiver's `ZeroFrictionAudio.driver`; the native receiver no longer falls back to the Zero-Friction devices. An output that stops calling back (a `coreaudiod` restart) reopens by itself. The plug-in's ring no longer replays old audio when a capture starts.
+
+**Checked:** `cargo test --lib` 103 passed, 2 ignored. On the device: install from scratch from the deck, both devices carrying the live cast, each track digitally silent on the other's device, sound back within ~1.5 s of a `coreaudiod` restart mid-cast, no old audio on a new capture — numbers in ADR-030 *Verified*. **Not checked:** OBS capturing the devices; the failed path; keyboard focus and VoiceOver on the tooltip; an Intel Mac.
+
 ## Release v0.2.1 — a covered video window keeps rendering ✅ published (2026-11-11)
 
 A patch release for [#178](https://github.com/silogos/caster/issues/178) ([ADR-028](../decisions/ADR-028-a-covered-window-keeps-rendering.md)): tag `v0.2.1` on `main` (the merge of PR #181, CI green), `Caster-v0.2.1.apk` (versionCode 201, same release key and certificate as v0.1.0 and v0.2.0) and `Caster_0.2.1_aarch64.dmg`. The phone has no code change; its APK is rebuilt so both apps carry one number.
