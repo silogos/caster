@@ -36,6 +36,8 @@ static FACTORY: std::sync::OnceLock<PeerConnectionFactory> = std::sync::OnceLock
 /// main thread (Tauri setup).
 /// The DataChannel stats line cadence: 100 chunks of 10 ms = ~1 s.
 const DC_LOG_EVERY_CHUNKS: u64 = 100;
+/// The mic track's stats line: every 2 s of 10 ms frames.
+const MIC_LOG_EVERY_FRAMES: u64 = 200;
 
 /// A pause between two audio chunks this long is more than the phone's
 /// capture block (1 024 frames, 21 ms) can explain: a chunk came late.
@@ -171,9 +173,10 @@ impl MediaAnswerer {
         // A new offer replaces the session: close the previous connection,
         // and a new media session starts the ear output from a clean ring.
         self.close();
-        if self.role == PcId::Media {
-            crate::audio::reset_session();
-        }
+        crate::audio::reset_session(match self.role {
+            PcId::Media => crate::audio::Track::Game,
+            PcId::Mic => crate::audio::Track::Mic,
+        });
         let role = self.role;
         let kept_dc = Arc::clone(&self.game_audio_dc);
         pc.on_data_channel(Some(Box::new(move |dc: DataChannel| {
@@ -214,7 +217,7 @@ impl MediaAnswerer {
                 gaps.note(std::time::Instant::now());
                 crate::audio::feed_dc_pcm16(&msg.data);
                 if chunks % DC_LOG_EVERY_CHUNKS == 0 {
-                    let st = crate::audio::stats();
+                    let st = crate::audio::stats(crate::audio::Track::Game);
                     let (longest_gap_ms, long_gaps) = gaps.take();
                     log::info!(
                         target: "webrtc", "dc: {chunks} chunks, {} kB | audio underruns={} ({}ms silent) sheds={} depth={}ms trough={}ms out={}f/{:.1}ms played={} side={:.0}dB gap={longest_gap_ms}ms/{long_gaps}",
@@ -246,9 +249,36 @@ impl MediaAnswerer {
             let track = event.track;
             match track {
                 // The mic pc's track: separate from game audio end to end
-                // (AGENTS.md). Its playback output lands with the audio stage.
-                MediaStreamTrack::Audio(_) if role == PcId::Mic => {
-                    log::info!(target: "webrtc", "mic track arrived — not played yet (receiver mic output pending)");
+                // (AGENTS.md) — its own engine, ring and output (ADR-029).
+                MediaStreamTrack::Audio(audio) if role == PcId::Mic => {
+                    log::info!(target: "webrtc", "mic track arrived — feeding the mic engine");
+                    tauri::async_runtime::spawn(async move {
+                        use livekit::webrtc::audio_stream::native::NativeAudioStream;
+                        use futures_util::StreamExt as _;
+                        let mut stream = NativeAudioStream::new(audio, 48_000, 2);
+                        let mut frames: u64 = 0;
+                        // The loudest sample since the last line — a level in
+                        // dBFS, never the audio itself (AGENTS.md).
+                        let mut peak: u16 = 0;
+                        while let Some(frame) = stream.next().await {
+                            let mut bytes = Vec::with_capacity(frame.data.len() * 2);
+                            for sample in frame.data.iter() {
+                                peak = peak.max(sample.unsigned_abs());
+                                bytes.extend_from_slice(&sample.to_le_bytes());
+                            }
+                            crate::audio::feed_track_pcm16(crate::audio::Track::Mic, &bytes);
+                            frames += 1;
+                            if frames % MIC_LOG_EVERY_FRAMES == 0 {
+                                let st = crate::audio::stats(crate::audio::Track::Mic);
+                                let peak_dbfs = 20.0 * (f64::from(std::mem::take(&mut peak)).max(1.0) / 32_768.0).log10();
+                                log::info!(
+                                    target: "webrtc", "mic: {frames} frames | underruns={} ({}ms silent) sheds={} depth={}ms trough={}ms peak={peak_dbfs:.0}dBFS",
+                                    st.underruns, st.starved_ms, st.sheds, st.depth_ms, st.floor_ms
+                                );
+                            }
+                        }
+                        log::info!(target: "webrtc", "mic track stream ended");
+                    });
                 }
                 MediaStreamTrack::Video(video) => {
                     if crate::latency_probe::enabled() {
@@ -268,7 +298,7 @@ impl MediaAnswerer {
                             for sample in frame.data.iter() {
                                 bytes.extend_from_slice(&sample.to_le_bytes());
                             }
-                            crate::audio::feed_track_pcm16(&bytes);
+                            crate::audio::feed_track_pcm16(crate::audio::Track::Game, &bytes);
                         }
                         log::info!(target: "webrtc", "audio track stream ended");
                     });
@@ -551,7 +581,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
             let _ = app.run_on_main_thread(move || {
                 // The window's own close button: silence the sound, update the UI.
                 if crate::video::refresh_visibility() {
-                    crate::audio::set_output_enabled(false);
+                    crate::audio::set_window_open(false);
                     crate::tray::sync_dock_icon(&poll_app);
                     let _ = poll_app.emit("video:window", json!({ "open": false }));
                 }

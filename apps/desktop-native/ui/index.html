@@ -124,6 +124,21 @@
       input[type="range"] { width: 100%; accent-color: var(--signal); }
       .volume { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
       .volume-value { font-family: var(--mono); font-size: 12px; color: var(--muted); width: 52px; text-align: right; }
+      .output-row { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+      .output-row .row-title { flex: 1; }
+      .segmented {
+        display: flex; width: 300px; max-width: 60%; padding: 3px; gap: 0; border-radius: 10px;
+        background: var(--well); border: 1px solid var(--hairline);
+      }
+      .segmented button {
+        flex: 1; height: 30px; border: none; border-radius: 8px; background: none; cursor: pointer;
+        font: 600 14px var(--body); color: var(--muted);
+      }
+      .segmented button.on { color: #062a24; background: linear-gradient(180deg, var(--signal-top), var(--signal-bottom)); }
+      .segmented button:disabled { cursor: default; color: var(--faint); }
+      .output-note { text-align: right; min-height: 0; }
+      .output-note:empty { display: none; }
+      .divider { height: 1px; background: var(--hairline); margin: 16px 0 6px; }
       .switch {
         width: 52px; height: 30px; border-radius: 999px; border: none; cursor: pointer; position: relative;
         background: #2a313a; flex: none;
@@ -183,7 +198,7 @@
         </div>
 
         <button id="video-toggle" class="btn btn-primary">Open video</button>
-        <div class="hint">Video and sound play while the video window is open.</div>
+        <div class="hint">Video plays while the video window is open.</div>
 
         <div class="card">
           <div class="card-head"><span class="label">Status</span></div>
@@ -192,7 +207,7 @@
             <span id="readout" class="readout">Waiting for the cast</span>
           </div>
           <div class="chips">
-            <span id="chip-game" class="chip">Game audio</span>
+            <span id="chip-game" class="chip">Audio</span>
             <span id="chip-mic" class="chip">Mic</span>
           </div>
         </div>
@@ -202,15 +217,46 @@
           <div class="row">
             <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15 12h.01M18 13h.01"/></svg></div>
             <div style="flex: 1">
-              <div class="row-title">Game audio</div>
-              <div id="game-sub" class="row-sub">Plays while the video window is open.</div>
+              <div class="row-title">Audio</div>
+              <div id="game-sub" class="row-sub">Plays while the video window is open or Syphon is on.</div>
             </div>
-            <button id="game-switch" class="switch on" aria-label="Game audio on/off"></button>
+            <button id="game-switch" class="switch on" aria-label="Audio on/off"></button>
           </div>
           <div class="volume">
-            <input id="game-volume" type="range" min="0" max="100" step="1" aria-label="Game audio volume" />
+            <input id="game-volume" type="range" min="0" max="100" step="1" aria-label="Audio volume" />
             <span id="game-volume-value" class="volume-value"></span>
           </div>
+          <div class="output-row">
+            <span class="row-title">Plays on</span>
+            <div id="game-plays-on" class="segmented" role="radiogroup" aria-label="Audio plays on">
+              <button data-plays-on="speaker" role="radio">Speaker</button>
+              <button data-plays-on="caster" role="radio">Caster Audio</button>
+            </div>
+          </div>
+          <div id="game-plays-on-note" class="row-sub output-note"></div>
+
+          <div class="divider"></div>
+
+          <div class="row">
+            <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>
+            <div style="flex: 1">
+              <div class="row-title">Mic</div>
+              <div class="row-sub">The phone's mic — its own track, never mixed with the audio.</div>
+            </div>
+            <button id="mic-switch" class="switch" aria-label="Mic on/off"></button>
+          </div>
+          <div class="volume">
+            <input id="mic-volume" type="range" min="0" max="100" step="1" aria-label="Mic volume" />
+            <span id="mic-volume-value" class="volume-value"></span>
+          </div>
+          <div class="output-row">
+            <span class="row-title">Plays on</span>
+            <div id="mic-plays-on" class="segmented" role="radiogroup" aria-label="Mic plays on">
+              <button data-plays-on="speaker" role="radio">Speaker</button>
+              <button data-plays-on="caster" role="radio">Caster Mic</button>
+            </div>
+          </div>
+          <div id="mic-plays-on-note" class="row-sub output-note"></div>
         </div>
 
         <div class="card">

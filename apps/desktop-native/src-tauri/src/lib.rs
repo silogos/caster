@@ -62,7 +62,7 @@ fn open_video(app: tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
         video::open_video_window();
-        audio::set_output_enabled(true);
+        audio::set_window_open(true);
         tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
     })
@@ -75,7 +75,7 @@ fn close_video(app: tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
         video::close_video_window();
-        audio::set_output_enabled(false);
+        audio::set_window_open(false);
         tray::sync_dock_icon(&handle);
         let _ = handle.emit("video:window", serde_json::json!({ "open": false }));
     })
@@ -84,7 +84,7 @@ fn close_video(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn receiver_settings(controls: tauri::State<'_, ReceiverControls>) -> Result<settings::ReceiverSettings, String> {
-    controls.current.lock().map(|s| *s).map_err(|_| "settings unavailable".into())
+    controls.current.lock().map(|s| s.clone()).map_err(|_| "settings unavailable".into())
 }
 
 /// Game volume / mute. Applied at once; `persist` saves it (the slider
@@ -97,14 +97,14 @@ fn set_game_audio(
     persist: bool,
 ) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
-    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted, ..*current };
-    audio::set_game_gain(current.effective_game_gain());
+    *current = settings::ReceiverSettings { game_volume: volume.clamp(0.0, 1.0), game_muted: muted, ..current.clone() };
+    audio::set_gain(audio::Track::Game, current.effective_game_gain());
     if persist {
         if let Err(e) = settings::save(&controls.path, &current) {
             log::warn!(target: "settings", "not saved: {e}");
         }
     }
-    Ok(*current)
+    Ok(current.clone())
 }
 
 /// The Syphon output for OBS (ADR-021) — a receiver control. The saved
@@ -114,10 +114,89 @@ fn set_game_audio(
 fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
     current.syphon_output = syphon::set_enabled(enabled);
+    audio::set_syphon_on(current.syphon_output);
     if let Err(e) = settings::save(&controls.path, &current) {
         log::warn!(target: "settings", "not saved: {e}");
     }
-    Ok(*current)
+    Ok(current.clone())
+}
+
+/// Mic volume / mute — the mic's own, never the game audio's (ADR-003).
+#[tauri::command]
+fn set_mic_audio(
+    controls: tauri::State<'_, ReceiverControls>,
+    volume: f32,
+    muted: bool,
+    persist: bool,
+) -> Result<settings::ReceiverSettings, String> {
+    let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
+    *current = settings::ReceiverSettings { mic_volume: volume.clamp(0.0, 1.0), mic_muted: muted, ..current.clone() };
+    audio::set_gain(audio::Track::Mic, current.effective_mic_gain());
+    if persist {
+        if let Err(e) = settings::save(&controls.path, &current) {
+            log::warn!(target: "settings", "not saved: {e}");
+        }
+    }
+    Ok(current.clone())
+}
+
+/// Points a track's engine at its output: the system default, or its Caster
+/// virtual device. Returns whether the choice could be honored (a Caster
+/// device that is not installed plays on the speaker instead).
+fn apply_plays_on(track: audio::Track, choice: settings::PlaysOn) -> bool {
+    let (device, honored) = match choice {
+        settings::PlaysOn::Speaker => (None, true),
+        settings::PlaysOn::Caster => match audio::caster_device(track) {
+            Some(name) => (Some(name), true),
+            None => (None, false),
+        },
+    };
+    if !honored {
+        log::warn!(target: "audio", "{track:?}: no Caster device installed — playing on the speaker");
+    }
+    audio::set_output_device(track, device);
+    honored
+}
+
+/// Which Caster virtual devices this Mac has (null: not installed), for the
+/// "Plays on" choices.
+#[tauri::command]
+fn caster_devices() -> Value {
+    serde_json::json!({
+        "audio": audio::caster_device(audio::Track::Game),
+        "mic": audio::caster_device(audio::Track::Mic),
+    })
+}
+
+/// Where a track plays (ADR-029): `track` is "audio" or "mic", `playsOn`
+/// "speaker" or "caster". A receiver control, saved at once.
+#[tauri::command]
+fn set_plays_on(
+    controls: tauri::State<'_, ReceiverControls>,
+    track: String,
+    plays_on: settings::PlaysOn,
+) -> Result<settings::ReceiverSettings, String> {
+    let which = match track.as_str() {
+        "audio" => audio::Track::Game,
+        "mic" => audio::Track::Mic,
+        other => return Err(format!("unknown track {other:?}")),
+    };
+    let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
+    if !apply_plays_on(which, plays_on) {
+        // Not installed: keep the speaker and say so; nothing is saved.
+        let previous = if which == audio::Track::Game { current.game_plays_on } else { current.mic_plays_on };
+        apply_plays_on(which, previous);
+        return Err("not installed".into());
+    }
+    match which {
+        audio::Track::Game => current.game_plays_on = plays_on,
+        audio::Track::Mic => current.mic_plays_on = plays_on,
+    }
+    log::info!(target: "audio", "{which:?} plays on: {plays_on:?}");
+    if let Err(e) = settings::save(&controls.path, &current) {
+        log::warn!(target: "settings", "not saved: {e}");
+    }
+    Ok(current.clone())
 }
 
 #[tauri::command]
@@ -201,8 +280,12 @@ pub fn run() {
             let trusted_at_launch = pairing::read_trust(&paths.trust).is_some();
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
-            audio::set_game_gain(saved.effective_game_gain());
+            audio::set_gain(audio::Track::Game, saved.effective_game_gain());
+            audio::set_gain(audio::Track::Mic, saved.effective_mic_gain());
             let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && syphon::set_enabled(true), ..saved };
+            audio::set_syphon_on(saved.syphon_output);
+            apply_plays_on(audio::Track::Game, saved.game_plays_on);
+            apply_plays_on(audio::Track::Mic, saved.mic_plays_on);
             app.manage(ReceiverControls { path: settings_path, current: Mutex::new(saved) });
             // The first session exists before the window can ask for it.
             let mut store = pairing::SessionStore::new(pairing::SESSION_TTL_SECONDS);
@@ -251,6 +334,9 @@ pub fn run() {
             receiver_settings,
             set_game_audio,
             set_syphon_output,
+            set_mic_audio,
+            caster_devices,
+            set_plays_on,
             open_video,
             close_video
         ])

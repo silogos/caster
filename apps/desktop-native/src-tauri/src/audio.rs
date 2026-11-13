@@ -1,5 +1,9 @@
-//! The game-audio ear output — ADR-014 Fase A's engine, embedded in the
-//! native receiver. Two sources can feed it, never both at once:
+//! The ear outputs — ADR-014 Fase A's engine, embedded in the native
+//! receiver. There is one engine per track, never mixed (ADR-003): the
+//! game audio and the phone's mic each have their own ring, playout and
+//! output device ([`Track`], ADR-029). The mic's only source is its own
+//! pc's Opus track. Two sources can feed the game-audio engine, never both
+//! at once:
 //!
 //! - the `game-audio` DataChannel's raw PCM16LE (10 ms stereo @48 kHz) —
 //!   the true-stereo primary (ADR-012);
@@ -25,7 +29,7 @@
 //! otherwise channel mapping + linear resampling (44.1 kHz DACs, 16/24 kHz
 //! Bluetooth HFP). Never logs samples (AGENTS.md) — counters and dB only.
 
-use std::sync::atomic::{AtomicI16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -203,61 +207,161 @@ impl Playout {
     }
 }
 
+/// The two tracks the receiver plays — separate end to end (ADR-003).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Track {
+    Game,
+    Mic,
+}
+
+impl Track {
+    fn label(self) -> &'static str {
+        match self {
+            Track::Game => "audio",
+            Track::Mic => "mic",
+        }
+    }
+}
+
 struct Engine {
+    track: Track,
     ring: Arc<Ring>,
     producer: Mutex<Producer>,
     /// Side/mid energy (i16²·frames) of the DataChannel PCM for the 1 Hz
     /// stereo meter: side ≈ −∞ while the wire carries L = R.
     stereo_energy: Mutex<(f64, f64)>,
-    /// The receiver's game-audio level (0.0–1.0, mute = 0) as f32 bits —
+    /// The receiver's level for this track (0.0–1.0, mute = 0) as f32 bits —
     /// a receiver/environment control, never a cast setting (AGENTS.md).
     gain_bits: AtomicU32,
-    /// Sound plays only while the video window is open (product choice,
-    /// 2026-11-09): the ring keeps draining either way, so opening the
-    /// window is instant and never replays a backlog.
-    output_enabled: std::sync::atomic::AtomicBool,
-    output: OnceLock<Option<Output>>,
+    /// The output stream and the device it should play on; replaced when
+    /// the user picks another device.
+    output: Mutex<OutputSlot>,
+    /// Set when the output must be (re)opened by the next fed chunk.
+    output_stale: AtomicBool,
 }
 
-fn engine() -> &'static Engine {
-    static ENGINE: OnceLock<Engine> = OnceLock::new();
-    ENGINE.get_or_init(|| Engine {
-        ring: Arc::new(Ring::new()),
-        producer: Mutex::new(Producer { active: None, last_dc: None }),
-        stereo_energy: Mutex::new((0.0, 0.0)),
-        gain_bits: AtomicU32::new(1.0f32.to_bits()),
-        output_enabled: std::sync::atomic::AtomicBool::new(false),
-        output: OnceLock::new(),
-    })
+/// The playing stream and the device asked for.
+struct OutputSlot {
+    wanted: Option<String>,
+    stream: Option<Output>,
 }
 
-/// Sets the game-audio output level (clamped to 0.0–1.0); takes effect on
-/// the next callback. Mute is a gain of 0 — the stats keep counting.
-pub fn set_game_gain(gain: f32) {
+impl Engine {
+    fn new(track: Track) -> Self {
+        Self {
+            track,
+            ring: Arc::new(Ring::new()),
+            producer: Mutex::new(Producer { active: None, last_dc: None }),
+            stereo_energy: Mutex::new((0.0, 0.0)),
+            gain_bits: AtomicU32::new(1.0f32.to_bits()),
+            output: Mutex::new(OutputSlot { wanted: None, stream: None }),
+            output_stale: AtomicBool::new(true),
+        }
+    }
+
+    /// The gain the callback applies now.
+    fn current_gain(&self) -> f32 {
+        let showing = sound_plays(WINDOW_OPEN.load(Ordering::Relaxed), SYPHON_ON.load(Ordering::Relaxed));
+        output_gain(f32::from_bits(self.gain_bits.load(Ordering::Relaxed)), showing)
+    }
+}
+
+fn engine(track: Track) -> &'static Engine {
+    static GAME: OnceLock<Engine> = OnceLock::new();
+    static MIC: OnceLock<Engine> = OnceLock::new();
+    match track {
+        Track::Game => GAME.get_or_init(|| Engine::new(Track::Game)),
+        Track::Mic => MIC.get_or_init(|| Engine::new(Track::Mic)),
+    }
+}
+
+/// Sound plays while the video window is open or the Syphon output is on —
+/// something on this Mac is showing the cast (ADR-029); both tracks follow.
+/// The rings keep draining either way, so turning either on is instant and
+/// never replays a backlog.
+static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+static SYPHON_ON: AtomicBool = AtomicBool::new(false);
+
+/// Sets a track's output level (clamped to 0.0–1.0); takes effect on the
+/// next callback. Mute is a gain of 0 — the stats keep counting.
+pub fn set_gain(track: Track, gain: f32) {
     let gain = if gain.is_finite() { gain.clamp(0.0, 1.0) } else { 1.0 };
-    engine().gain_bits.store(gain.to_bits(), Ordering::Relaxed);
+    engine(track).gain_bits.store(gain.to_bits(), Ordering::Relaxed);
 }
 
-/// Opens (`true`) or closes the ear output — it follows the video window.
-pub fn set_output_enabled(enabled: bool) {
-    engine().output_enabled.store(enabled, Ordering::Relaxed);
+/// The video window opened (`true`) or closed.
+pub fn set_window_open(open: bool) {
+    WINDOW_OPEN.store(open, Ordering::Relaxed);
 }
 
-fn game_gain() -> f32 {
-    let e = engine();
-    output_gain(f32::from_bits(e.gain_bits.load(Ordering::Relaxed)), e.output_enabled.load(Ordering::Relaxed))
+/// The Syphon output turned on (`true`) or off.
+pub fn set_syphon_on(on: bool) {
+    SYPHON_ON.store(on, Ordering::Relaxed);
 }
 
-/// The gain the callback applies: the user's level, or silence while the
-/// video window is closed.
-fn output_gain(level: f32, enabled: bool) -> f32 {
-    if enabled { level } else { 0.0 }
+/// Sound goes with the picture: it plays while the video window or the
+/// Syphon output shows the cast.
+fn sound_plays(window_open: bool, syphon_on: bool) -> bool {
+    window_open || syphon_on
 }
 
-/// A new media session: drop the previous session's audio and its source
-/// choice, so the next cast starts from a clean, primed ring.
-pub fn reset_session() {
-    let e = engine();
+/// The gain the callback applies: the user's level, or silence while
+/// nothing shows the cast.
+fn output_gain(level: f32, plays: bool) -> f32 {
+    if plays { level } else { 0.0 }
+}
+
+/// Plays a track on the output device named `device` (`None`: the system
+/// default). The running stream stops now; the next chunk opens the new
+/// one from a flushed ring, so the switch never replays a backlog.
+pub fn set_output_device(track: Track, device: Option<String>) {
+    let e = engine(track);
+    let mut slot = e.output.lock().expect("audio output");
+    if slot.wanted == device && slot.stream.is_some() {
+        return;
+    }
+    slot.stream = None;
+    slot.wanted = device;
+    e.ring.request_flush();
+    e.output_stale.store(true, Ordering::Release);
+}
+
+/// Each track's own virtual device for OBS, best name first: Caster's
+/// devices, then the Electron receiver's ADR-008 devices they replace. Never
+/// one shared device — the two tracks stay apart (ADR-003).
+const CASTER_AUDIO_DEVICES: [&str; 2] = ["Caster Audio", "Zero-Friction Game Audio"];
+const CASTER_MIC_DEVICES: [&str; 2] = ["Caster Mic", "Zero-Friction Mic"];
+
+/// The installed virtual device for a track, if any.
+pub fn caster_device(track: Track) -> Option<String> {
+    let names = output_device_names();
+    pick_caster_device(track, &names)
+}
+
+fn pick_caster_device(track: Track, installed: &[String]) -> Option<String> {
+    let wanted: &[&str] = match track {
+        Track::Game => &CASTER_AUDIO_DEVICES,
+        Track::Mic => &CASTER_MIC_DEVICES,
+    };
+    wanted.iter().find(|w| installed.iter().any(|n| n == *w)).map(|w| (*w).to_string())
+}
+
+/// The names of this Mac's output devices, for the receiver's picker.
+pub fn output_device_names() -> Vec<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    cpal::default_host()
+        .output_devices()
+        .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_else(|e| {
+            log::warn!(target: "audio", "cannot list output devices: {e}");
+            Vec::new()
+        })
+}
+
+/// A new session for a track: drop the previous session's audio and its
+/// source choice, so the next cast starts from a clean, primed ring.
+pub fn reset_session(track: Track) {
+    let e = engine(track);
     let mut p = e.producer.lock().expect("audio producer");
     *p = Producer { active: None, last_dc: None };
     e.ring.request_flush();
@@ -268,15 +372,16 @@ pub fn reset_session() {
     *e.stereo_energy.lock().expect("stereo energy") = (0.0, 0.0);
 }
 
-/// One DataChannel PCM16LE chunk (the stereo primary).
+/// One DataChannel PCM16LE chunk (the game audio's stereo primary).
 pub fn feed_dc_pcm16(chunk: &[u8]) {
     meter_stereo(chunk);
-    feed(Source::DataChannel, chunk);
+    feed(Track::Game, Source::DataChannel, chunk);
 }
 
-/// One chunk of the fallback track's decoded PCM16 (48 kHz stereo).
-pub fn feed_track_pcm16(chunk: &[u8]) {
-    feed(Source::Track, chunk);
+/// One chunk of a track's decoded PCM16 (48 kHz stereo): the game audio's
+/// fallback track, or the mic.
+pub fn feed_track_pcm16(track: Track, chunk: &[u8]) {
+    feed(track, Source::Track, chunk);
 }
 
 /// What the producer does with one chunk.
@@ -301,9 +406,9 @@ fn admit(p: &mut Producer, source: Source, now: Instant) -> Admit {
     Admit::Push { switched }
 }
 
-fn feed(source: Source, chunk: &[u8]) {
-    let e = engine();
-    if crate::latency_probe::enabled() {
+fn feed(track: Track, source: Source, chunk: &[u8]) {
+    let e = engine(track);
+    if track == Track::Game && crate::latency_probe::enabled() {
         probe_onset(chunk);
     }
     {
@@ -312,14 +417,14 @@ fn feed(source: Source, chunk: &[u8]) {
             Admit::Drop => return,
             Admit::Push { switched } => {
                 if switched {
-                    log::info!(target: "audio", "source switch → {source:?} — flushing the ring");
+                    log::info!(target: "audio", "{}: source switch → {source:?} — flushing the ring", track.label());
                     e.ring.request_flush();
                 }
                 e.ring.push(chunk);
             }
         }
     }
-    ensure_output();
+    ensure_output(e);
 }
 
 /// Latency probe: logs a test beep's arrival with the ring depth ahead of it
@@ -329,7 +434,7 @@ fn probe_onset(chunk: &[u8]) {
     let now = crate::latency_probe::wall_ms();
     let onset = MARKER.lock().map(|mut m| m.observe(crate::latency_probe::peak_pcm16(chunk), now / 1000.0)).unwrap_or(false);
     if onset {
-        log::info!(target: "latency", "audio beep arrived_ms={now:.1} ring_ms={}", stats().depth_ms);
+        log::info!(target: "latency", "audio beep arrived_ms={now:.1} ring_ms={}", stats(Track::Game).depth_ms);
     }
 }
 
@@ -341,7 +446,7 @@ fn meter_stereo(chunk: &[u8]) {
         side += (l - r) * (l - r);
         mid += ((l + r) * 0.5) * ((l + r) * 0.5);
     }
-    let mut e = engine().stereo_energy.lock().expect("stereo energy");
+    let mut e = engine(Track::Game).stereo_energy.lock().expect("stereo energy");
     e.0 += side;
     e.1 += mid;
 }
@@ -349,7 +454,7 @@ fn meter_stereo(chunk: &[u8]) {
 /// Side-vs-mid level of the DataChannel PCM since the last call, in dB
 /// (≈ −∞ for L = R; +6 dB for one dead channel).
 pub fn take_side_db() -> f64 {
-    let (side, mid) = std::mem::take(&mut *engine().stereo_energy.lock().expect("stereo energy"));
+    let (side, mid) = std::mem::take(&mut *engine(Track::Game).stereo_energy.lock().expect("stereo energy"));
     10.0 * (side + 1.0).log10() - 10.0 * (mid + 1.0).log10()
 }
 
@@ -370,8 +475,8 @@ pub struct Stats {
     pub device_delay_ms: f64,
 }
 
-pub fn stats() -> Stats {
-    let ring = &engine().ring;
+pub fn stats(track: Track) -> Stats {
+    let ring = &engine(track).ring;
     let depth = ring.head.load(Ordering::Relaxed).saturating_sub(ring.tail.load(Ordering::Relaxed));
     Stats {
         underruns: ring.underruns.load(Ordering::Relaxed),
@@ -393,29 +498,74 @@ struct Output(#[allow(dead_code)] cpal::Stream);
 unsafe impl Send for Output {}
 unsafe impl Sync for Output {}
 
-/// Opens the output once, on the first fed chunk.
-fn ensure_output() {
-    engine().output.get_or_init(open_output);
+/// Dropping a cpal 0.15 CoreAudio stream does not stop it: its
+/// device-disconnect listener keeps a strong clone of the stream, so the
+/// audio unit outlives the handle and its callback keeps draining the ring.
+/// Found live (2026-11-13): after a few output switches every old stream
+/// was still pulling from the ring — ~200 underruns a second, garbled
+/// sound. Pausing stops the callback; the leaked unit then idles.
+impl Drop for Output {
+    fn drop(&mut self) {
+        use cpal::traits::StreamTrait;
+        if let Err(e) = self.0.pause() {
+            log::warn!(target: "audio", "old output did not stop: {e}");
+        }
+    }
 }
 
-fn open_output() -> Option<Output> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    let device = cpal::default_host().default_output_device().or_else(|| {
-        log::error!(target: "audio", "no output device — game audio disabled");
+/// Opens the output on the first fed chunk, and again after the device
+/// changed. One attempt per change: a device that fails stays silent
+/// rather than retrying on every chunk.
+fn ensure_output(e: &'static Engine) {
+    if !e.output_stale.load(Ordering::Acquire) {
+        return;
+    }
+    let Ok(mut slot) = e.output.try_lock() else { return };
+    if !e.output_stale.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    let wanted = slot.wanted.clone();
+    slot.stream = open_output(e, wanted.as_deref());
+}
+
+/// The device named `wanted`, or the system default when it is `None` or
+/// no longer present (a virtual device uninstalled, a USB DAC unplugged).
+fn find_output_device(wanted: Option<&str>) -> Option<cpal::Device> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    if let Some(name) = wanted {
+        let found = host
+            .output_devices()
+            .ok()
+            .and_then(|mut devices| devices.find(|d| d.name().is_ok_and(|n| n == name)));
+        if found.is_some() {
+            return found;
+        }
+        log::warn!(target: "audio", "output \"{name}\" not found — playing on the system default");
+    }
+    host.default_output_device()
+}
+
+fn open_output(e: &'static Engine, wanted: Option<&str>) -> Option<Output> {
+    use cpal::traits::{DeviceTrait, StreamTrait};
+    let track = e.track.label();
+    let device = find_output_device(wanted).or_else(|| {
+        log::error!(target: "audio", "{track}: no output device — not played");
         None
     })?;
+    let name = device.name().unwrap_or_default();
     let config = choose_config(&device)?;
     let out_channels = usize::from(config.channels.max(1));
     let step = f64::from(SOURCE_RATE_HZ) / f64::from(config.sample_rate.0);
     log::info!(
-        target: "audio", "output: {} ({} Hz, {} ch){}",
-        device.name().unwrap_or_default(),
+        target: "audio", "{track} output: {} ({} Hz, {} ch){}",
+        name,
         config.sample_rate.0,
         out_channels,
         if (step - 1.0).abs() > f64::EPSILON || out_channels != SOURCE_CHANNELS { " — converting" } else { "" }
     );
     let build = |config: &cpal::StreamConfig| {
-        let ring = Arc::clone(&engine().ring);
+        let ring = Arc::clone(&e.ring);
         let mut state = Playout::new();
         device.build_output_stream(
             config,
@@ -424,9 +574,9 @@ fn open_output() -> Option<Output> {
                 if let Some(delay) = stamp.playback.duration_since(&stamp.callback) {
                     ring.device_delay_us.store(delay.as_micros() as u64, Ordering::Relaxed);
                 }
-                render(&ring, &mut state, data, out_channels, step, game_gain());
+                render(&ring, &mut state, data, out_channels, step, e.current_gain());
             },
-            |error| log::warn!(target: "audio", "output stream error: {error}"),
+            move |error| log::warn!(target: "audio", "{track} output stream error: {error}"),
             None,
         )
     };
@@ -911,5 +1061,69 @@ mod tests {
         assert_eq!(output_gain(0.8, false), 0.0);
         assert_eq!(output_gain(0.8, true), 0.8);
         assert_eq!(output_gain(0.0, true), 0.0, "mute stays mute with the window open");
+    }
+
+    /// Needs two output devices other than the system default (muted:
+    /// nothing is heard) — a stream opened on a device by name is the kind
+    /// cpal leaks. Feeds audio at the wire's pace and switches between them:
+    /// a stream that kept running after its switch drains the ring alongside
+    /// the new one and starves it (without the pause on drop: 400 underruns
+    /// in 2 s; with it: 0).
+    /// `cargo test --lib audio::tests::switching_outputs_leaves_one_stream -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn switching_outputs_leaves_one_stream() {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let default = cpal::default_host().default_output_device().and_then(|d| d.name().ok());
+        let named: Vec<String> = output_device_names().into_iter().filter(|n| Some(n) != default.as_ref()).collect();
+        let [a, b, ..] = named.as_slice() else {
+            println!("needs two non-default output devices, found {named:?} — skipped");
+            return;
+        };
+        set_gain(Track::Game, 0.0);
+        let chunk = pcm(&vec![(1_000, -1_000); 480]); // 10 ms
+        let feed_for = |ms: u64| {
+            let start = Instant::now();
+            for i in 0..ms / 10 {
+                feed_dc_pcm16(&chunk);
+                let due = start + Duration::from_millis((i + 1) * 10);
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            }
+        };
+        feed_for(500);
+        for _ in 0..4 {
+            set_output_device(Track::Game, Some(a.clone()));
+            feed_for(250);
+            set_output_device(Track::Game, Some(b.clone()));
+            feed_for(250);
+        }
+        let before = engine(Track::Game).ring.underruns.load(Ordering::Relaxed);
+        let starved_before = engine(Track::Game).ring.starved_frames.load(Ordering::Relaxed);
+        feed_for(2_000);
+        let underruns = engine(Track::Game).ring.underruns.load(Ordering::Relaxed) - before;
+        let starved_ms = (engine(Track::Game).ring.starved_frames.load(Ordering::Relaxed) - starved_before) / 48;
+        println!("8 switches between {a:?} and {b:?}, then 2 s of audio: {underruns} underruns, {starved_ms} ms starved");
+        assert!(underruns <= 2, "one consumer: a steady feed does not starve ({underruns} underruns, {starved_ms} ms)");
+    }
+
+    #[test]
+    fn each_track_gets_its_own_caster_device() {
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let old = names(&["MacBook Pro Speakers", "Zero-Friction Game Audio", "Zero-Friction Mic", "BlackHole 2ch"]);
+        assert_eq!(pick_caster_device(Track::Game, &old).as_deref(), Some("Zero-Friction Game Audio"));
+        assert_eq!(pick_caster_device(Track::Mic, &old).as_deref(), Some("Zero-Friction Mic"));
+        let both = names(&["Zero-Friction Game Audio", "Caster Audio", "Caster Mic"]);
+        assert_eq!(pick_caster_device(Track::Game, &both).as_deref(), Some("Caster Audio"), "Caster's own name wins");
+        let shared_only = names(&["MacBook Pro Speakers", "BlackHole 2ch"]);
+        assert_eq!(pick_caster_device(Track::Game, &shared_only), None, "never a shared cable: the tracks would mix");
+        assert_eq!(pick_caster_device(Track::Mic, &shared_only), None);
+    }
+
+    #[test]
+    fn sound_plays_while_the_window_or_syphon_shows_the_cast() {
+        assert!(!sound_plays(false, false), "nothing shows the cast: silent");
+        assert!(sound_plays(true, false), "the video window");
+        assert!(sound_plays(false, true), "Syphon with the window closed — OBS still gets the sound");
+        assert!(sound_plays(true, true));
     }
 }

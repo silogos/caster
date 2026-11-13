@@ -14,13 +14,13 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `pairing.rs` | QR session store (pending → authorized → closed, expiry, `busy`, host-change regeneration), trust store, persistent `desktopId`, HMAC/HKDF. No sockets. | filesystem |
 | `signaling.rs` | The WebSocket server: handshake, heartbeat, rate limit, routing by `pc`. Media lives behind the `SignalingHost` trait. | `protocol`, `pairing`, host |
 | `webrtc.rs` | One `MediaAnswerer` **per pc** (`media`, `mic`): answer, ICE both ways, the `game-audio` DataChannel, the fallback track, the video frame loop. | `audio`, `video` |
-| `audio.rs` | The game-audio ear path: source selection, ring, CPAL playout. | CoreAudio |
+| `audio.rs` | The ear paths, one engine per track (game audio, mic): source selection, ring, CPAL playout, the output device. | CoreAudio |
 | `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
 | `syphon.rs` + `native/syphon_bridge.m` | The Syphon output for OBS: a publisher thread that releases each frame at its due time, and the Objective-C bridge that converts the frame's pixel buffer on the GPU and publishes it (ADR-021). | `video`, Metal, Core Image, `Syphon.framework` |
 | `pacing.rs` | When each frame shows: a schedule with a bounded 50 ms delay that evens out Wi-Fi delivery jitter (ADR-017). Pure — no I/O. | — |
 | `latency_probe.rs` | Measurement only, off unless `ZFC_LATENCY_PROBE=1`: marks when the latency test pattern's flips are decoded and its clicks arrive ([latency-measurement.md](../development/latency-measurement.md)). | — |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` for more. | stderr |
-| `settings.rs` | The receiver's own persisted controls (game volume, mute, the Syphon output) — `native-receiver.json` beside the trust store. | filesystem |
+| `settings.rs` | The receiver's own persisted controls (per track: volume, mute, Plays on; the Syphon output) — `native-receiver.json` beside the trust store. | filesystem |
 | `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |
 | `power.rs` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected. | IOKit |
 
@@ -96,8 +96,8 @@ So the decoder buffer's pixel format is read before the I420 copy (`'420f'` and 
 
 The main window looks like the phone app (the *Signal Deck* tokens, `designs/preview/05-tokens.png`): a QR hero while nothing is paired, then **the deck** once a phone is — its name, a STANDBY / ON AIR / RECONNECTING annunciator, the cast's status (timecode, the phone's own `session-info` readout, game-audio/mic chips) and **Open video**. Only receiver/environment controls live here (*mobile controls, desktop receives*):
 
-- **Open video / Close video** — the native video window. **Video and sound play only while it is open** (product choice, 2026-11-09): the phone keeps sending, the decoder stays warm, so opening is instant; while closed no frame is converted or rendered and the ear output's gain is 0 (the ring keeps draining — opening never replays a backlog). Closing the window with its own button is noticed on the main thread and flips the UI and the sound the same way. The window stays open across casts until the user closes it. Cost, accepted for now: the phone encodes and the Mac decodes the full stream while nobody watches — an "idle mode" (ask the phone to pause/lower video while the window is closed) needs a protocol bump and is a candidate follow-up.
-- **Game audio** on/off and volume (0–100 %, linear like the Electron mixer), applied as the playout callback's gain, persisted on release.
+- **Open video / Close video** — the native video window. **Video plays only while it is open** (product choice, 2026-11-09); **sound plays while it is open or the Syphon output is on** ([ADR-029](../decisions/ADR-029-sound-follows-syphon-and-a-chosen-output.md), 2026-11-13 — before that sound followed the window alone, so Syphon with the window closed was silent). The phone keeps sending, the decoder stays warm, so opening is instant; while closed no frame is converted or rendered for the window, and with Syphon off too the ear output's gain is 0 (the ring keeps draining — opening never replays a backlog). Closing the window with its own button is noticed on the main thread and flips the UI and the sound the same way. The window stays open across casts until the user closes it. Cost, accepted for now: the phone encodes and the Mac decodes the full stream while nobody watches — an "idle mode" (ask the phone to pause/lower video while the window is closed) needs a protocol bump and is a candidate follow-up.
+- **Audio** and **Mic** — two tracks, each with on/off, volume and **Plays on: Speaker | Caster Audio** (or **Caster Mic**) ([ADR-029](../decisions/ADR-029-sound-follows-syphon-and-a-chosen-output.md)). Each track has its own engine (ring, playout, output) and is never mixed with the other (ADR-003). The mic starts muted (an upgrade from a receiver that never played it must not start unasked, and on the speaker the phone hears itself — an echo); the audio starts on. *Caster* is the track's own virtual device for OBS: `Caster Audio`/`Caster Mic`, or until those ship, the Electron receiver's `Zero-Friction Game Audio`/`Zero-Friction Mic`; never a shared cable. Not installed: the choice is disabled. A change stops the stream and flushes the ring; the next chunk opens the new device. One output per track: Caster means nothing of that track on the speakers.
 - **Disconnect** — the desktop's `bye forget` (pairing.md §bye forget): a two-step link (*Disconnect → Forget this phone?*) because it revokes the persistent pairing; works with the phone offline too. The UI returns to a fresh QR.
 - **New QR code** (QR hero) — regenerates the pending session; ignored while a phone is connected.
 
@@ -116,7 +116,7 @@ Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` 
 ## Known limitations
 
 - macOS only (the video module).
-- Not yet ported from Electron: microphone playback (the `mic` pc is answered and connected, its track not played), audio routing (proto 2), launch at login, frameless window / session-info window.
+- Not yet ported from Electron: audio routing from the phone (proto 2; the receiver's own **Plays on** choices cover it, ADR-029), installing the virtual devices (Caster Audio/Mic), speakers and a virtual device at once (ADR-029 keeps one output), launch at login, frameless window / session-info window.
 - The virtual camera is Syphon only (OBS on the same Mac) and is switched on the receiver; the phone's proto-2 `vc-*` messages are not answered ([ADR-021](../decisions/ADR-021-native-syphon-output.md)).
 - ~0.7 % of video frames dropped at the pool bound (open).
 - The video abort fix held a 6.4-minute run with the window hidden most of the time (the aborts' trigger); longer sessions are still worth watching.
