@@ -92,7 +92,7 @@ class AccessibilityUiTest {
     fun `each switch row is one control that announces its own label`() {
         showHome()
         // Not a bare "Switch, on": the label and the state are one node.
-        compose.onNode(isToggleable() and hasText("Game audio")).assertExists()
+        compose.onNode(isToggleable() and hasText("Audio")).assertExists()
         compose.onNode(isToggleable() and hasText("Microphone")).assertExists()
         val switches = compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
             .fetchSemanticsNodes()
