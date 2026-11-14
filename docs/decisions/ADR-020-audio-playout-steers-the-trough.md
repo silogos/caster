@@ -4,7 +4,7 @@
 
 ## Context
 
-Game audio reaches the Mac ~150 ms after the phone's own speaker. About 120 ms of that is inside Android and out of reach ([latency-measurement.md](../development/latency-measurement.md)). The product owner asked for whatever the Mac side could still give.
+The debug click track reaches the Mac ~150 ms after the phone's own speaker. About 120 ms of that is inside Android and out of reach ([latency-measurement.md](../development/latency-measurement.md)). The product owner asked for whatever the Mac side could still give. *(Later, 2026-11-12: that figure belongs to the test track. A game's own sound and picture were measured within ±40 ms of each other in a real recording.)*
 
 The old playout held the *mean* ring depth at 40 ms. Two facts made that a poor handle:
 - The phone delivers audio in bursts, one per capture period (~21 ms, often two or three together), so the depth is a sawtooth. Arriving audio waited only ~28–30 ms, not 40. The mean says nothing about how close the low point comes to empty, and a phone with a different burst size would get a different safety margin from the same number.
