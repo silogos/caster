@@ -170,7 +170,7 @@ def audio_card(parent):
     """Home's Audio card: one switch per track, nothing else (how the game audio travels is the profile's)."""
     mono(parent, "AUDIO", 11, VARIANT, "Medium", spacing=1.1, line=14)
     audio = card(parent, "card · audio")
-    switch_row(audio, "Game audio", "Off silences the game audio, but its track stays part of the cast.", True,
+    switch_row(audio, "Audio", "Off silences the audio, but its track stays part of the cast.", True,
                glyph="gamepad")
     hairline(audio, CONTENT_W)
     switch_row(audio, "Microphone", "Off removes the microphone from the cast and frees it for the game's own "
@@ -283,7 +283,7 @@ field(enc, "Encoder fps limit", [("Off", True), ("15 fps", False), ("30 fps", Fa
 audio = card(p2, "card · audio")
 aud = vstack(audio, "audio", gap=16, pad=(14, 16, 16, 16), h="fill")
 mono(aud, "AUDIO", 11, VARIANT, "Medium", spacing=1.1, line=14)
-field(aud, "Low-latency game audio", [("Low latency", False), ("Standard", True)],
+field(aud, "Low-latency audio", [("Low latency", False), ("Standard", True)],
       hint="Low latency sends raw sound: the smallest delay for headphones, at a higher Wi-Fi bitrate.")
 actions = hstack(p2, "actions", main="spaceBetween", cross="center", h="fill")
 text_button(actions, "Duplicate")
@@ -365,7 +365,7 @@ for setting, home in (
     ("Automatic quality, Under network pressure", "The profile's Behaviour card, still two settings (P2)"),
     ("Encoder, H.264 profile, encoder fps limit", "The profile's Encoder card (P2)"),
     ("Preferred video codec", "The profile's Encoder card (P2)"),
-    ("Low-latency game audio", "The profile's Audio card (P2)"),
+    ("Low-latency audio", "The profile's Audio card (P2)"),
     ("Encoder in use", "Status, while casting (above)"),
     ("Bitrate mode", "Removed"),
 ):
@@ -550,7 +550,7 @@ for f, title, lines in (
                 "Behaviour keeps two settings: what WebRTC gives up under network pressure, and whether the app "
                 "may lower the picture in a thermal emergency.",
                 "The codec joins the H.264 profile it belongs with. No Bitrate mode: removed.",
-                "How the game audio travels (Low latency / Standard) is the profile's too.",
+                "How the audio travels (Low latency / Standard) is the profile's too.",
                 "The fps choices are the app's own (30 / 60)."]),
     (p3, "P3", ["Starts from the values on screen, or from any profile.",
                 "The strip shows what will be copied before it is created."]),

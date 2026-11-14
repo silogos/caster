@@ -99,7 +99,7 @@ for label, sel in (("Phone mic", True), ("Headset", False), ("USB mic", False)):
 badge(chips, 3, (-10, -10))
 
 audio = card(f2, "card · audio")
-row = switch_row(audio, "Game audio", "Off silences the game audio, but its track stays part of the cast.", True,
+row = switch_row(audio, "Audio", "Off silences the audio, but its track stays part of the cast.", True,
                  glyph="gamepad")
 nodes[row]["strokes"] = [solid(PRIMARY)]
 nodes[row]["stroke"] = stroke_spec(2.0)
@@ -120,7 +120,7 @@ for n, said, was, tone in [
     (1, "Advanced, Button", "unchanged", "good"),
     (2, "Preset, Selected, Tab, 1 of 2", "was: “Preset” — no state", "bad"),
     (3, "Phone mic, Selected, Radio button", "was: “Phone mic, Button” — no state", "bad"),
-    (4, "Game audio, Off silences the game audio…, Switch, On", "was: “Switch, on” — no label", "bad"),
+    (4, "Audio, Off silences the audio…, Switch, On", "was: “Switch, on” — no label", "bad"),
     (5, "Back, Button", "was: “Advanced, Button” — the screen title", "bad"),
 ]:
     entry = hstack(legend, f"entry {n}", gap=10, h="fill")

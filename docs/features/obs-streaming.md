@@ -14,7 +14,7 @@ The streamer's PC mixes more than the cast — donation alerts (Saweria and frie
 
 - Mixer routing **Both** (ears get the cast at full latency freshness; the cable device still fills for other uses).
 - OBS sources: **Desktop audio** (the alert sounds + the game, mixed exactly as you hear them) + **"Zero-Friction Mic"**. Do **not** add "Zero-Friction Game Audio".
-- With the mobile's **Low-latency game audio** toggle on ([game-audio.md](game-audio.md)), the game audio rides raw PCM (~1.5 Mbps wire) and lands with the smallest delay the pipeline can produce — A/V sync on the stream is then one small static per-source offset in OBS (dial it once against an on-screen clock; the paths are stable on a quiet LAN).
+- With the mobile's **Low-latency audio** toggle on ([game-audio.md](game-audio.md)), the game audio rides raw PCM (~1.5 Mbps wire) and lands with the smallest delay the pipeline can produce — A/V sync on the stream is then one small static per-source offset in OBS (dial it once against an on-screen clock; the paths are stable on a quiet LAN).
 - Trade-off: game vs alert volume in the stream follows the OS mix — no independent stream-side balance.
 
 **Config B — separate sources (only if you need independent game/alert volumes):**

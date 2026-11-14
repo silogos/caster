@@ -35,7 +35,7 @@ Product consequence (worth a UI affordance in Phase 13): the app cannot promise 
 
 - **5 s of sustained digital zero**, while the `media` PC is *connected* and the user has *not* muted → `Silent` ("This app's audio can't be captured");
 - one audible frame → back to `Active` — it recovers, never escalates to an error;
-- user mute → `Muted`; capture could not start/died → `Failed` ("Game audio isn't available for this cast"); not part of this cast (setting off or RECORD_AUDIO denied) → `Off` ("Game audio is off for this cast.").
+- user mute → `Muted`; capture could not start/died → `Failed` ("Audio isn't available for this cast."); not part of this cast (setting off or RECORD_AUDIO denied) → `Off` ("Audio is off for this cast.").
 
 Both screens render the state + controls while casting (`GameAudioControls`), alongside `CastState` as in Phase 6.
 

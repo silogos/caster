@@ -99,14 +99,14 @@
 
     <!-- Game audio (Phase 7) — simple, non-technical (AGENTS.md); the raw
          capture/permission detail stays in the service logs. -->
-    <string name="game_audio_off">Game audio is off for this cast.</string>
+    <string name="game_audio_off">Audio is off for this cast.</string>
     <string name="game_audio_cannot_capture">This app\'s audio can\'t be captured.</string>
-    <string name="game_audio_unavailable">Game audio isn\'t available for this cast.</string>
+    <string name="game_audio_unavailable">Audio isn\'t available for this cast.</string>
 
     <!-- Microphone (Phase 8) — simple, non-technical (AGENTS.md). -->
     <string name="mic_unavailable">Microphone isn\'t available for this cast.</string>
     <string name="mic_silenced">Another app on this phone is using the microphone, so it isn\'t reaching the desktop. It recovers by itself when that app stops recording.</string>
-    <string name="mic_headphones_hint">Tip: use headphones — otherwise the mic picks up the game audio playing from this phone.</string>
+    <string name="mic_headphones_hint">Tip: use headphones — otherwise the mic picks up the audio playing from this phone.</string>
 
     <!-- Debug-only tone for verifying capture (Phase7, features/game-audio.md). -->
     <string name="debug_play_test_tone">Debug: play test tone</string>
@@ -135,10 +135,10 @@
              hysteresis, announced, reversible; the On/Off pair is the "user
              can disable" acceptance criterion (chip vocabulary, not a
              Home-style switch row). -->
-    <string name="settings_low_latency_game_audio">Low-latency game audio</string>
+    <string name="settings_low_latency_game_audio">Low-latency audio</string>
     <string name="low_latency_audio_on">Low latency</string>
     <string name="low_latency_audio_off">Standard</string>
-    <string name="settings_low_latency_game_audio_hint">Sends game audio as raw sound data — the smallest possible delay for headphones, at a higher Wi-Fi bitrate. Standard keeps the usual compressed audio (smaller on the wire, a little more delay).</string>
+    <string name="settings_low_latency_game_audio_hint">Sends the audio as raw sound data — the smallest possible delay for headphones, at a higher Wi-Fi bitrate. Standard keeps the usual compressed audio (smaller on the wire, a little more delay).</string>
 
     <!-- Microphone device (Home's Audio card, designs/mobile-app.html) — which
          mic the cast records from. The picker is realtime while casting
@@ -163,9 +163,9 @@
          screen" stops the video only; the pairing session stays connected. -->
     <string name="share_screen_action">Share screen</string>
     <string name="stop_share_screen">Stop share screen</string>
-    <string name="home_game_audio">Game audio</string>
+    <string name="home_game_audio">Audio</string>
     <string name="home_microphone">Microphone</string>
-    <string name="home_game_audio_hint">Off silences the game audio, but its track stays part of the cast.</string>
+    <string name="home_game_audio_hint">Off silences the audio, but its track stays part of the cast.</string>
     <string name="home_mic_hint">Off removes the microphone from the cast and frees it for the game\'s own voice chat.</string>
 
     <!-- Virtual camera (ADR-007): shown while casting on a desktop that
