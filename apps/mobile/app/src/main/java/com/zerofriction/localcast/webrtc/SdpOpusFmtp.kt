@@ -17,7 +17,10 @@ package com.zerofriction.localcast.webrtc
  * `setRemoteDescription` — the negotiated send format then carries stereo to
  * the encoder. Safe with the pinned receiver: Opus signals channels in-band
  * (RFC 6716) and Chromium's decoder handles stereo (it sends stereo itself in
- * getDisplayMedia); the fmtp constrains the *sender*, not the decoder. The mic
+ * getDisplayMedia). The answer's fmtp shapes only THIS side's encoder: the
+ * receiver's decoder follows the receiver's own local answer, so the
+ * receiver must ask for stereo there too (ADR-032 — without it the desktop
+ * decoded this stereo stream to mono). The mic
  * PC is untouched: its mono stream is by design (webrtc.md codec policy). Pure
  * string work → plain-Kotlin unit-testable.
  */

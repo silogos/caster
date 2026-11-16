@@ -53,7 +53,7 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 
 ## Game audio
 
-Two sources, never both: the `game-audio` DataChannel's raw PCM16 (true stereo, primary — `announce` is never acked, so the phone stays on PCM) and the dual-mono Opus track, which plays only before the DataChannel's first chunk or after 3 s of its silence. A source switch flushes the ring.
+Two sources, never both: the `game-audio` DataChannel's raw PCM16 (true stereo, primary — `announce` is never acked, so the phone stays on PCM) and the Opus track, stereo since the receiver's answer asks for it ([ADR-032](../decisions/ADR-032-stereo-opus-needs-the-receivers-answer.md); its side level is logged once a second as `opus track:`), which plays only before the DataChannel's first chunk or after 3 s of its silence. A source switch flushes the ring.
 
 Playout (the CoreAudio callback owns it):
 

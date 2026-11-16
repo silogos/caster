@@ -98,7 +98,7 @@ class PlaybackCaptureAudioSource(
 
     /**
      * ADR-012: the encoder-input bytes offered to the session's DataChannel
-     * sender (the bytes the prebuilt encoder folds to mono). Set by the
+     * sender (the same bytes the Opus track encodes, in stereo — ADR-032). Set by the
      * session when the game-audio channel is attached; invoked on the ADM's
      * recording thread — implementations must not block.
      */
