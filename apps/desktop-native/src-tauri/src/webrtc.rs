@@ -541,6 +541,9 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
     let mut stream = NativeVideoStream::new(video);
     let mut renderer = crate::video::Renderer::new();
     let mut range_tracker = crate::video::RangeTracker::new();
+    // The path frames take: `Some(None)` zero-copy, `Some(Some(reason))`
+    // the I420 copy (logged when it changes).
+    let mut path: Option<Option<crate::video::CopyReason>> = None;
     let generation = crate::video::begin_stream();
     let mut frames: u64 = 0;
     let mut window_requested = false;
@@ -591,18 +594,39 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         let followup = match renderer.drop_if_hidden() {
             Some(followup) => followup,
             None => {
-                // The decoder's own buffer states the range — asked once per
-                // stream and size, because asking pins the frame (RangeTracker).
-                let range = range_tracker.range(w, h, frame.buffer.as_native().is_some(), || {
-                    crate::video::read_range_of_frame(frame.buffer.as_ref())
-                });
-                let i420 = frame.buffer.to_i420();
-                let (y, u, v) = i420.data();
-                let (sy, su, sv) = i420.strides();
-                let followup = renderer.render_i420(w, h, range, y, u, v, sy, su, sv);
-                if crate::latency_probe::enabled() {
+                let probe = crate::latency_probe::enabled();
+                let mut luma = None;
+                let followup = match crate::video::decoded_frame(frame.buffer.as_ref()) {
+                    Ok(decoded) => {
+                        if path.replace(None) != Some(None) {
+                            log::info!(target: "video", "frames shown zero-copy from the decoder's buffers");
+                        }
+                        if probe {
+                            luma = crate::video::mean_luma_of(&decoded.pixel_buffer, w, h);
+                        }
+                        renderer.render_decoded(decoded, w, h)
+                    }
+                    Err(reason) => {
+                        if path.replace(Some(reason)) != Some(Some(reason)) {
+                            log::info!(target: "video", "frames copied from I420: {reason:?}");
+                        }
+                        // The decoder's own buffer states the range — read
+                        // once per stream and size (RangeTracker).
+                        let range = range_tracker.range(w, h, frame.buffer.as_native().is_some(), || {
+                            crate::video::read_range_of_frame(frame.buffer.as_ref())
+                        });
+                        let i420 = frame.buffer.to_i420();
+                        let (y, u, v) = i420.data();
+                        let (sy, su, sv) = i420.strides();
+                        if probe {
+                            luma = Some(crate::latency_probe::mean_luma(y, sy, w, h));
+                        }
+                        renderer.render_i420(w, h, range, y, u, v, sy, su, sv)
+                    }
+                };
+                if let Some(luma) = luma {
                     let decoded_ms = crate::latency_probe::wall_ms();
-                    if let Some(white) = marker.observe(crate::latency_probe::mean_luma(y, sy, w, h)) {
+                    if let Some(white) = marker.observe(luma) {
                         log::info!(
                             target: "latency",
                             "video {} decoded_ms={decoded_ms:.1} hold_ms={:.1}",

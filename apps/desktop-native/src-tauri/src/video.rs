@@ -13,11 +13,14 @@
 //! single `objc2::exception::catch` guard — an Objective-C exception drops
 //! one frame, it can never take the process down.
 //!
-//! Frames: libwebrtc's zero-copy hand-off (webrtc-sys `get_cv_pixel_buffer`)
-//! leaks one ObjC wrapper + one native ref per call (every decoded IOSurface
-//! pinned — 9 GB in 2 min, measured), so the I420 planes are CPU-copied
-//! (~0.3 ms/frame) into OUR pooled NV12 buffers, bounded by the pool's
-//! allocation threshold.
+//! Frames: a VideoToolbox-decoded frame is shown as the decoder made it
+//! ([`decoded_pixel_buffer`], zero-copy). webrtc-sys' `get_cv_pixel_buffer`
+//! hands its wrapper back autoreleased, and the frame thread has no
+//! autorelease pool of its own, so every call goes through one we drain
+//! (without it every decoded IOSurface stayed pinned — 9 GB in 2 min,
+//! measured; livekit/rust-sdks#1672). Any other frame (software decoder,
+//! another pixel format) is copied from I420 (~0.3 ms/frame) into OUR
+//! pooled NV12 buffers, bounded by the pool's allocation threshold.
 //!
 //! Timing: the layer runs on a host-clock timebase and each sample carries
 //! the time [`crate::pacing::Pacer`] gives it — shown on time, a few ms
@@ -90,15 +93,15 @@ pub fn range_of_decoder_format(format: u32) -> VideoRange {
 /// Remembers a stream's range, so it is read from a frame only when it can
 /// have changed.
 ///
-/// Reading it costs a frame: the only place a VideoToolbox frame states its
-/// range is its pixel buffer's format, and webrtc-sys' `get_cv_pixel_buffer`
-/// leaves a reference on the decoded surface on every call (the module doc).
-/// Called per frame it pinned every decoded frame — 3.5 MB each at
-/// 1920×1200, about 12 GB a minute — until the Mac ran out of memory after
-/// ~16 500 frames (found live 2026-11-10; the per-frame call came in with
-/// the colour-range fix the day before). The range belongs to the encoder
-/// session, so one read per stream, and one more when the dimensions change
-/// (a new encoder session), is enough.
+/// Used by the copy path only (a zero-copy frame states its range in the
+/// buffer it is shown from). The only place a VideoToolbox frame states its
+/// range is its pixel buffer's format. Before reads went through a drained
+/// autorelease pool ([`decoder_pixel_buffer`]), each one pinned the decoded
+/// surface: called per frame that was 3.5 MB each at 1920×1200, about 12 GB
+/// a minute, until the Mac ran out of memory after ~16 500 frames (found
+/// live 2026-11-10). The range belongs to the encoder session, so one read
+/// per stream, and one more when the dimensions change (a new encoder
+/// session), is still all it takes.
 pub struct RangeTracker {
     known: Option<((u32, u32), VideoRange)>,
 }
@@ -131,17 +134,103 @@ impl RangeTracker {
 }
 
 /// The range one decoded frame states in its pixel format.
-///
-/// **Pins the frame's decoded surface for the life of the process** (the
-/// webrtc-sys leak above) — call it through [`RangeTracker`], never per frame.
 pub fn read_range_of_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> VideoRange {
-    let Some(native) = buffer.as_native() else { return VideoRange::Limited };
-    let pixel_buffer = native.get_cv_pixel_buffer() as *const CVPixelBuffer;
-    if pixel_buffer.is_null() {
-        return VideoRange::Limited;
+    match decoder_pixel_buffer(buffer) {
+        Some(pixel_buffer) => range_of_decoder_format(objc2_core_video::CVPixelBufferGetPixelFormatType(&pixel_buffer)),
+        None => VideoRange::Limited,
     }
-    // Not retained: the frame keeps it alive for this call.
-    range_of_decoder_format(objc2_core_video::CVPixelBufferGetPixelFormatType(unsafe { &*pixel_buffer }))
+}
+
+/// The pixel buffer VideoToolbox decoded this frame into, retained by us,
+/// or `None` for a frame without one (a software decoder's I420).
+///
+/// webrtc-sys' `get_cv_pixel_buffer` gets the frame's `RTCCVPixelBuffer`
+/// from libwebrtc's ARC code into its own non-ARC bridge, so the wrapper
+/// comes back autoreleased. The frame thread never drains a pool of its own:
+/// without this one, every frame asked for stayed alive, with its IOSurface,
+/// until the thread ended (livekit/rust-sdks#1672, fix pending upstream in
+/// #1673). The buffer is retained before the pool drains, so it outlives
+/// both the pool and the frame.
+fn decoder_pixel_buffer(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> Option<CFRetained<CVPixelBuffer>> {
+    let native = buffer.as_native()?;
+    objc2::rc::autoreleasepool(|_| {
+        let raw = NonNull::new(native.get_cv_pixel_buffer() as *mut CVPixelBuffer)?;
+        // Get rule: +0, the frame owns it — take our own reference.
+        Some(unsafe { CFRetained::retain(raw) })
+    })
+}
+
+/// A decoded frame the display layer and the Syphon output can take as is.
+pub struct DecodedFrame {
+    pub pixel_buffer: CFRetained<CVPixelBuffer>,
+    pub range: VideoRange,
+}
+
+/// Why a frame goes through the I420 copy instead of zero-copy (logged once
+/// per stream and reason by the frame loop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyReason {
+    /// `ZFC_VIDEO_COPY` is set: the A/B switch for measuring the two paths.
+    Forced,
+    /// No VideoToolbox buffer behind the frame (a software decoder).
+    NoDecoderBuffer,
+    /// A pixel format the window's NV12 path does not take (10-bit, 4:2:2…).
+    PixelFormat(u32),
+    /// The buffer's size differs from the frame's (a cropped or padded frame).
+    Size,
+}
+
+/// Forces every frame through the I420 copy — for comparing the two paths
+/// on the same cast, never needed in use.
+const FORCE_COPY_ENV: &str = "ZFC_VIDEO_COPY";
+
+fn copy_forced() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os(FORCE_COPY_ENV).is_some())
+}
+
+/// The frame as VideoToolbox decoded it, when it is 8-bit 4:2:0 NV12 of the
+/// frame's own size — what the window's layer and the Syphon bridge take.
+pub fn decoded_frame(buffer: &dyn livekit::webrtc::video_frame::VideoBuffer) -> Result<DecodedFrame, CopyReason> {
+    if copy_forced() {
+        return Err(CopyReason::Forced);
+    }
+    let pixel_buffer = decoder_pixel_buffer(buffer).ok_or(CopyReason::NoDecoderBuffer)?;
+    let format = objc2_core_video::CVPixelBufferGetPixelFormatType(&pixel_buffer);
+    let range = match format {
+        f if f == VideoRange::Limited.pixel_format() => VideoRange::Limited,
+        f if f == VideoRange::Full.pixel_format() => VideoRange::Full,
+        other => return Err(CopyReason::PixelFormat(other)),
+    };
+    let size = (objc2_core_video::CVPixelBufferGetWidth(&pixel_buffer), objc2_core_video::CVPixelBufferGetHeight(&pixel_buffer));
+    if size != (buffer.width() as usize, buffer.height() as usize) {
+        return Err(CopyReason::Size);
+    }
+    Ok(DecodedFrame { pixel_buffer, range })
+}
+
+/// The mean luma of a decoded frame (the latency probe's marker), read from
+/// its Y plane without copying it.
+pub fn mean_luma_of(pixel_buffer: &CVPixelBuffer, width: u32, height: u32) -> Option<f64> {
+    use objc2_core_video::{
+        CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeightOfPlane,
+        CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    };
+    let flags = CVPixelBufferLockFlags::ReadOnly;
+    unsafe {
+        if CVPixelBufferLockBaseAddress(pixel_buffer, flags) != 0 {
+            return None;
+        }
+        let base = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0) as *const u8;
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0);
+        let rows = CVPixelBufferGetHeightOfPlane(pixel_buffer, 0);
+        let luma = (!base.is_null()).then(|| {
+            let plane = std::slice::from_raw_parts(base, stride * rows);
+            crate::latency_probe::mean_luma(plane, stride as u32, width, height)
+        });
+        CVPixelBufferUnlockBaseAddress(pixel_buffer, flags);
+        luma
+    }
 }
 
 /// Pool buffers alive at once (the layer's short queue + one in flight).
@@ -586,11 +675,22 @@ pub enum Followup {
 
 /// Per-stream render state, owned by the frame thread (a new cast starts a
 /// new stream, so every counter and cache starts fresh).
+/// What a CMFormatDescription is valid for. A decoder buffer carries the
+/// stream's colour attachments and a pool buffer does not, so the two get
+/// separate descriptions even at the same size and range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FormatKey {
+    width: u32,
+    height: u32,
+    range: VideoRange,
+    decoder_buffer: bool,
+}
+
 pub struct Renderer {
-    /// CMFormatDescription per (width, height, range) — the quality ladder
-    /// and rotation change dimensions mid-cast, a decoder switch can change
-    /// the range; the old one is released.
-    format: Option<((u32, u32, VideoRange), CFRetained<CMFormatDescription>)>,
+    /// CMFormatDescription per [`FormatKey`] — the quality ladder and
+    /// rotation change dimensions mid-cast, a decoder switch can change the
+    /// range or the path; the old one is released.
+    format: Option<(FormatKey, CFRetained<CMFormatDescription>)>,
     /// One pool for the current dimensions and range (a change replaces it).
     pool: Option<((u32, u32, VideoRange), CFRetained<CVPixelBufferPool>)>,
     /// `{AllocationThreshold: N}` — built once, passed per allocation.
@@ -660,11 +760,32 @@ impl Renderer {
         self.pacer.take_window()
     }
 
-    /// Copies one I420 frame into a pooled NV12 buffer, due when the pacer
-    /// says: enqueued on the window's layer while it is visible, handed to
-    /// the Syphon output while that is being read — the same buffer for both.
+    /// Shows a frame in the buffer VideoToolbox decoded it into (zero-copy).
+    pub fn render_decoded(&mut self, frame: DecodedFrame, width: u32, height: u32) -> Followup {
+        let key = FormatKey { width, height, range: frame.range, decoder_buffer: true };
+        self.present(key, |_| Some(frame.pixel_buffer))
+    }
+
+    /// Copies one I420 frame into a pooled NV12 buffer and shows that.
     #[allow(clippy::too_many_arguments)]
     pub fn render_i420(&mut self, width: u32, height: u32, range: VideoRange, y: &[u8], u: &[u8], v: &[u8], stride_y: u32, stride_u: u32, stride_v: u32) -> Followup {
+        let key = FormatKey { width, height, range, decoder_buffer: false };
+        self.present(key, |renderer| {
+            let Some(pixel_buffer) = renderer.pixel_buffer(width, height, range) else {
+                renderer.dropped_pool_full += 1;
+                return None;
+            };
+            copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
+            Some(pixel_buffer)
+        })
+    }
+
+    /// Shows the buffer `make` gives, due when the pacer says: enqueued on
+    /// the window's layer while it is visible, handed to the Syphon output
+    /// while that is being read — the same buffer for both. `make` runs only
+    /// when someone will see the frame.
+    fn present(&mut self, key: FormatKey, make: impl FnOnce(&mut Self) -> Option<CFRetained<CVPixelBuffer>>) -> Followup {
+        let (width, height) = (key.width, key.height);
         if width == 0 || height == 0 {
             return Followup::None;
         }
@@ -677,17 +798,13 @@ impl Renderer {
         let arrival = host_now();
         let due = self.pacer.due(arrival);
         self.last_hold = due - arrival;
-        let Some(pixel_buffer) = self.pixel_buffer(width, height, range) else {
-            self.dropped_pool_full += 1;
-            return Followup::None;
-        };
-        copy_i420_to_nv12(&pixel_buffer, width, height, y, u, v, stride_y, stride_u, stride_v);
+        let Some(pixel_buffer) = make(self) else { return Followup::None };
         if syphon {
             crate::syphon::submit(&pixel_buffer, width, height, due);
         }
         match window {
             Some(vw) if visible => {
-                if let Some(sample) = self.sample_buffer(&pixel_buffer, (width, height, range), due) {
+                if let Some(sample) = self.sample_buffer(&pixel_buffer, key, due) {
                     self.enqueue(vw, &sample);
                 }
                 Followup::None
@@ -738,20 +855,21 @@ impl Renderer {
         NonNull::new(out).map(|p| unsafe { CFRetained::from_raw(p) })
     }
 
-    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, dims: (u32, u32, VideoRange), due: f64) -> Option<CFRetained<CMSampleBuffer>> {
-        if self.format.as_ref().map(|(d, _)| *d) != Some(dims) {
+    fn sample_buffer(&mut self, pixel_buffer: &CVPixelBuffer, key: FormatKey, due: f64) -> Option<CFRetained<CMSampleBuffer>> {
+        if self.format.as_ref().map(|(k, _)| *k) != Some(key) {
             let mut desc: *const CMFormatDescription = std::ptr::null();
             let status = unsafe {
                 objc2_core_media::CMVideoFormatDescriptionCreateForImageBuffer(None, pixel_buffer, NonNull::from(&mut desc))
             };
             let desc = NonNull::new(desc as *mut CMFormatDescription).filter(|_| status == 0);
             let Some(desc) = desc else {
-                log::warn!(target: "video", "format description failed status={status} dims={dims:?}");
+                log::warn!(target: "video", "format description failed status={status} {key:?}");
                 return None;
             };
             // Replacing the Option releases the previous description.
-            self.format = Some((dims, unsafe { CFRetained::from_raw(desc) }));
-            log::info!(target: "video", "format description created for {}x{} ({:?} range)", dims.0, dims.1, dims.2);
+            self.format = Some((key, unsafe { CFRetained::from_raw(desc) }));
+            let source = if key.decoder_buffer { "decoder buffer, zero-copy" } else { "pool copy" };
+            log::info!(target: "video", "format description created for {}x{} ({:?} range, {source})", key.width, key.height, key.range);
         }
         let (_, format) = self.format.as_ref()?;
         // Host-clock pts — the layer's timebase is the host clock (an epoch
@@ -961,6 +1079,68 @@ fn cf_dict(pairs: &[(*const c_void, *const c_void)]) -> Option<CFRetained<CFDict
             &kCFTypeDictionaryKeyCallBacks,
             &kCFTypeDictionaryValueCallBacks,
         )
+    }
+}
+
+#[cfg(test)]
+mod decoded_frame_tests {
+    use super::*;
+    use livekit::webrtc::video_frame::native::NativeBuffer;
+    use objc2_core_foundation::CFGetRetainCount;
+
+    fn pixel_buffer(width: usize, height: usize, format: u32) -> CFRetained<CVPixelBuffer> {
+        let mut out: *mut CVPixelBuffer = std::ptr::null_mut();
+        let status = unsafe { objc2_core_video::CVPixelBufferCreate(None, width, height, format, None, NonNull::from(&mut out)) };
+        assert_eq!(status, 0, "CVPixelBufferCreate");
+        unsafe { CFRetained::from_raw(NonNull::new(out).expect("pixel buffer")) }
+    }
+
+    /// A frame as libwebrtc's VideoToolbox decoder hands it over: a native
+    /// buffer wrapping the decoded CVPixelBuffer (the wrapper takes over
+    /// the reference it is given).
+    fn native_frame(pixel_buffer: &CFRetained<CVPixelBuffer>) -> NativeBuffer {
+        let given = CFRetained::into_raw(pixel_buffer.clone()).as_ptr();
+        unsafe { NativeBuffer::from_cv_pixel_buffer(given.cast()) }
+    }
+
+    fn references(pixel_buffer: &CVPixelBuffer) -> isize {
+        CFGetRetainCount(Some(pixel_buffer))
+    }
+
+    #[test]
+    fn an_nv12_decoder_frame_is_shown_from_its_own_buffer() {
+        for (format, range) in [(VideoRange::Limited.pixel_format(), VideoRange::Limited), (VideoRange::Full.pixel_format(), VideoRange::Full)] {
+            let decoded = pixel_buffer(64, 48, format);
+            let frame = native_frame(&decoded);
+            let shown = decoded_frame(&frame).expect("zero-copy");
+            assert!(std::ptr::eq(&*shown.pixel_buffer, &*decoded), "the decoder's buffer, not a copy");
+            assert_eq!(shown.range, range);
+        }
+    }
+
+    #[test]
+    fn a_frame_the_window_cannot_take_as_is_goes_through_the_copy() {
+        let ten_bit = objc2_core_video::kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
+        let frame = native_frame(&pixel_buffer(64, 48, ten_bit));
+        assert_eq!(decoded_frame(&frame).err(), Some(CopyReason::PixelFormat(ten_bit)));
+    }
+
+    /// The regression this path depends on (livekit/rust-sdks#1672): on a
+    /// thread without an autorelease pool — a test thread, like the frame
+    /// thread — asking for the decoder's buffer must not keep the frame
+    /// alive once the frame and our reference are gone.
+    #[test]
+    fn asking_for_the_decoder_buffer_does_not_pin_the_frame() {
+        let decoded = pixel_buffer(64, 48, VideoRange::Limited.pixel_format());
+        let alone = references(&decoded);
+        for _ in 0..5 {
+            let frame = native_frame(&decoded);
+            let shown = decoded_frame(&frame).expect("zero-copy");
+            assert_eq!(read_range_of_frame(&frame), VideoRange::Limited);
+            drop(shown);
+            drop(frame);
+        }
+        assert_eq!(references(&decoded), alone, "every frame released its buffer");
     }
 }
 
