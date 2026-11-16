@@ -360,12 +360,12 @@ class MediaCastSession(
         try {
             PeerConnectionFactory.initialize(
                 PeerConnectionFactory.InitializationOptions.builder(context)
-                    // Multichannel (stereo) send is gated behind this trial in
-                    // libwebrtc's audio send path — without it the capture is
-                    // downmixed to mono through the audio processing module
-                    // even with stereo negotiated (found live 2026-11-04;
-                    // see webrtc issue 41481053). The mic pc stays trial-free:
-                    // mono voice is by design.
+                    // Set 2026-11-04 believing stereo send was gated behind
+                    // this trial. The pinned lib has no such trial (ADR-012),
+                    // and the send path was stereo all along: the mono heard
+                    // on the desktop was its own decoder, mono because its
+                    // answer lacked stereo=1 (ADR-032). Harmless; left as is.
+                    // The mic pc stays trial-free: mono voice is by design.
                     .setFieldTrials(MULTICHANNEL_SEND_FIELD_TRIAL)
                     .createInitializationOptions(),
             )
@@ -941,7 +941,7 @@ class MediaCastSession(
     companion object {
         private const val TAG = "MediaCastSession"
 
-        /** Un-gates libwebrtc's stereo/multichannel send path (see initialize). */
+        /** Ignored by the pinned lib; see initialize (ADR-032). */
         private const val MULTICHANNEL_SEND_FIELD_TRIAL = "WebRTC-Audio-MultiChannelSend/Enabled/"
 
         /** webrtc.md: each side polls getStats ~1 Hz. */

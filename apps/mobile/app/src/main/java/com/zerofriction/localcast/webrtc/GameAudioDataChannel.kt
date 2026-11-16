@@ -11,9 +11,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * The game-audio DataChannel (ADR-012: the pinned libwebrtc build
- * hard-downmixes the ADM's stereo input to mono before its Opus encoder, so
- * the encoder path can never carry stereo). Payload per ADR-013: ADTS-framed
+ * The game-audio DataChannel (ADR-012), the desktop's primary game-audio
+ * path for its latency (ADR-014/020). ADR-012 chose it believing the Opus
+ * track could not carry stereo; it can — the mono was the receiver's
+ * decoder (ADR-032). Payload per ADR-013: ADTS-framed
  * AAC-LC by default — negotiated in-band through [negotiator]'s
  * announce/ack — with ADR-012's raw PCM as the fallback format, so an old
  * desktop (it ignores text messages) degrades exactly as it always did.

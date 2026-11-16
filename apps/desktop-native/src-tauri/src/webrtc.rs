@@ -21,6 +21,26 @@ use crate::protocol::{Candidate, PcId};
 use crate::signaling::{IceSender, OutboundIce};
 use futures_util::StreamExt;
 use livekit::webrtc::peer_connection::{IceGatheringState, PeerConnectionState};
+
+/// The answer to set locally and send. The media pc's Opus fmtp asks for
+/// stereo: libwebrtc sizes the receive decoder from the LOCAL description,
+/// mono unless it says `stereo=1` (ADR-032). The mic pc stays mono by
+/// design (webrtc.md codec policy).
+fn local_answer(role: PcId, answer: SessionDescription) -> Result<SessionDescription, String> {
+    let sdp = answer.to_string();
+    let Some(stereo) = stereo_answer_sdp(role, &sdp) else { return Ok(answer) };
+    log::info!(target: "webrtc", "pc={} answer opus fmtp: {}", role.as_str(), crate::opus_fmtp::opus_fmtp(&stereo).unwrap_or("none"));
+    SessionDescription::parse(&stereo, SdpType::Answer).map_err(|e| format!("parse stereo answer: {e:?}"))
+}
+
+/// The media pc's answer with its Opus fmtp asking for stereo; `None` for
+/// the mic pc, whose answer is used as libwebrtc made it.
+fn stereo_answer_sdp(role: PcId, sdp: &str) -> Option<String> {
+    (role == PcId::Media).then(|| crate::opus_fmtp::prefer_stereo(sdp))
+}
+
+/// The Opus track's stereo line, once a second (10 ms frames).
+const OPUS_TRACK_LOG_EVERY_FRAMES: u64 = 100;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
@@ -152,6 +172,7 @@ impl MediaAnswerer {
                 .create_answer(AnswerOptions::default())
                 .await
                 .map_err(|e| format!("create answer (re-offer): {e}"))?;
+            let answer = local_answer(self.role, answer)?;
             pc.set_local_description(answer.clone())
                 .await
                 .map_err(|e| format!("set local (re-offer): {e}"))?;
@@ -293,10 +314,26 @@ impl MediaAnswerer {
                         use livekit::webrtc::audio_stream::native::NativeAudioStream;
                         use futures_util::StreamExt as _;
                         let mut stream = NativeAudioStream::new(audio, 48_000, 2);
+                        // Stereo check of the Opus track (levels only, never
+                        // the audio): side vs mid energy, ≈ −∞ dB for L = R.
+                        let (mut side, mut mid, mut frames) = (0.0f64, 0.0f64, 0u64);
                         while let Some(frame) = stream.next().await {
                             let mut bytes = Vec::with_capacity(frame.data.len() * 2);
                             for sample in frame.data.iter() {
                                 bytes.extend_from_slice(&sample.to_le_bytes());
+                            }
+                            if frame.num_channels == 2 {
+                                for lr in frame.data.chunks_exact(2) {
+                                    let (l, r) = (f64::from(lr[0]), f64::from(lr[1]));
+                                    side += (l - r) * (l - r);
+                                    mid += ((l + r) * 0.5) * ((l + r) * 0.5);
+                                }
+                            }
+                            frames += 1;
+                            if frames % OPUS_TRACK_LOG_EVERY_FRAMES == 0 {
+                                let side_db = 10.0 * (side + 1.0).log10() - 10.0 * (mid + 1.0).log10();
+                                log::info!(target: "webrtc", "opus track: {frames} frames, {} ch, side {side_db:.1} dB, mid {:.1} dB", frame.num_channels, 10.0 * (mid + 1.0).log10());
+                                (side, mid) = (0.0, 0.0);
                             }
                             crate::audio::feed_track_pcm16(crate::audio::Track::Game, &bytes);
                         }
@@ -355,6 +392,7 @@ impl MediaAnswerer {
             .create_answer(AnswerOptions::default())
             .await
             .map_err(|e| format!("create answer: {e}"))?;
+        let answer = local_answer(self.role, answer)?;
         pc.set_local_description(answer.clone())
             .await
             .map_err(|e| format!("set local: {e}"))?;
@@ -707,6 +745,14 @@ mod tests {
     }
 
     const OFFER: &str = "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
+
+    #[test]
+    fn only_the_media_answer_asks_for_stereo_opus() {
+        let answer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n";
+        let media = super::stereo_answer_sdp(crate::protocol::PcId::Media, answer).expect("media answer");
+        assert!(media.contains("a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1"));
+        assert_eq!(super::stereo_answer_sdp(crate::protocol::PcId::Mic, answer), None, "the mic stays mono");
+    }
 
     #[test]
     fn the_session_id_is_the_origin_lines_second_field() {

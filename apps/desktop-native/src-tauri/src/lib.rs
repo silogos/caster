@@ -1,6 +1,7 @@
 mod audio;
 mod latency_probe;
 mod logging;
+mod opus_fmtp;
 mod pacing;
 mod pairing;
 mod power;
