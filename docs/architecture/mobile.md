@@ -56,6 +56,15 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
   - **The mic row follows the real state, casting or not.** With the mic switched on and RECORD_AUDIO missing, the row is drawn **off** with its reason. Android has no "permanently denied" query: `shouldShowRequestPermissionRationale` is false both before the first ask and once Android stops asking (Android 11+: the second denial). A persisted "has asked" flag (`MicPermission.kt`) tells the two apart, and once Android stops asking the row offers **Open settings** (app info). Returning with the grant restores the ordinary row and, mid-cast, starts the mic. Known limitation: on Android 11+, dismissing the dialog without answering also leaves no rationale, so the row can offer settings one step early.
 - **Consent mode pitfall (Android 14+):** the projection dialog defaults to *Share one app*; a single-app share ends the moment that app leaves the foreground. Users must choose *Share full screen*. Handled cleanly (it is a normal projection-revoked stop), and since Phase13 the scan screen carries a UX affordance: a hint under the cast trigger — "When your phone asks what to share, choose 'Share full screen'."
 
+### The cast over a USB cable (ADR-034)
+
+A separate, small path in the `usb` package. It is not a mode of `CastService`, because that service is built around the WebRTC session:
+- `UsbLink` owns the accessory link between casts, like `ConnectedDesktop` owns the signaling connection.
+- `UsbHandshake` proves the trust key and checks the desktop's proof.
+- `UsbCastService` (FGS `mediaProjection`) owns one cable cast: `UsbVideoEncoder`, which drives MediaCodec directly, `UsbGameAudioCapture`, which reads playback capture as 10 ms PCM16, and `UsbMicCapture`.
+
+`UsbMicCapture` follows ADR-004: source `MIC`, the chosen input at its own rate, resampled to the link's 48 kHz mono. Adaptive quality, thermal steering and live quality changes do not exist on this path yet. Wire format: [usb-link.md](usb-link.md).
+
 ## Permissions
 
 | Permission | Purpose | When requested |
