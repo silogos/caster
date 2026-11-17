@@ -1,0 +1,671 @@
+package io.github.silogos.caster.signaling
+
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import io.github.silogos.caster.signaling.AudioRoutingStatus
+import io.github.silogos.caster.signaling.VcStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Phase4 lifecycle tests (webrtc.md): heartbeat, reconnect-with-backoff within
+ * the QR session window, expiry stop, desktop bye — with a scripted transport
+ * and a virtual-clock scheduler. No network, no media.
+ */
+class SignalingClientTest {
+
+    private lateinit var fake: FakeTransport
+    private lateinit var scheduler: FakeScheduler
+    private lateinit var client: SignalingClient
+    private val events = mutableListOf<SignalingClient.Event>()
+
+    private var clockMs = 0L
+
+    /** Advance both clocks together — silence is measured in wall time. */
+    private fun advance(ms: Long) {
+        clockMs += ms
+        scheduler.advance(ms)
+    }
+
+    private fun setUp(hosts: List<String> = listOf("192.168.1.42")) {
+        fake = FakeTransport()
+        scheduler = FakeScheduler()
+        events.clear()
+        clockMs = 0
+        client = SignalingClient(
+            hosts = hosts,
+            port = 52341,
+            sessionId = VECTOR_SID,
+            secret = Handshake.decodeSecret(VECTOR_SECRET),
+            userAgent = TEST_UA,
+            deviceId = TEST_DEVICE_ID,
+            expiresAtUnixSeconds = EXPIRES_AT,
+            transport = fake,
+            scheduler = scheduler,
+            nowMs = { clockMs },
+            heartbeatIntervalMs = HEARTBEAT_INTERVAL,
+            heartbeatTimeoutMs = HEARTBEAT_TIMEOUT,
+        )
+        client.connect { events += it }
+    }
+
+    /** Drive connect → hello → challenge → auth → auth-ok. */
+    private fun authorize(desktopName: String = TEST_DESKTOP_NAME) {
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+        fake.listener?.onTransportText(challengeFrame())
+        fake.sentFrames.removeFirstOrNull() // auth
+        fake.listener?.onTransportText(authOkFrame(desktopName))
+    }
+
+    @Test
+    fun `sends a heartbeat ping on every interval while authorized`() {
+        setUp()
+        authorize()
+
+        advance(HEARTBEAT_INTERVAL)
+        val firstPing = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_PING, firstPing.type)
+        assertEquals(HEARTBEAT_INTERVAL, Payloads.pingT(firstPing))
+
+        advance(HEARTBEAT_INTERVAL)
+        assertEquals(Envelope.TYPE_PING, parseFrame(fake.sentFrames.removeFirstOrNull()).type)
+    }
+
+    @Test
+    fun `answers a desktop ping with a pong carrying the same t`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_PING, 7, VECTOR_SID, buildJsonObject { put("t", 999L) }),
+        )
+
+        val pong = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_PONG, pong.type)
+        assertEquals(999L, Payloads.pingT(pong))
+    }
+
+    @Test
+    fun `drops the connection when the desktop is silent past the timeout and schedules a reconnect`() {
+        setUp()
+        authorize()
+
+        // No inbound frames at all — the desktop is gone. The watchdog
+        // samples on the ping cadence, so wait past timeout + one interval.
+        advance(HEARTBEAT_TIMEOUT + HEARTBEAT_INTERVAL + 1)
+
+        // Aborted, and the loss handled at once — no waiting on a close
+        // callback a vanished desktop would never trigger.
+        assertEquals(1, fake.abortCount)
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertEquals(1000L, scheduler.nextDelayMs()) // webrtc.md: backoff starts at 1 s
+    }
+
+    @Test
+    fun `reconnects with the backoff ladder on repeated failures and re-authenticates within the window`() {
+        setUp()
+        authorize()
+
+        // First drop → 1 s.
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertEquals(1000L, scheduler.nextDelayMs())
+        advance(1000)
+
+        // The reconnect attempt itself fails →2 s → 5 s → 10 s → 30 s cap.
+        fake.listener?.onTransportFailure(RuntimeException("wi-fi blip"))
+        assertEquals(2000L, scheduler.nextDelayMs())
+        advance(2000)
+        fake.listener?.onTransportFailure(RuntimeException("wi-fi blip"))
+        assertEquals(5000L, scheduler.nextDelayMs())
+        advance(5000)
+        fake.listener?.onTransportFailure(RuntimeException("wi-fi blip"))
+        assertEquals(10_000L, scheduler.nextDelayMs())
+        advance(10_000)
+        fake.listener?.onTransportFailure(RuntimeException("wi-fi blip"))
+        assertEquals(30_000L, scheduler.nextDelayMs()) // capped (webrtc.md)
+
+        // The next attempt succeeds — the ladder resets to 1 s after re-auth.
+        advance(30_000)
+        authorize()
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+        // 1 initial connect + 5 reconnect attempts (each ladder step opens a socket).
+        assertEquals(6, fake.openedUrls.size)
+        assertEquals(2, events.count { it is SignalingClient.Event.Authorized })
+
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        assertEquals(1000L, scheduler.nextDelayMs())
+    }
+
+    @Test
+    fun `a reconnect starts at the host that worked and falls through the others before backing off`() {
+        // The desktop advertised two addresses; only the second is reachable
+        // from the phone (e.g. its Ethernet address first, its Wi-Fi second).
+        setUp(hosts = listOf("192.168.1.42", "10.0.0.9"))
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        authorize() // first pairing found the second host
+        assertEquals("ws://10.0.0.9:52341/caster/v1", fake.openedUrls.last())
+
+        fake.listener?.onTransportClosed(1000, "wi-fi blip")
+        advance(scheduler.nextDelayMs()!!)
+        // The attempt goes back to the host that authorized — not host 0.
+        assertEquals("ws://10.0.0.9:52341/caster/v1", fake.openedUrls.last())
+
+        // That host is down now (DHCP moved the desktop): the same attempt
+        // tries the other advertised address before the ladder backs off.
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        assertEquals("ws://192.168.1.42:52341/caster/v1", fake.openedUrls.last())
+        assertEquals(SignalingClient.State.CONNECTING, client.state.value)
+
+        // Every host failed this attempt → one backoff step, then the cycle repeats.
+        fake.listener?.onTransportFailure(RuntimeException("no route"))
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertEquals(2000L, scheduler.nextDelayMs())
+        val opened = fake.openedUrls.size
+        advance(2000)
+        assertEquals(opened + 1, fake.openedUrls.size)
+        authorize()
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+    }
+
+    @Test
+    fun `stops retrying once the QR session has expired`() {
+        setUp()
+        authorize()
+
+        clockMs = EXPIRES_AT * 1000 + 1 // the desktop clock is authoritative (pairing.md)
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingClient.Event.Failed(SignalingError.EXPIRED)),
+            events.filterIsInstance<SignalingClient.Event.Failed>(),
+        )
+        assertEquals(0, scheduler.pendingCount()) // no auto-retry past expiry (webrtc.md)
+    }
+
+    @Test
+    fun `a terminal error during reconnect stops the retries`() {
+        setUp()
+        authorize()
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        advance(1000)
+
+        // The desktop regenerated its QR while we were down — the old sid is dead.
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+        fake.listener?.onTransportText(errorFrame("unknown-session"))
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingClient.Event.Failed(SignalingError.EXPIRED)),
+            events.filterIsInstance<SignalingClient.Event.Failed>(),
+        )
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    @Test
+    fun `desktop bye ends the session without a reconnect`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_BYE, 9, VECTOR_SID, buildJsonObject { put("reason", "window-closed") }),
+        )
+
+        assertEquals(SignalingClient.State.CLOSED, client.state.value)
+        assertEquals(
+            listOf("window-closed"),
+            events.filterIsInstance<SignalingClient.Event.SessionEnded>().map { it.reason },
+        )
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    @Test
+    fun `forwards sdp answers and ice candidates to consumers`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_SDP_ANSWER, 10, VECTOR_SID,
+                Payloads.sdp(Envelope.PC_MEDIA, SDP_ANSWER),
+            ),
+        )
+        val mdnsCandidate = buildJsonObject { put("candidate", "candidate:842163049 1 udp 1677729535 7f8a9b2c.local 51812 typ host") }
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_ICE, 11, VECTOR_SID, Payloads.ice(Envelope.PC_MIC, mdnsCandidate)),
+        )
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_ICE, 12, VECTOR_SID, Payloads.ice(Envelope.PC_MIC, null)),
+        )
+
+        assertEquals(
+            listOf(SignalingClient.Event.SdpAnswer(Envelope.PC_MEDIA, SDP_ANSWER)),
+            events.filterIsInstance<SignalingClient.Event.SdpAnswer>(),
+        )
+        val iceEvents = events.filterIsInstance<SignalingClient.Event.IceCandidate>()
+        assertEquals(listOf(Envelope.PC_MIC, Envelope.PC_MIC), iceEvents.map { it.pc })
+        assertEquals(mdnsCandidate, iceEvents[0].candidate)
+        assertEquals(JsonNull, iceEvents[1].candidate) // end-of-gathering (webrtc.md)
+    }
+
+    @Test
+    fun `sends media messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendSdpOffer(Envelope.PC_MEDIA, SDP_OFFER)
+        client.sendIceCandidate(Envelope.PC_MEDIA, JsonNull) // end-of-gathering
+        client.sendSessionInfo(profile = "balanced", width = 1280, height = 720, fps = 30, gameAudio = true, mic = false)
+
+        val offer = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_SDP_OFFER, offer.type)
+        assertEquals(Envelope.PC_MEDIA, Payloads.pc(offer))
+        assertEquals(SDP_OFFER, Payloads.sdpText(offer))
+
+        val ice = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_ICE, ice.type)
+        assertEquals(JsonNull, Payloads.iceCandidate(ice))
+
+        val info = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_SESSION_INFO, info.type)
+        assertEquals("balanced", info.payload["profile"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+    }
+
+    @Test
+    fun `emits vc-status events and ignores malformed ones`() {
+        setUp()
+        authorize()
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 10, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", true)
+                    put("active", false)
+                },
+            ),
+        )
+        // Malformed (missing `active`) — recoverable ignore, not a failure.
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_VC_STATUS, 11, VECTOR_SID,
+                buildJsonObject {
+                    put("available", true)
+                    put("needsRegistration", false)
+                },
+            ),
+        )
+
+        val vcEvents = events.filterIsInstance<SignalingClient.Event.VcStatusEvent>()
+        assertEquals(1, vcEvents.size)
+        assertEquals(VcStatus(available = true, needsRegistration = true, active = false), vcEvents[0].status)
+    }
+
+    @Test
+    fun `sends vc control messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendVcQuery()
+        client.sendVcStart()
+        client.sendVcStop()
+
+        val query = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_QUERY, query.type)
+        val start = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_START, start.type)
+        val stop = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_VC_STOP, stop.type)
+        // The three m→d vc commands carry empty payloads by spec (webrtc.md).
+        assertEquals(0, query.payload.size)
+        assertEquals(0, start.payload.size)
+        assertEquals(0, stop.payload.size)
+    }
+
+    @Test
+    fun `emits audio-routing-status events and ignores malformed ones`() {
+        setUp()
+        authorize()
+
+        fun statusFrame(mode: String?, cableAvailable: Boolean? = true): String = EnvelopeCodec.encode(
+            Envelope.TYPE_AUDIO_ROUTING_STATUS, 10, VECTOR_SID,
+            buildJsonObject {
+                mode?.let { put("mode", it) }
+                cableAvailable?.let { put("cableAvailable", it) }
+            },
+        )
+        fake.listener?.onTransportText(statusFrame("cable", cableAvailable = true))
+        fake.listener?.onTransportText(statusFrame("hologram"))       // unknown mode — ignored
+        fake.listener?.onTransportText(statusFrame(null))             // missing mode — ignored
+        fake.listener?.onTransportText(statusFrame("both", cableAvailable = null)) // missing flag — ignored
+
+        val events = events.filterIsInstance<SignalingClient.Event.AudioRoutingStatusEvent>()
+        assertEquals(1, events.size)
+        assertEquals(AudioRoutingStatus("cable", cableAvailable = true), events[0].status)
+    }
+
+    @Test
+    fun `sends audio-routing control messages with the right envelope shape`() {
+        setUp()
+        authorize()
+
+        client.sendAudioRoutingQuery()
+        client.sendAudioRoutingSet(Envelope.AUDIO_ROUTING_BOTH)
+
+        val query = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_AUDIO_ROUTING_QUERY, query.type)
+        assertEquals(0, query.payload.size)
+        val set = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_AUDIO_ROUTING_SET, set.type)
+        assertEquals(Envelope.AUDIO_ROUTING_BOTH, (set.payload["mode"] as JsonPrimitive).content)
+    }
+
+    private fun parseFrame(raw: String?): Envelope {
+        assertTrue(raw != null)
+        val parsed = EnvelopeCodec.parse(raw!!)
+        assertTrue(parsed is EnvelopeParseResult.Valid)
+        return (parsed as EnvelopeParseResult.Valid).envelope
+    }
+
+    private fun challengeFrame(): String =
+        EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, VECTOR_SID, buildJsonObject { put("n", VECTOR_NONCE) })
+
+    private fun authOkFrame(desktopName: String): String = EnvelopeCodec.encode(
+        Envelope.TYPE_AUTH_OK,
+        2,
+        VECTOR_SID,
+        buildJsonObject {
+            put("name", desktopName)
+            put("proto", 1)
+        },
+    )
+
+    private fun errorFrame(code: String): String =
+        EnvelopeCodec.encode(Envelope.TYPE_ERROR, 3, VECTOR_SID, buildJsonObject { put("code", code) })
+
+    private companion object {
+        const val TEST_UA = "Caster/0.1.0 (Android15; Pixel8)"
+        const val TEST_DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
+        const val TEST_DESKTOP_NAME = "test-desktop"
+        const val VECTOR_SID = "Jm1LIOO4mWm0lRSSl2fClw"
+        const val VECTOR_NONCE = "EBESExQVFhcYGRobHB0eHw"
+        const val VECTOR_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+        /** Fake expiry far from the clock origin; tests jump past it deliberately. */
+        const val EXPIRES_AT = 2_000L
+
+        /** webrtc.md values; the virtual clock keeps the test instant. */
+        const val HEARTBEAT_INTERVAL = 5_000L
+        const val HEARTBEAT_TIMEOUT = 15_000L
+
+        const val SDP_OFFER = "v=0\r\no=-12 IN IP4 127.0.0.1\r\n"
+        const val SDP_ANSWER = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+    }
+}
+
+/** Scripts the desktop's side of the transport; records everything the phone sends. */
+/**
+ * Persistent-session tests (pairing.md §Persistent sessions, ADR-006): the
+ * resume client sends hello {resume} keyed by the stored trustKey, has no
+ * expiry — its reconnect ladder is bounded — and understands unknown-device.
+ */
+class SignalingClientResumeTest {
+
+    private lateinit var fake: FakeTransport
+    private lateinit var scheduler: FakeScheduler
+    private lateinit var client: SignalingClient
+    private val events = mutableListOf<SignalingClient.Event>()
+    private val trustKey = Handshake.deriveTrustKey(Handshake.decodeSecret(VECTOR_SECRET_B64URL), VECTOR_SID)
+
+    private fun setUp() {
+        fake = FakeTransport()
+        scheduler = FakeScheduler()
+        events.clear()
+        client = SignalingClient(
+            hosts = listOf("192.168.1.42"),
+            port = 52341,
+            sessionId = DEVICE_ID,
+            secret = trustKey,
+            userAgent = "Caster/0.1.0 (Android 16; TB321FU)",
+            deviceId = DEVICE_ID,
+            expiresAtUnixSeconds = null, // trusted: no expiry (ADR-006)
+            transport = fake,
+            scheduler = scheduler,
+            resume = true,
+        )
+        client.connect { events += it }
+    }
+
+    private fun authorizeResume() {
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, DEVICE_ID, buildJsonObject { put("n", VECTOR_NONCE) })
+        )
+        fake.sentFrames.removeFirstOrNull() // auth
+        fake.listener?.onTransportText(authOkResumeFrame())
+    }
+
+    private fun authOkResumeFrame(): String = EnvelopeCodec.encode(
+        Envelope.TYPE_AUTH_OK,
+        2,
+        DEVICE_ID,
+        buildJsonObject {
+            put("name", "test-desktop")
+            put("proto", 1)
+            put("desktopId", "desktop-uuid-1")
+            put("hosts", JsonArray(listOf(JsonPrimitive("192.168.1.50"))))
+        },
+    )
+
+    @Test
+    fun `hello carries resume with the deviceId as sid, and auth is keyed by the trustKey`() {
+        setUp()
+        fake.listener?.onTransportOpen()
+
+        val hello = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Envelope.TYPE_HELLO, hello.type)
+        assertEquals(DEVICE_ID, hello.sid)
+        assertEquals(true, hello.payload["resume"]?.jsonPrimitive?.booleanOrNull)
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 1, DEVICE_ID, buildJsonObject { put("n", VECTOR_NONCE) })
+        )
+        val auth = parseFrame(fake.sentFrames.removeFirstOrNull())
+        assertEquals(Handshake.computeMac(trustKey, DEVICE_ID, VECTOR_NONCE), auth.payload["mac"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `auth-ok on the resume path grants the identity without a derived key`() {
+        setUp()
+        authorizeResume()
+
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+        val authorized = events.filterIsInstance<SignalingClient.Event.Authorized>().single()
+        assertEquals("test-desktop", authorized.desktopName)
+        val grant = authorized.trust
+        assertEquals("desktop-uuid-1", grant?.desktopId)
+        assertEquals(listOf("192.168.1.50"), grant?.hosts)
+        assertEquals(52341, grant?.port)
+        assertNull(grant?.trustKey) // the key is already stored — nothing to derive
+    }
+
+    @Test
+    fun `unknown-device is a terminal failure that closes the connection immediately`() {
+        setUp()
+        fake.listener?.onTransportOpen()
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_ERROR, 1, DEVICE_ID, buildJsonObject { put("code", "unknown-device") })
+        )
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.UNKNOWN_DEVICE),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+        // A terminal error ends the connection from this side too — never wait
+        // for the peer's close (found live 2026-10-30: the socket hung on the
+        // desktop's handshake timeout while the phone showed "Connecting…").
+        assertTrue(fake.closeCount >= 1)
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    @Test
+    fun `a silent handshake times out instead of hanging on Connecting`() {
+        setUp()
+        // The desktop answers nothing — or with frames this client cannot
+        // parse (an older desktop sent sid-less handshake errors, found live
+        // 2026-10-30). The watchdog gives up and closes within the bound.
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.removeFirstOrNull() // hello
+
+        scheduler.advance(SignalingClient.HANDSHAKE_TIMEOUT_MS)
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.BAD_AUTH),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+        assertTrue(fake.closeCount >= 1)
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    @Test
+    fun `a reconnect whose handshake times out keeps retrying instead of failing BAD_AUTH`() {
+        setUp()
+        authorizeResume()
+        fake.listener?.onTransportClosed(1000, "simulated drop")
+        scheduler.advance(scheduler.nextDelayMs()!!) // reconnect attempt opens
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.clear()
+
+        // The desktop is up but too slow to answer the handshake.
+        scheduler.advance(SignalingClient.HANDSHAKE_TIMEOUT_MS)
+
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertTrue(events.none { it is SignalingClient.Event.Failed })
+        assertEquals(1, fake.abortCount)
+        assertEquals(2000L, scheduler.nextDelayMs()) // next ladder rung
+
+        // The next attempt authorizes normally.
+        scheduler.advance(2000)
+        authorizeResume()
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+    }
+
+    @Test
+    fun `a trusted reconnect ladder is bounded — it ends in unreachable, not forever`() {
+        setUp()
+        authorizeResume()
+
+        // Drive every ladder step to a failed attempt; the 10th (per the
+        // named constant) gives up instead of scheduling another retry.
+        fake.listener?.onTransportClosed(1000, "desktop off")
+        repeat(SignalingClient.TRUSTED_RECONNECT_MAX_ATTEMPTS - 1) {
+            assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+            scheduler.advance(scheduler.nextDelayMs()!!)
+            fake.listener?.onTransportFailure(RuntimeException("still off"))
+        }
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+
+        // The final scheduled attempt fails too — no further retry is posted.
+        scheduler.advance(scheduler.nextDelayMs()!!)
+        fake.listener?.onTransportFailure(RuntimeException("still off"))
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertEquals(
+            listOf(SignalingError.CONNECT_UNREACHABLE),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+        assertEquals(0, scheduler.pendingCount())
+    }
+
+    private fun parseFrame(raw: String?): Envelope {
+        assertTrue(raw != null)
+        return (EnvelopeCodec.parse(raw!!) as EnvelopeParseResult.Valid).envelope
+    }
+
+    private companion object {
+        const val DEVICE_ID = "0d0a7c6f-9e0e-4b1a-9f4e-2f6a1c6d5b3e"
+        const val VECTOR_SID = "Jm1LIOO4mWm0lRSSl2fClw"
+        const val VECTOR_NONCE = "EBESExQVFhcYGRobHB0eHw"
+        const val VECTOR_SECRET_B64URL = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    }
+}
+
+private class FakeTransport : SignalingTransport {
+
+    val sentFrames = ArrayDeque<String>()
+    val openedUrls = mutableListOf<String>()
+    var listener: SignalingTransport.Listener? = null
+        private set
+    var closeCount = 0
+        private set
+
+    override fun open(url: String, listener: SignalingTransport.Listener) {
+        openedUrls.add(url)
+        this.listener = listener
+    }
+
+    override fun send(text: String): Boolean {
+        sentFrames.add(text)
+        return true
+    }
+
+    override fun close(code: Int, reason: String) {
+        closeCount += 1
+        listener?.onTransportClosed(code, reason)
+    }
+
+    /** Like OkHttp's cancel() as wrapped by the real transport: silent. */
+    var abortCount = 0
+        private set
+
+    override fun abort() {
+        abortCount += 1
+    }
+}
+
+/** Deterministic scheduler: tasks fire on [advance], nothing runs on its own. */
+private class FakeScheduler : SignalingScheduler {
+
+    var now = 0L
+        private set
+    private val tasks = mutableListOf<Task>()
+
+    private class Task(val dueAt: Long, val action: () -> Unit) {
+        var canceled = false
+    }
+
+    override fun postDelayed(delayMs: Long, action: () -> Unit): () -> Unit {
+        val task = Task(now + delayMs, action)
+        tasks.add(task)
+        return { task.canceled = true }
+    }
+
+    fun advance(ms: Long) {
+        now += ms
+        while (true) {
+            val due = tasks.filter { !it.canceled && it.dueAt <= now }.minByOrNull { it.dueAt } ?: break
+            tasks.remove(due)
+            due.action()
+        }
+    }
+
+    fun pendingCount(): Int = tasks.count { !it.canceled }
+
+    /** Delay of the next pending task, or null when the ladder is empty. */
+    fun nextDelayMs(): Long? =
+        tasks.filter { !it.canceled }.minByOrNull { it.dueAt }?.let { it.dueAt - now }
+}

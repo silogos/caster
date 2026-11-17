@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LocalCast"
+rootProject.name = "Caster"
 include(":app")

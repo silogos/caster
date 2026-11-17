@@ -1,0 +1,540 @@
+package io.github.silogos.caster.webrtc
+
+import android.content.Context
+import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.util.Log
+import io.github.silogos.caster.audio.MicDeviceResolver
+import io.github.silogos.caster.audio.MicRecordSubstituter
+import io.github.silogos.caster.config.MicDeviceSource
+import io.github.silogos.caster.audio.MicSilenceMonitor
+import io.github.silogos.caster.audio.MicState
+import io.github.silogos.caster.signaling.SignalingClient
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.audio.JavaAudioDeviceModule
+
+/**
+ * The mobile's mic half (mobile.md module `webrtc`, ADR-003 factory B): the
+ * `mic` PC — microphone only, on its own [PeerConnectionFactory] with the
+ * stock [JavaAudioDeviceModule] (`VOICE_COMMUNICATION`, mono → Opus mono,
+ * audio.md), negotiated independently of the `media` PC over the same
+ * signaling socket (`pc` discriminator, webrtc.md).
+ *
+ * The mic is off by default (audio.md); [CastService] builds this session
+ * when the user turns it on mid-cast and tears it down when they turn it off.
+ * That independence is the point: the `media` PC (screen + game audio) is
+ * never renegotiated because of the mic, and every failure here is
+ * **mic-local** — the cast keeps running and the UI shows [MicState.Failed],
+ * never a cast error. Cast-fatal events (projection revoked, desktop gone)
+ * are owned by [MediaCastSession]; the service stops this session alongside
+ * it.
+ *
+ * Threading mirrors [MediaCastSession]: all PC work on a private
+ * HandlerThread; signaling events arrive on transport threads and are posted
+ * over.
+ */
+class MicCastSession(
+    private val context: Context,
+    private val signaling: SignalingClient,
+    /** The user's selected mic kind (settings); resolved to a device at record start. */
+    private val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
+    /** State changes, delivered from the session thread. */
+    private val onState: (MicState) -> Unit = {},
+    /** The effective mic routing after every (re)route — display plumbing (Home). */
+    private val onMicRouted: (effective: MicDeviceSource, fallbackFrom: MicDeviceSource?) -> Unit = { _, _ -> },
+    /**
+     * A capture-side death while the session records an **external** kind
+     * (record init/start/read error) — the service's cue to degrade to the
+     * built-in mic, a rebuild this session cannot do itself (its rate and
+     * device were fixed at build). Delivered on the session thread; never
+     * fired for the built-in kind (that path parks as Failed).
+     */
+    private val onCaptureDied: (MicDeviceSource) -> Unit = {},
+    statsIntervalMs: Long = STATS_INTERVAL_MS,
+) {
+
+    private var thread: HandlerThread? = null
+    private var handler: Handler? = null
+
+    private var factory: PeerConnectionFactory? = null
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
+    private var pc: PeerConnection? = null
+    private var audioManager: AudioManager? = null
+
+    /**
+     * Factory B's record runs on the shared capture source (ADR-004,
+     * MicRecordSubstituter.CAPTURE_SOURCE) — the substituter clears the
+     * record's privacy-sensitive flag at recording start (created together
+     * with the ADM, which it reflects into), and the silence monitor matches
+     * "ours" in the arbitration configs against the same source.
+     */
+    private var substituter: MicRecordSubstituter? = null
+    private val silenceMonitor = MicSilenceMonitor(
+        ourSource = MicRecordSubstituter.CAPTURE_SOURCE,
+        log = { Log.d(TAG, it) },
+        onSignal = { signal -> post { applySilenceSignal(signal) } },
+    )
+
+    /** Held so unregister can pass the exact instance that was registered. */
+    private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<AudioRecordingConfiguration>) {
+            silenceMonitor.onRecordings(
+                configs.map { MicSilenceMonitor.Recording(it.clientAudioSource, it.isClientSilenced) },
+            )
+        }
+    }
+
+    /**
+     * The state this session last published — the silence monitor may only
+     * move between Active and Silenced, never overwrite a terminal state.
+     */
+    private var publishedState: MicState = MicState.Off
+
+    /**
+     * The offer/answer/ICE sequencing shared with the media pc (finding #23).
+     * Audio-only offer: Opus is the only codec listed — no munging (the codec
+     * policy in webrtc.md is per track, and the mic has no fallback).
+     */
+    private val negotiator = PeerNegotiator(
+        label = PC_ID,
+        post = ::post,
+        sendOffer = { sdp -> signaling.sendSdpOffer(PC_ID, sdp) },
+        decodeCandidate = IceCandidateJson::decode,
+        onOfferFailed = { detail -> micFailed(detail) },
+    )
+
+    /** Grown once the answer's parameters exist; sampled by the stats poller. */
+    private var lastBytesSent = 0L
+    private var lastStatsAtMs = 0L
+    private val statsIntervalMs = statsIntervalMs
+
+    private val signalingListener: (SignalingClient.Event) -> Unit = { event ->
+        when (event) {
+            // Every (re)auth rebuilds the pc, like the media session — the old
+            // transport objects are dead after a reconnect.
+            is SignalingClient.Event.Authorized ->
+                post { if (active) negotiate() }
+
+            is SignalingClient.Event.SdpAnswer ->
+                if (event.pc == PC_ID) post { if (active) negotiator.applyAnswer(event.sdp) }
+
+            is SignalingClient.Event.IceCandidate ->
+                if (event.pc == PC_ID) post { if (active) negotiator.applyRemoteCandidate(event.candidate) }
+
+            // The cast as a whole is ending (desktop gone, bye, or terminal
+            // signaling failure) — the media session reports it to the user;
+            // this session just stops itself.
+            is SignalingClient.Event.SessionEnded,
+            is SignalingClient.Event.Failed,
+            -> post { if (active) stopLocal(MicState.Off) }
+
+            else -> Unit
+        }
+    }
+
+    /** True between [start] and teardown — guards late signaling callbacks. */
+    private var active = false
+
+    /** Reconnect ladder position (reliability.md A8) — reset on CONNECTED. */
+    private var reconnectAttempts = 0
+
+    /** The pending renegotiate, cancellable at teardown. */
+    private var reconnectRunnable: Runnable? = null
+
+    fun start() {
+        check(!active) { "mic session already started" }
+        active = true
+        val sessionThread = HandlerThread("MicCastSession").apply { start() }
+        thread = sessionThread
+        handler = Handler(sessionThread.looper)
+        signaling.addListener(signalingListener)
+        post { buildOnThread() }
+    }
+
+    fun stop() {
+        post { stopLocal(MicState.Off) }
+    }
+
+    /**
+     * Switch the **live** mic input to [source].
+     * [MicDeviceSwitch.APPLIED_LIVE] — the substituted record took the new
+     * device in place (`setPreferredDevice`, no rebuild; same contract rate
+     * on both sides). [MicDeviceSwitch.NEEDS_REBUILD] — the switch crosses
+     * capture rates (e.g. builtin ↔ USB, ADR-004 round 4): an
+     * `AudioRecord`'s rate is fixed at creation, so the caller rebuilds this
+     * session to apply the pick. [MicDeviceSwitch.DEFERRED] — no substituted
+     * record is live (the session is still building, or the substitution is
+     * degraded): the caller just keeps the setting for the next mic start;
+     * rebuilding here would tear down a session that is seconds old (the
+     * live-found toggle-churn race). The effective routing comes back via
+     * [onMicRouted].
+     */
+    fun setMicDevice(source: MicDeviceSource): MicDeviceSwitch {
+        val liveRateHz = substituter?.liveRecordRateHz() ?: return MicDeviceSwitch.DEFERRED
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val connectedTypes = am?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.map { it.type } ?: emptyList()
+        if (!MicDeviceResolver.isLiveReroutable(liveRateHz, source, connectedTypes)) return MicDeviceSwitch.NEEDS_REBUILD
+        post { substituter?.reroute(source) }
+        return MicDeviceSwitch.APPLIED_LIVE
+    }
+
+    /**
+     * The kind the mic session actually captures with at build time — the
+     * selection resolved against the connected inputs (a selected-but-
+     * unconnected kind keeps the builtin contract), the same resolution
+     * [MicRecordSubstituter] applies at record start.
+     */
+    private fun resolveMicKind(): MicDeviceSource {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return MicDeviceSource.BUILTIN
+        val connectedTypes = am.getDevices(AudioManager.GET_DEVICES_INPUTS).map { it.type }
+        return MicDeviceResolver.kindForType(MicDeviceResolver.resolveType(micDevice, connectedTypes))
+    }
+
+    // ---- Everything below runs (or is posted to) the session thread ----
+
+    private fun post(block: () -> Unit) {
+        val h = handler
+        if (h !== null) {
+            h.post(block)
+        } else {
+            block()
+        }
+    }
+
+    private fun buildOnThread() {
+        try {
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions(),
+            )
+            // Factory B (ADR-003): the stock ADM records the actual microphone.
+            // ADR-004: at recording start its record is swapped for a
+            // privacy-insensitive twin so the concurrent-capture policy
+            // doesn't silence every other app — the reason PUBG's voice chat
+            // died when the cast mic came on.
+            // Addendum (round 3, user-directed): the source is `MIC` — the
+            // exact source the game's voice chat uses, so the audio policy
+            // hosts both captures identically (the voice source kept being
+            // split onto the back mic, which the preferred-device request
+            // could not move).
+            // Addendum (round 4): the input rate follows the **resolved**
+            // device kind, not one constant — the builtin contract's 16 kHz
+            // (round 2, the game-shared path) forced onto wired/USB paths
+            // made the audio policy reconfigure the shared input profile and
+            // mis-feed both captures (chipmunk on the cast mic *and* the
+            // game's voice chat, found live 2026-11-02); external kinds
+            // record at their native rate instead (MicDeviceResolver).
+            val adm = JavaAudioDeviceModule.builder(context)
+                .setAudioSource(MicRecordSubstituter.CAPTURE_SOURCE)
+                .setInputSampleRate(MicDeviceResolver.captureRateHz(resolveMicKind()))
+                .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
+                    override fun onWebRtcAudioRecordStart() {
+                        substituter?.onRecordStart()
+                    }
+
+                    override fun onWebRtcAudioRecordStop() {
+                        substituter?.onRecordStop()
+                    }
+                })
+                .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+                    override fun onWebRtcAudioRecordInitError(errorMessage: String) = captureFailed("record init: $errorMessage")
+                    override fun onWebRtcAudioRecordStartError(
+                        errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
+                        errorMessage: String,
+                    ) = captureFailed("record start ($errorCode): $errorMessage")
+
+                    override fun onWebRtcAudioRecordError(errorMessage: String) = captureFailed("record: $errorMessage")
+                })
+                .createAudioDeviceModule()
+            substituter = MicRecordSubstituter(context, adm, micDevice, onMicRouted)
+            val newFactory = PeerConnectionFactory.builder()
+                .setAudioDeviceModule(adm)
+                .createPeerConnectionFactory()
+            factory = newFactory
+
+            // The APM's automatic gain control stays OFF for the mic (found
+            // live, user-reported): with default constraints the AGC drove
+            // the input toward its loudness target, raising the gain whenever
+            // the source was quiet — distant voices and room noise came out
+            // of the desktop amplified. The game-audio path already refuses
+            // this class of processing (MediaCastSession: playback capture is
+            // finished audio); the mic records at its natural level instead.
+            // NS/AEC keep their defaults — suppression removes stationary
+            // noise without gain adaptation, and the AEC has no far-end
+            // reference in this topology anyway (audio.md known limitations).
+            val micConstraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
+            }
+            val newAudioSource = newFactory.createAudioSource(micConstraints)
+            audioSource = newAudioSource
+            val newAudioTrack = newFactory.createAudioTrack(AUDIO_TRACK_ID, newAudioSource)
+            audioTrack = newAudioTrack
+
+            registerSilenceMonitor()
+
+            publishState(MicState.Active)
+            negotiate()
+        } catch (t: Throwable) {
+            Log.e(TAG, "building the mic pipeline failed", t)
+            micFailed(t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    // ---- silence monitor (ADR-004): who won the mic arbitration ----
+
+    /**
+     * The platform tells every holder of RECORD_AUDIO how the active
+     * recordings fare — metadata only, never content (AGENTS.md logging).
+     * The monitor turns that into a single fact: did the capture this session
+     * owns get silenced (e.g. another app's voice chat has priority)?
+     */
+    private fun registerSilenceMonitor() {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManager = am
+        try {
+            am?.registerAudioRecordingCallback(
+                recordingCallback,
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (t: Throwable) {
+            // Diagnostics only — the mic itself is unaffected.
+            Log.w(TAG, "registering the recording callback failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Monitor transition → UI state. Guarded three ways: the session is still
+     * up, the current published state is in the Active/Silenced pair (a
+     * terminal Off/Failed is never overwritten by a late config event), and
+     * the pair actually moves.
+     */
+    private fun applySilenceSignal(signal: MicSilenceMonitor.Signal) {
+        if (!active) return
+        val target = when (signal) {
+            MicSilenceMonitor.Signal.OwnSourceSilenced -> MicState.Silenced
+            MicSilenceMonitor.Signal.OwnSourceCleared -> MicState.Active
+        }
+        if (publishedState != MicState.Active && publishedState != MicState.Silenced) return
+        if (publishedState != target) publishState(target)
+    }
+
+    private fun publishState(next: MicState) {
+        publishedState = next
+        onState(next)
+    }
+
+    /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
+    private fun negotiate() {
+        closePc()
+        val newFactory = factory ?: return
+        val newTrack = audioTrack ?: return
+
+        val newPc = newFactory.createPeerConnection(LibWebRtcPeer.lanRtcConfiguration(), pcObserver)
+        if (newPc === null) {
+            micFailed("createPeerConnection returned null")
+            return
+        }
+        pc = newPc
+        negotiator.attach(LibWebRtcPeer(newPc))
+        if (newPc.addTrack(newTrack, listOf(STREAM_ID)) === null) {
+            micFailed("addTrack returned null — native track wiring failed")
+            return
+        }
+        negotiator.offer()
+    }
+
+    /**
+     * Local candidates and gathering go straight to signaling; connection
+     * state hops to the session thread, where the reconnect ladder lives
+     * (it used to run on libwebrtc's signaling thread — group B's fix for
+     * the media pc, now shared).
+     */
+    private val pcObserver = SignalingPeerObserver(PC_ID, signaling) { newState ->
+        post { if (active) onConnectionState(newState) }
+    }
+
+    private fun onConnectionState(newState: PeerConnection.PeerConnectionState) {
+        Log.i(TAG, "connection state: $newState")
+        when (newState) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                reconnectAttempts = 0
+                scheduleStats()
+            }
+
+            // A dead mic pc is not a dead mic (live finding 2026-11-02:
+            // a connection reset kept the cast but parked the mic as
+            // Failed until re-toggled). Ride the reconnect ladder —
+            // same shape as the signaling ladder — and only a spent
+            // budget parks the session. The cast (media pc) is never
+            // touched from here either way.
+            PeerConnection.PeerConnectionState.FAILED -> scheduleReconnectOrPark("ice failed")
+            else -> Unit
+        }
+    }
+
+    // ---- getStats logging (webrtc.md: ~1 Hz; audio bytes prove the mic is flowing) ----
+
+    private val statsRunnable = object : Runnable {
+        override fun run() {
+            val currentPc = pc
+            if (currentPc === null || !active) return
+            currentPc.getStats { report ->
+                // Same as MediaCastSession: `type` is an RTCStats getter, not a
+                // members key (Phase15 on-device finding) — merged in here.
+                val entries = report.statsMap.values.map { stats ->
+                    buildMap<String, Any> {
+                        put("type", stats.type)
+                        putAll(stats.members)
+                    }
+                }
+                val sample = SenderStats.sampleAudioSend(entries)
+                if (sample !== null) {
+                    val nowMs = System.currentTimeMillis()
+                    val bitrateBps = if (lastStatsAtMs > 0) {
+                        ((sample.bytesSent - lastBytesSent) * 8000) / (nowMs - lastStatsAtMs).coerceAtLeast(1)
+                    } else {
+                        0
+                    }
+                    Log.i(
+                        TAG,
+                        "stats: ${bitrateBps / 1_000} kbps, rtt ${sample.rttMs ?: "?"} ms",
+                    )
+                    lastBytesSent = sample.bytesSent
+                    lastStatsAtMs = nowMs
+                }
+            }
+            if (active) {
+                handler?.postDelayed(this, statsIntervalMs)
+            }
+        }
+    }
+
+    private fun scheduleStats() {
+        handler?.removeCallbacks(statsRunnable)
+        handler?.postDelayed(statsRunnable, statsIntervalMs)
+    }
+
+    // ---- teardown ----
+
+    /**
+     * Idempotent teardown; [terminal] is the state published when it finishes
+     * ([MicState.Off] for a user stop, [MicState.Failed] for a capture/ice
+     * death).
+     */
+    private fun stopLocal(terminal: MicState) {
+        if (!active && thread === null) return
+        active = false
+        signaling.removeListener(signalingListener)
+        try {
+            audioManager?.unregisterAudioRecordingCallback(recordingCallback)
+        } catch (t: Throwable) {
+            Log.d(TAG, "unregistering the recording callback failed: ${t.message}")
+        }
+        audioManager = null
+        handler?.removeCallbacks(statsRunnable)
+        reconnectRunnable?.let { handler?.removeCallbacks(it) }
+        reconnectRunnable = null
+        closePc()
+        audioTrack?.dispose()
+        audioTrack = null
+        audioSource?.dispose()
+        audioSource = null
+        // The ADM is owned (and released) by the factory — its release must
+        // not be called from app code.
+        factory?.dispose()
+        factory = null
+        thread?.quitSafely()
+        thread = null
+        handler = null
+        publishState(terminal)
+        Log.i(TAG, "mic session torn down")
+    }
+
+    private fun closePc() {
+        negotiator.detach() // disposes the pc (close alone leaked it); late callbacks are dropped
+        pc = null
+    }
+
+    /**
+     * Mic-local failure: stop this session and tell the UI — the cast keeps
+     * running (audio.md). Safe from any thread via post; a no-op if the
+     * session is already down.
+     */
+    private fun micFailed(detail: String) {
+        Log.w(TAG, "mic unavailable: $detail")
+        post {
+            if (active) stopLocal(MicState.Failed)
+        }
+    }
+
+    /**
+     * Transport death → renegotiate on the [MicReconnectPolicy] ladder; a
+     * spent budget parks the session as Failed (reliability.md A8,
+     * formalized after the live finding: a connection reset kept the cast
+     * but lost the mic). Runs on the session thread (pc observer callbacks
+     * arrive there).
+     */
+    private fun scheduleReconnectOrPark(reason: String) {
+        val backoffMs = MicReconnectPolicy.backoffMsFor(reconnectAttempts)
+        if (backoffMs === null) {
+            micFailed("$reason — reconnect budget spent (${MicReconnectPolicy.MAX_ATTEMPTS} attempts)")
+            return
+        }
+        reconnectAttempts++
+        Log.w(
+            TAG,
+            "mic pc failed ($reason) — renegotiating in ${backoffMs}ms " +
+                "(attempt $reconnectAttempts/${MicReconnectPolicy.MAX_ATTEMPTS})",
+        )
+        reconnectRunnable?.let { handler?.removeCallbacks(it) }
+        val runnable = Runnable {
+            reconnectRunnable = null
+            if (active) negotiate()
+        }
+        reconnectRunnable = runnable
+        handler?.postDelayed(runnable, backoffMs)
+    }
+
+    /**
+     * A capture-side death. External kind → hand the service the built-in
+     * degrade ([onCaptureDied]; the rebuild is the service's to drive — this
+     * session's rate and device were fixed at build). Built-in kind, or a
+     * degrade session that itself died → park as Failed, the pre-existing
+     * contract. Runs on the ADM's recording thread; both paths post over.
+     */
+    private fun captureFailed(detail: String) {
+        val kind = resolveMicKind()
+        if (kind != MicDeviceSource.BUILTIN) {
+            Log.w(TAG, "capture died on $kind ($detail) — offering the service the builtin degrade")
+            post { if (active) onCaptureDied(kind) }
+        } else {
+            micFailed(detail)
+        }
+    }
+
+    /** The outcome of a live device pick ([setMicDevice]) — see its doc. */
+    enum class MicDeviceSwitch { APPLIED_LIVE, NEEDS_REBUILD, DEFERRED }
+
+    companion object {
+        private const val TAG = "MicCastSession"
+
+        // ADR-004 round 4: the input-rate contract lives in
+        // MicDeviceResolver (per-kind, JVM-tested) — the builtin 16 kHz
+        // (SHARED_VOICE_INPUT_RATE_HZ) plus the external kinds' native rates.
+
+        /** webrtc.md: each side polls getStats ~1 Hz. */
+        const val STATS_INTERVAL_MS = 1_000L
+
+        private const val PC_ID = "mic"
+        private const val AUDIO_TRACK_ID = "caster-mic"
+        private const val STREAM_ID = "caster-mic"
+    }
+}
