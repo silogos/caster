@@ -1,4 +1,5 @@
 mod audio;
+mod h264;
 mod latency_probe;
 mod logging;
 mod opus_fmtp;
@@ -10,6 +11,8 @@ mod settings;
 mod signaling;
 mod syphon;
 mod tray;
+mod usb_link;
+mod usb_protocol;
 mod video;
 mod virtual_audio;
 mod webrtc;
@@ -58,9 +61,31 @@ fn regenerate_pairing(control: tauri::State<'_, ServerControl>) -> Result<(), St
     send_command(&control, signaling::ServerCommand::RegeneratePairing)
 }
 
+/// Saves the video window's state, so the next launch opens it again (or not).
+pub(crate) fn remember_video_open(app: &tauri::AppHandle, open: bool) {
+    let Some(controls) = app.try_state::<ReceiverControls>() else { return };
+    let Ok(mut current) = controls.current.lock() else { return };
+    if current.video_open == open {
+        return;
+    }
+    current.video_open = open;
+    if let Err(e) = settings::save(&controls.path, &current) {
+        log::warn!(target: "settings", "not saved: {e}");
+    }
+}
+
+/// The phone this receiver trusts, by name — the deck opens on it, offline,
+/// instead of the QR (ADR-006; frame 14). Null when none is paired.
+#[tauri::command]
+fn saved_phone() -> Option<String> {
+    let paths = pairing::StorePaths::from_home()?;
+    pairing::read_trust(&paths.trust).map(|t| t.name)
+}
+
 /// "Open video": the native video window, and the sound with it.
 #[tauri::command]
 fn open_video(app: tauri::AppHandle) -> Result<(), String> {
+    remember_video_open(&app, true);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         video::open_video_window();
@@ -74,6 +99,7 @@ fn open_video(app: tauri::AppHandle) -> Result<(), String> {
 /// "Close video": hides the window and silences the sound.
 #[tauri::command]
 fn close_video(app: tauri::AppHandle) -> Result<(), String> {
+    remember_video_open(&app, false);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         video::close_video_window();
@@ -313,11 +339,30 @@ pub fn run() {
             audio::set_syphon_on(saved.syphon_output);
             apply_plays_on(audio::Track::Game, saved.game_plays_on);
             apply_plays_on(audio::Track::Mic, saved.mic_plays_on);
+            let reopen_video = saved.video_open;
             app.manage(ReceiverControls { path: settings_path, current: Mutex::new(saved) });
+            // The video window as the user left it (shows NO INPUT until a cast arrives).
+            if reopen_video {
+                let handle = app.handle().clone();
+                let _ = app.handle().run_on_main_thread(move || {
+                    video::open_video_window();
+                    audio::set_window_open(true);
+                    tray::sync_dock_icon(&handle);
+                    let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
+                });
+            }
             // The first session exists before the window can ask for it.
             let mut store = pairing::SessionStore::new(pairing::SESSION_TTL_SECONDS);
             let first = store.create(pairing::unix_now(), pairing::lan_ipv4_hosts())?.view();
             *app.state::<PairingView>().0.lock().map_err(|_| "pairing view lock")? = Some(first);
+
+            // The USB link (ADR-034): its own thread, the same trust store.
+            usb_link::start(usb_link::Config {
+                app: app.handle().clone(),
+                desktop_id: desktop_id.clone(),
+                desktop_name: pairing::desktop_name(),
+                trust_path: paths.trust.clone(),
+            });
 
             let handle = app.handle().clone();
             let host = TauriHost {
@@ -356,6 +401,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pairing_payload,
+            saved_phone,
             forget_phone,
             regenerate_pairing,
             receiver_settings,

@@ -8,8 +8,19 @@ fn main() {
     {
         println!("cargo:rustc-link-arg=-ObjC");
         build_syphon_bridge();
+        build_h264_decoder();
     }
     tauri_build::build()
+}
+
+/// The USB cast's VideoToolbox decoder (ADR-034).
+#[cfg(target_os = "macos")]
+fn build_h264_decoder() {
+    println!("cargo:rerun-if-changed=native/h264_decoder.m");
+    cc::Build::new().file("native/h264_decoder.m").flag("-fobjc-arc").compile("zf_h264_decoder");
+    for framework in ["VideoToolbox", "CoreMedia", "CoreVideo", "Foundation"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
 
 /// The Syphon output (ADR-021): compiles the Objective-C bridge and links

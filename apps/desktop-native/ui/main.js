@@ -26,7 +26,10 @@ function showStage(stage) {
 
 const state = {
   phone: null,
-  link: 'connected', // 'connected' | 'reconnecting'
+  // 'connected' | 'reconnecting' (Wi-Fi dropped) | 'unplugged' (the cable went, frame 12)
+  // | 'offline' (opened with a saved phone that hasn't connected yet, frame 14)
+  link: 'connected',
+  via: 'wifi', // the link the phone is on: 'wifi' | 'usb' (ADR-034)
   live: false,
   liveSince: 0,
   info: null,
@@ -65,7 +68,9 @@ function renderDeck() {
 
   const ann = $('annunciator')
   ann.className = 'annunciator'
-  if (state.link === 'reconnecting') {
+  if (state.link === 'offline') {
+    ann.textContent = 'OFFLINE'
+  } else if (state.link === 'reconnecting') {
     ann.textContent = 'RECONNECTING'
     ann.classList.add('reconnecting')
   } else if (state.live) {
@@ -77,24 +82,38 @@ function renderDeck() {
 
   const pill = $('status-pill')
   pill.className = 'pill'
-  if (state.link === 'reconnecting') {
+  const cable = state.via === 'usb'
+  if (state.link === 'offline') {
+    pill.textContent = 'Not connected — tap Connect on the phone, or plug the cable in'
+  } else if (state.link === 'unplugged') {
+    pill.textContent = 'Cable unplugged — plug it in again, or tap Connect on the phone for Wi-Fi'
+  } else if (state.link === 'reconnecting') {
     pill.textContent = `Waiting for ${state.phone ?? 'the phone'} to reconnect…`
     pill.classList.add('reconnecting')
   } else if (state.live) {
-    pill.textContent = `Casting · ${settingsLine(state.info)}`
+    pill.textContent = cable ? `Casting by cable · ${settingsLine(state.info)}` : `Casting · ${settingsLine(state.info)}`
     pill.classList.add('live')
   } else {
-    pill.textContent = 'Connected — start casting from your phone'
+    pill.textContent = cable ? 'Connected by cable — start casting from your phone' : 'Connected — start casting from your phone'
     pill.classList.add('connected')
   }
 
-  $('readout').textContent = state.live ? liveLine(state.info, state.picture) : 'Waiting for the cast'
+  $('readout').textContent = state.live
+    ? liveLine(state.info, state.picture) + (cable ? ' · USB' : '')
+    : 'Waiting for the cast'
   $('timecode').classList.toggle('idle', !state.live)
   if (!state.live) $('timecode').textContent = '00:00:00'
   $('chip-game').classList.toggle('on', state.live && state.info?.gameAudio === true)
   $('chip-mic').classList.toggle('on', state.live && state.info?.mic === true)
 
+  const tag = $('link-tag')
+  tag.classList.toggle('hidden', !(cable && state.link !== 'offline'))
+  tag.classList.toggle('dim', state.link === 'unplugged')
+  $('show-qr-hint').classList.toggle('hidden', state.link !== 'offline')
+  $('video-hint').classList.toggle('hidden', state.link === 'offline')
+
   const toggle = $('video-toggle')
+  toggle.disabled = state.link === 'offline' && !state.videoOpen
   toggle.textContent = state.videoOpen ? 'Close video' : 'Open video'
   toggle.className = `btn ${state.videoOpen ? 'btn-secondary' : 'btn-primary'}`
   renderGameSub()
@@ -117,7 +136,19 @@ tauri?.event.listen('pairing:session-updated', (event) => {
   if (!event.payload) return
   $('qr-img').src = event.payload.qrDataUrl
   resetDisconnect()
-  showStage('waiting')
+  // A saved or connected phone keeps the deck (frame 14); the QR is one click away.
+  if (!state.phone) showStage('waiting')
+// Opened with a phone already trusted (ADR-006): the deck, offline, not the QR (frame 14).
+invoke('saved_phone')
+  .then((name) => {
+    if (name && !state.phone) {
+      Object.assign(state, { phone: name, link: 'offline', via: 'wifi' })
+      renderDeck()
+      showStage('deck')
+    }
+  })
+  .catch((err) => console.error('saved_phone failed:', err))
+$('show-qr').addEventListener('click', () => showStage('waiting'))
 })
 
 tauri?.event.listen('pairing:mobile-state', (event) => {
@@ -125,15 +156,18 @@ tauri?.event.listen('pairing:mobile-state', (event) => {
   if (s === 'connected') {
     state.phone = event.payload.name ?? 'Android device'
     state.link = 'connected'
+    state.via = event.payload.link === 'usb' ? 'usb' : 'wifi'
     state.info = null
     showStage('deck')
   } else if (s === 'disconnected') {
-    state.link = 'reconnecting'
+    // A cable that went has nothing to wait for; a Wi-Fi drop may come back (ADR-006).
+    state.link = event.payload.link === 'usb' ? 'unplugged' : 'reconnecting'
     state.live = false
   } else if (s === 'session-info') {
     state.info = event.payload.info ?? state.info
   } else if (s === 'forgotten') {
-    Object.assign(state, { phone: null, link: 'connected', live: false, info: null })
+    Object.assign(state, { phone: null, link: 'connected', via: 'wifi', live: false, info: null })
+    showStage('waiting')
   }
   renderDeck()
 })

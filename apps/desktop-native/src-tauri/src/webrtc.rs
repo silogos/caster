@@ -473,23 +473,23 @@ const STALE_STREAM_CHECK: std::time::Duration = std::time::Duration::from_secs(1
 /// under pressure (found 2026-11-11: 640×400 arrived under a status that
 /// read 1920×1200 · 60 fps).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ReceivedPicture {
-    width: u32,
-    height: u32,
-    fps: u32,
+pub(crate) struct ReceivedPicture {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) fps: u32,
 }
 
 /// The picture that is arriving changed, or stopped arriving (None): the
 /// deck's live readout shows it. The cast's settings stay the phone's
 /// `session-info`, on the pill and the tray.
-fn announce_picture(app: &tauri::AppHandle, picture: Option<ReceivedPicture>) {
+pub(crate) fn announce_picture(app: &tauri::AppHandle, picture: Option<ReceivedPicture>) {
     let payload = picture.map(|p| json!({ "width": p.width, "height": p.height, "fps": p.fps }));
     let _ = app.emit("cast:picture", payload);
 }
 
 /// Input went live or stopped: the deck's ON AIR, and the video window's
 /// NO INPUT card (main thread). No-op when nothing changed.
-fn announce_input(app: &tauri::AppHandle, live: bool) {
+pub(crate) fn announce_input(app: &tauri::AppHandle, live: bool) {
     if crate::video::set_live(live) {
         let _ = app.emit("cast:state", json!({ "live": live }));
         let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
@@ -498,6 +498,26 @@ fn announce_input(app: &tauri::AppHandle, live: bool) {
             crate::syphon::publish_no_input();
         }
     }
+}
+
+/// Keeps the video window's visibility fresh from the main thread, at most
+/// every [`crate::video::VISIBILITY_POLL_INTERVAL`] — called by every frame
+/// loop (Wi-Fi and USB).
+pub(crate) fn poll_window_visibility(app: &tauri::AppHandle, last: &mut Option<std::time::Instant>) {
+    if last.map_or(false, |t| t.elapsed() < crate::video::VISIBILITY_POLL_INTERVAL) {
+        return;
+    }
+    *last = Some(std::time::Instant::now());
+    let poll_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        // The window's own close button: silence the sound, update the UI.
+        if crate::video::refresh_visibility() {
+            crate::remember_video_open(&poll_app, false);
+            crate::audio::set_window_open(false);
+            crate::tray::sync_dock_icon(&poll_app);
+            let _ = poll_app.emit("video:window", json!({ "open": false }));
+        }
+    });
 }
 
 /// The SDP session id — the second field of the `o=` line. It stays fixed
@@ -616,18 +636,7 @@ async fn consume_video(app: tauri::AppHandle, video: livekit::webrtc::video_trac
         if !crate::video::is_live() {
             announce_input(&app, true);
         }
-        if last_visibility_poll.map_or(true, |t| t.elapsed() >= crate::video::VISIBILITY_POLL_INTERVAL) {
-            last_visibility_poll = Some(std::time::Instant::now());
-            let poll_app = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                // The window's own close button: silence the sound, update the UI.
-                if crate::video::refresh_visibility() {
-                    crate::audio::set_window_open(false);
-                    crate::tray::sync_dock_icon(&poll_app);
-                    let _ = poll_app.emit("video:window", json!({ "open": false }));
-                }
-            });
-        }
+        poll_window_visibility(&app, &mut last_visibility_poll);
         let started = std::time::Instant::now();
         let followup = match renderer.drop_if_hidden() {
             Some(followup) => followup,
