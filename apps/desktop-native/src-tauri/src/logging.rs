@@ -2,7 +2,7 @@
 //! Every line is `HH:MM:SS.mmm LEVEL [scope] message` on stderr — local
 //! wall-clock time, so a receiver log lines up with the phone's logcat.
 //!
-//! `ZFC_LOG` picks the level for the app's own scopes (`error`, `warn`,
+//! `CASTER_LOG` picks the level for the app's own scopes (`error`, `warn`,
 //! `info` — the default — or `debug`); third-party crates (libwebrtc's Rust
 //! bindings, tauri) only surface warnings and errors. Never log audio
 //! samples, frames, or pairing secrets — numbers and shapes only.
@@ -12,7 +12,7 @@ use std::io::Write;
 
 /// The app's own log scopes (the `target:` of every call site).
 const APP_SCOPES: &[&str] = &["signaling", "webrtc", "audio", "video", "pairing", "power", "settings", "tray", "latency", "syphon", "virtual-audio", "usb"];
-const LEVEL_ENV: &str = "ZFC_LOG";
+const LEVEL_ENV: &str = "CASTER_LOG";
 
 struct Logger {
     app_level: LevelFilter,

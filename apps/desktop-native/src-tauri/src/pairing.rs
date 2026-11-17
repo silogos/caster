@@ -2,8 +2,7 @@
 //! persistent trust entry (ADR-006), the desktop's persistent identity, and
 //! the handshake crypto. No sockets here — the signaling server drives it.
 //!
-//! The trust file and `desktop-id` are the SAME files the Electron desktop
-//! uses, so a phone that trusts one desktop app resumes against the other.
+//! The trust file and `desktop-id` live in `~/Library/Application Support/Caster`.
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -18,14 +17,13 @@ pub const NONCE_BYTES: usize = 16;
 const SESSION_ID_BYTES: usize = 16;
 const SESSION_SECRET_BYTES: usize = 32;
 const TRUST_KEY_BYTES: usize = 32;
-const TRUST_INFO: &[u8] = b"zfc-trust-v1";
-/// QR payload schema version and app tag (pairing.md §QR payload v1).
-const QR_PAYLOAD_VERSION: u32 = 1;
-const QR_APP_TAG: &str = "zfc";
+const TRUST_INFO: &[u8] = b"caster-trust-v1";
+/// QR payload schema version and app tag (pairing.md §QR payload v2, ADR-035).
+const QR_PAYLOAD_VERSION: u32 = 2;
+const QR_APP_TAG: &str = "caster";
 
-/// The Electron app's userData directory — shared on purpose (see above).
-// The folder keeps the product's first name: renaming it would lose every saved pairing.
-const APP_SUPPORT_DIR: &str = "Library/Application Support/Zero-Friction Local Cast";
+/// The receiver's data folder (ADR-035).
+const APP_SUPPORT_DIR: &str = "Library/Application Support/Caster";
 const TRUST_FILE: &str = "trust.json";
 const DESKTOP_ID_FILE: &str = "desktop-id";
 const TRUST_DOC_VERSION: i64 = 1;
@@ -73,7 +71,7 @@ pub fn verify_mac(expected: &str, received: &str) -> bool {
 }
 
 /// trustKey = HKDF-SHA256(ikm = session secret, salt = ASCII(sid),
-/// info = "zfc-trust-v1", L = 32) — derived on both sides, never sent.
+/// info = "caster-trust-v1", L = 32) — derived on both sides, never sent.
 pub fn derive_trust_key(session_secret: &[u8], sid: &str) -> Vec<u8> {
     let hk = hkdf::Hkdf::<Sha256>::new(Some(sid.as_bytes()), session_secret);
     let mut okm = [0u8; TRUST_KEY_BYTES];
@@ -399,7 +397,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("zfc-pairing-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("caster-pairing-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -426,12 +424,31 @@ mod tests {
     }
 
     #[test]
+    fn mac_matches_the_phones_vector() {
+        // The phone's HandshakeTest pins the same values.
+        let secret = b64url_decode("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8").unwrap();
+        assert_eq!(compute_mac(&secret, "Jm1LIOO4mWm0lRSSl2fClw", "EBESExQVFhcYGRobHB0eHw"), "cPTgkuJCjSp2z9MZyxVs-QtHs8fCYrMN7s-k0YfyXZQ");
+    }
+
+    #[test]
+    fn trust_key_matches_the_phones_vectors() {
+        // The same vectors as the phone's HandshakeTest: both HKDFs must agree
+        // byte for byte, or a saved pairing could never resume (ADR-006).
+        let key = derive_trust_key(&b64url_decode("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY").unwrap(), "sess");
+        assert_eq!(b64url(&key), "Z_5R1fvhoBiP0sYaYU1zFB1ncQHGdzNWnk0h6CBL2oA");
+        let secret: Vec<u8> = (0..32)
+            .map(|i| u8::from_str_radix(&"9f2c7be14ad83a05c6f1b29e4d7a83c0b5e1962d483fc7abe1d05f92c38b7a41"[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        assert_eq!(b64url(&derive_trust_key(&secret, "c2Vzc2lvbi1pZA")), "kaT6ixvbrZrMtlaInI-7b5hYDuL4CybYTu-clZD2MJ8");
+    }
+
+    #[test]
     fn qr_payload_carries_the_documented_fields() {
         let mut store = SessionStore::new(SESSION_TTL_SECONDS);
         let s = store.create(1_000, hosts()).unwrap();
         let p = &s.view()["payload"];
-        assert_eq!(p["v"], 1);
-        assert_eq!(p["t"], "zfc");
+        assert_eq!(p["v"], 2);
+        assert_eq!(p["t"], "caster");
         assert_eq!(p["h"], json!(["192.168.1.10"]));
         assert_eq!(p["e"], 1_000 + SESSION_TTL_SECONDS);
         assert_eq!(b64url_decode(p["k"].as_str().unwrap()).unwrap(), s.secret);

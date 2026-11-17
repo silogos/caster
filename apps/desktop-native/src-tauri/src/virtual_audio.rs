@@ -3,9 +3,8 @@
 //! copied into `/Library/Audio/Plug-Ins/HAL` with macOS's own administrator
 //! password dialog, then `coreaudiod` restarted so it loads the plug-in.
 //!
-//! The same step removes `ZeroFrictionAudio.driver`, the Electron receiver's
-//! plug-in (ADR-008) these devices replace. The receiver never sees the
-//! password: `osascript` asks for it and runs the commands as root.
+//! The receiver never sees the password: `osascript` asks for it and runs
+//! the commands as root.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,8 +15,6 @@ use std::time::{Duration, Instant};
 pub const DRIVER_BUNDLE: &str = "CasterAudio.driver";
 /// Where Core Audio loads HAL plug-ins from.
 const HAL_PLUGINS_DIR: &str = "/Library/Audio/Plug-Ins/HAL";
-/// The ADR-008 plug-in Caster's replaces; removed by the same install.
-const REPLACED_DRIVER_BUNDLE: &str = "ZeroFrictionAudio.driver";
 /// The devices the plug-in creates. Both must appear for an install to count.
 pub const DEVICE_NAMES: [&str; 2] = [crate::audio::CASTER_AUDIO_DEVICE, crate::audio::CASTER_MIC_DEVICE];
 /// `coreaudiod` comes back in about a second; give the devices this long to
@@ -152,7 +149,7 @@ fn classify(succeeded: bool, stderr: &str, on_disk: bool) -> Outcome {
 }
 
 /// The root shell command: copy the plug-in in beside the installed one,
-/// and only once that worked remove the old ones and move it into place (a
+/// and only once that worked remove the old one and move it into place (a
 /// failed copy must not leave the Mac without a plug-in — found live
 /// 2026-11-14 with the removal first). Then restart `coreaudiod` (launchd
 /// brings it back). `killall` exits non-zero when coreaudiod is not
@@ -160,14 +157,12 @@ fn classify(succeeded: bool, stderr: &str, on_disk: bool) -> Outcome {
 fn shell_command(source: &Path, hal: &Path) -> String {
     let dest = hal.join(DRIVER_BUNDLE);
     let incoming = hal.join(format!("{DRIVER_BUNDLE}.new"));
-    let replaced = hal.join(REPLACED_DRIVER_BUNDLE);
     format!(
         "/bin/mkdir -p {hal} && /bin/rm -rf {incoming} && /bin/cp -R {source} {incoming} && \
-         /bin/rm -rf {dest} {replaced} && /bin/mv {incoming} {dest} && (/usr/bin/killall coreaudiod || true)",
+         /bin/rm -rf {dest} && /bin/mv {incoming} {dest} && (/usr/bin/killall coreaudiod || true)",
         hal = shell_quote(&hal.to_string_lossy()),
         incoming = shell_quote(&incoming.to_string_lossy()),
         dest = shell_quote(&dest.to_string_lossy()),
-        replaced = shell_quote(&replaced.to_string_lossy()),
         source = shell_quote(&source.to_string_lossy()),
     )
 }
@@ -202,14 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn the_install_copies_first_then_replaces_both_plugins_and_restarts_coreaudiod() {
+    fn the_install_copies_first_then_replaces_the_plugin_and_restarts_coreaudiod() {
         let cmd = shell_command(Path::new("/tmp/stage/CasterAudio.driver"), Path::new(HAL_PLUGINS_DIR));
         assert_eq!(
             cmd,
             "/bin/mkdir -p '/Library/Audio/Plug-Ins/HAL' && \
              /bin/rm -rf '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver.new' && \
              /bin/cp -R '/tmp/stage/CasterAudio.driver' '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver.new' && \
-             /bin/rm -rf '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver' '/Library/Audio/Plug-Ins/HAL/ZeroFrictionAudio.driver' && \
+             /bin/rm -rf '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver' && \
              /bin/mv '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver.new' '/Library/Audio/Plug-Ins/HAL/CasterAudio.driver' && \
              (/usr/bin/killall coreaudiod || true)"
         );

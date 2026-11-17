@@ -309,7 +309,7 @@ mod tests {
     /// Needs a Metal device (any Mac with a display); skipped without.
     #[test]
     fn the_bridge_publishes_a_converted_frame_in_syphons_row_order() {
-        let name = CString::new("zfc-syphon-test").unwrap();
+        let name = CString::new("caster-syphon-test").unwrap();
         if !unsafe { zf_syphon_start(name.as_ptr()) } {
             eprintln!("no Metal device — skipping the Syphon bridge test");
             return;

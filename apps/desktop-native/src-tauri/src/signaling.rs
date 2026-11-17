@@ -29,7 +29,7 @@ use tokio_tungstenite::WebSocketStream;
 
 /// Default port (pairing.md); the QR carries it.
 pub const SIGNALING_PORT: u16 = 52_341;
-pub const SIGNALING_PATH: &str = "/zfc/v1";
+pub const SIGNALING_PATH: &str = "/caster/v1";
 
 /// Protocol timing (pairing.md, webrtc.md); injectable for tests.
 #[derive(Clone, Copy)]

@@ -67,7 +67,7 @@ fn fast_timings() -> Timings {
 
 async fn start_server(timings: Timings, ttl_seconds: u64) -> Server {
     static N: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join(format!("zfc-signaling-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!("caster-signaling-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let paths = StorePaths { trust: dir.join("trust.json"), desktop_id: dir.join("desktop-id") };
     let mut store = SessionStore::new(ttl_seconds);
@@ -144,7 +144,7 @@ impl Client {
 }
 
 fn hello(device_id: Option<&str>, resume: bool) -> Value {
-    let mut h = json!({ "ua": "LocalCast/1.0 (Android 16; TB321FU)", "protoMin": 1, "protoMax": 2 });
+    let mut h = json!({ "ua": "Caster/1.0 (Android 16; TB321FU)", "protoMin": 1, "protoMax": 2 });
     if let Some(id) = device_id {
         h["deviceId"] = json!(id);
     }
