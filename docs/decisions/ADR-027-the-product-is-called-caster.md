@@ -1,6 +1,6 @@
 # ADR-027: The product is called Caster, with one icon
 
-- **Status:** accepted (2026-11-11): the name is the product owner's decision, and so is the icon, chosen from the candidates drawn in the design file (`designs/mobile-app.figcraft`, "The name and the icon"). Unit-tested and built; see Consequences for what was seen running.
+- **Status:** accepted (2026-11-11): the name is the product owner's decision, and so is the icon, chosen from the candidates drawn in the design file (`designs/mobile-app.figcraft`, "The name and the icon"). Unit-tested and built; see Consequences for what was seen running. **Decision 2 superseded by [ADR-035](ADR-035-machine-identifiers-carry-caster.md) (2026-11-18):** the machine identifiers carry Caster too.
 
 ## Context
 

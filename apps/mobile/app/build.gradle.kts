@@ -24,11 +24,11 @@ fun versionCodeOf(version: String): Int {
 }
 
 android {
-    namespace = "com.zerofriction.localcast"
+    namespace = "io.github.silogos.caster"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.zerofriction.localcast"
+        applicationId = "io.github.silogos.caster"
         minSdk = 29
         targetSdk = 36
         versionName = productVersion

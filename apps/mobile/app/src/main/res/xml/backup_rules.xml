@@ -5,6 +5,6 @@
   phone). Keep the two files in sync.
 -->
 <full-backup-content>
-    <exclude domain="sharedpref" path="zfc_device.xml" />
-    <exclude domain="sharedpref" path="zfc.saved-desktop.xml" />
+    <exclude domain="sharedpref" path="caster_device.xml" />
+    <exclude domain="sharedpref" path="caster.saved-desktop.xml" />
 </full-backup-content>

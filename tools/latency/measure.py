@@ -2,7 +2,7 @@
 
 The phone's debug LatencyTestActivity logs each black/white flip (and the
 click on each white flip) with its wall-clock time; the receiver run with
-ZFC_LATENCY_PROBE=1 logs when each flip is decoded and each click arrives.
+CASTER_LATENCY_PROBE=1 logs when each flip is decoded and each click arrives.
 This script aligns the two clocks over adb and pairs the marks.
 
 Clock alignment: the phone prints its clock over `adb shell` every 50 ms;

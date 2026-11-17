@@ -1208,10 +1208,6 @@ mod tests {
         let installed = names(&["MacBook Pro Speakers", "Caster Audio", "Caster Mic"]);
         assert_eq!(pick_caster_device(Track::Game, &installed).as_deref(), Some("Caster Audio"));
         assert_eq!(pick_caster_device(Track::Mic, &installed).as_deref(), Some("Caster Mic"));
-        // ADR-030: the Electron receiver's devices do not stand in.
-        let old = names(&["MacBook Pro Speakers", "Zero-Friction Game Audio", "Zero-Friction Mic"]);
-        assert_eq!(pick_caster_device(Track::Game, &old), None);
-        assert_eq!(pick_caster_device(Track::Mic, &old), None);
         let shared_only = names(&["MacBook Pro Speakers", "BlackHole 2ch"]);
         assert_eq!(pick_caster_device(Track::Game, &shared_only), None, "never a shared cable: the tracks would mix");
         assert_eq!(pick_caster_device(Track::Mic, &shared_only), None);

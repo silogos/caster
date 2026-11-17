@@ -21,7 +21,7 @@ The same diagnosis and a one-line fix (`@autoreleasepool` around the function bo
 1. **Every `get_cv_pixel_buffer` call goes through a pool we drain** (`objc2::rc::autoreleasepool` in `video::decoder_pixel_buffer`), and the buffer is retained before the pool drains. No webrtc-sys patch: the fix is on our side of the call, and stays correct after the upstream fix lands (a drained pool is then simply empty).
 2. **A frame whose decoder buffer is 8-bit 4:2:0 NV12 (`'420v'`/`'420f'`) of the frame's own size is shown from that buffer**: the display layer and the Syphon output get the decoder's buffer, no copy. Its range is its pixel format.
 3. **Anything else keeps the I420 copy** (a software-decoded frame, 10-bit or 4:2:2, a padded buffer). The frame loop logs which path frames take, and why, whenever it changes.
-4. **`ZFC_VIDEO_COPY`** (set to anything) forces the copy, for comparing the two paths on the same build. A diagnostic, like `ZFC_LATENCY_PROBE`.
+4. **`CASTER_VIDEO_COPY`** (set to anything) forces the copy, for comparing the two paths on the same build. A diagnostic, like `CASTER_LATENCY_PROBE`.
 5. The decoder buffer and a pool buffer get **separate format descriptions** (`FormatKey.decoder_buffer`): a decoder buffer carries the stream's colour attachments, a pool buffer none.
 
 | Option | Verdict |
@@ -32,7 +32,7 @@ The same diagnosis and a one-line fix (`@autoreleasepool` around the function bo
 
 ## Verified (2026-11-17, Lenovo TB321FU → MacBook Pro M1 Pro, release build, window open, ~3.5 min per path)
 
-The same build twice, the second time with `ZFC_VIDEO_COPY=1`. Mostly 1920×1200, 45–48 fps.
+The same build twice, the second time with `CASTER_VIDEO_COPY=1`. Mostly 1920×1200, 45–48 fps.
 
 | | Zero-copy | Copy (before) |
 |---|---|---|
@@ -52,6 +52,6 @@ The "render cost" includes everything on the frame thread from deciding to rende
 
 - **What bounds memory changes.** The pool threshold (10 buffers) bounded the copy path. Zero-copy frames come from the decoder's own pool, so the bound is now the layer's `isReadyForMoreMediaData` (the live-edge drop) and the Syphon queue. Measured: no growth over 10 730 frames. The 24 "layer busy" drops (0.3 %) against the copy path's 6 "pool full" are the same live-edge drop doing that job.
 - **Colour:** the layer now reads the decoder buffer's colour attachments (YCbCr matrix, primaries) where the pool buffer had none. The product owner compared the two runs by eye and saw the same colours; not measured with a colour probe.
-- **Syphon (2026-11-17, window closed, OBS reading through a Syphon Client source, same build with and without `ZFC_VIDEO_COPY`):** the product owner saw the picture upright, in the same colours, moving smoothly. Publisher figures at 3 600 frames: zero-copy 34 dropped, publish avg 1.20 ms (43 fps mean); copy 7 dropped, 1.06 ms (34 fps mean). One run each at different frame rates, so the higher drop count is not shown to come from zero-copy; a drop is the 6-frame queue (`syphon::QUEUE_FRAMES`) being full, which more frames per second make likelier. Worth a longer A/B at the same frame rate.
+- **Syphon (2026-11-17, window closed, OBS reading through a Syphon Client source, same build with and without `CASTER_VIDEO_COPY`):** the product owner saw the picture upright, in the same colours, moving smoothly. Publisher figures at 3 600 frames: zero-copy 34 dropped, publish avg 1.20 ms (43 fps mean); copy 7 dropped, 1.06 ms (34 fps mean). One run each at different frame rates, so the higher drop count is not shown to come from zero-copy; a drop is the 6-frame queue (`syphon::QUEUE_FRAMES`) being full, which more frames per second make likelier. Worth a longer A/B at the same frame rate.
 - **Not measured:** a software-decoded stream (falls back to the copy by design), and the two runs did not play identical content.
 - **Revisit if** a decoder starts handing over a format the layer takes but the check refuses (the copy keeps working, the log names the format).

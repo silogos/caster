@@ -204,7 +204,7 @@
      console lit at the top). Settings is a menu, not equipment: back +
      a real 17px screen title.
      Port notes:
-       • Nameplate = launcher name (app_name "Local Cast"), mono caps,
+       • Nameplate = launcher name (app_name "Caster"), mono caps,
          same printing ink as the silkscreen labels.
        • Annunciator (new strings app_bar_state_*): "Standby" /
          "Starting" / "On air" / "Fault", textAllCaps at render — mapped
@@ -491,7 +491,7 @@ const PROFILE_VALUES = {
 };
 
 const PAIRING_ERRORS = {
-  not_zfc: "This isn't a Zero-Friction Cast QR code.",
+  not_caster: "This isn't a Caster QR code.",
   unsupported_version: "The desktop app is newer or older than this app. Please update.",
   connect_unreachable: "Couldn't reach the desktop. Make sure both devices are on the same Wi-Fi network.",
   expired: "This QR code has expired. Generate a new one on the desktop.",
@@ -907,7 +907,7 @@ function renderHome(parent) {
   const mark = el('<div class="brand-mark' + (casting ? " on-air" : "") + '"></div>');
   mark.innerHTML = icon("cast", 14);
   bar.appendChild(mark);
-  const bn = el('<div class="brand-name"></div>'); bn.textContent = "Local Cast";
+  const bn = el('<div class="brand-name"></div>'); bn.textContent = "Caster";
   bar.appendChild(bn);
   const ANNUN = {
     connected: { cls: "",      led: "",         word: "Standby" },

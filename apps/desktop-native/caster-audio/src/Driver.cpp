@@ -1,6 +1,4 @@
-// CasterAudio: Caster's virtual audio devices for OBS on macOS (ADR-030,
-// which renames and ports ADR-008's ZeroFrictionAudio to the native
-// receiver). A Core Audio HAL plugin (AudioServerPlugIn) built on libASPL
+// CasterAudio: Caster's virtual audio devices for OBS on macOS (ADR-030). A Core Audio HAL plugin (AudioServerPlugIn) built on libASPL
 // (MIT, github.com/gavv/libASPL), installed once into
 // /Library/Audio/Plug-Ins/HAL. No Apple entitlement, no kernel extension.
 //

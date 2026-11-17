@@ -12,12 +12,12 @@ Until now, the cast's audio was an *output* story: the desktop mixer plays to sp
 
 ### macOS: own HAL plugin via libASPL
 
-**`ZeroFrictionAudio.driver`** — a Core Audio AudioServerPlugIn (HAL plugin) built on [libASPL](https://github.com/gavv/libASPL) (MIT, commit-pinned), shipped in the app bundle (`resources/zfaudio/`), installed once into `/Library/Audio/Plug-Ins/HAL/` (admin prompt — same friction as installing BlackHole). No Apple entitlement, no kernel driver, no signing portal.
+**the ADR-008 plug-in** — a Core Audio AudioServerPlugIn (HAL plugin) built on [libASPL](https://github.com/gavv/libASPL) (MIT, commit-pinned), shipped in the app bundle (the Electron app's resources), installed once into `/Library/Audio/Plug-Ins/HAL/` (admin prompt — same friction as installing BlackHole). No Apple entitlement, no kernel driver, no signing portal.
 
 Two loopback devices, one per cast track (ADR-003's two-track architecture end to end):
 
-- **"Zero-Friction Game Audio"** — the cast's game audio track
-- **"Zero-Friction Mic"** — the cast's microphone track
+- **"ADR-008 Game Audio"** — the cast's game audio track
+- **"ADR-008 Mic"** — the cast's microphone track
 
 Each device is a stereo 48 kHz float32 pair: an output stream (our mixer plays into it via `AudioContext.setSinkId`) and an input stream (OBS/Zoom/Discord capture from it), connected by a lock-free SPSC ring buffer (⅔ s) inside the plugin — no IPC with the app, the audio system itself is the transport.
 
@@ -33,7 +33,7 @@ The mixer's existing routing modes (Speakers / Cable / Both) now layer with per-
 
 The settings modal's **Audio output** section carries an **Install** row whenever this desktop can install (macOS + the bundled `.driver` present, pushed as `virtual-audio:state`) **and** the devices are missing from enumeration. Clicking it runs the bundled `install.sh` through `osascript`'s **native administrator password dialog** (`do shell script … with administrator privileges`) — the script replaces the bundle at `/Library/Audio/Plug-Ins/HAL/` and restarts `coreaudiod` (launchd brings it back in ~1 s). The renderer then re-detects for a few seconds until both devices enumerate; per-track routing, the cable option, and the phone's `cableAvailable` mirror all follow the normal detection path — no protocol change. One password, once, forever.
 
-Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **declined** (the password prompt was cancelled — a user decision, not an error; osascript reports it as exit 1 + "User canceled (−128)" on stderr, so the installer captures stderr), **failed** (copy didn't land), **unsupported** (non-macOS). Known costs: a `coreaudiod` restart blips system audio for ~1 s (a live cast's audio may need a moment to recover); install is allowed anytime but is naturally done once. No in-app uninstall — `sudo resources/zfaudio/install.sh --remove` remains the manual path.
+Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **declined** (the password prompt was cancelled — a user decision, not an error; osascript reports it as exit 1 + "User canceled (−128)" on stderr, so the installer captures stderr), **failed** (copy didn't land), **unsupported** (non-macOS). Known costs: a `coreaudiod` restart blips system audio for ~1 s (a live cast's audio may need a moment to recover); install is allowed anytime but is naturally done once. No in-app uninstall — the bundled `install.sh --remove` remains the manual path.
 
 ### Platform map
 
@@ -41,7 +41,7 @@ Honest outcomes (`virtual-audio:install`): **installed** (verified on disk), **d
 |---|---|---|
 | **macOS** | HAL plugin (libASPL, MIT) — this ADR | **shipped (batch A)** |
 | **Windows** | Kernel driver + Microsoft signing — not viable for this project | OBS use case solved by WASAPI process loopback (Application Audio Capture, zero-install); call apps via VB-Cable (pragmatic) — **detected as a cable target + platform-honest guidance** (issue #74: `findCableOutputDevice` third tier, `virtual-audio:state` carries the platform) |
-| **Linux** | PipeWire virtual source (user-space) | **adapter shipped (issue #75)**: two `module-null-sink` devices via `pactl` (`zfaudio/pipewireDevices.ts`) — the sink is our output side, its auto-created `.monitor` source is the input side; labels match the macOS devices so detection is shared. **Session-scoped**, unlike macOS's permanent install: created at app start (capture-card style, silent until a cast routes in), removed at quit; a crashed run's leftovers are adopted, not duplicated. pactl chosen over pw-cli for PulseAudio + PipeWire-Pulse compatibility; zero elevation. On-rig verification pending |
+| **Linux** | PipeWire virtual source (user-space) | **adapter shipped (issue #75)**: two `module-null-sink` devices via `pactl` (the Electron app's `pipewireDevices.ts`) — the sink is our output side, its auto-created `.monitor` source is the input side; labels match the macOS devices so detection is shared. **Session-scoped**, unlike macOS's permanent install: created at app start (capture-card style, silent until a cast routes in), removed at quit; a crashed run's leftovers are adopted, not duplicated. pactl chosen over pw-cli for PulseAudio + PipeWire-Pulse compatibility; zero elevation. On-rig verification pending |
 
 ## Consequences
 

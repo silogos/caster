@@ -1,8 +1,7 @@
 #!/bin/bash
 # Developer path only: the receiver installs the plugin itself from the deck's
-# "Plays on" choice (ADR-030). Installs CasterAudio.driver, removes the
-# ZeroFrictionAudio.driver it replaces, and restarts coreaudiod so it picks
-# the change up. Run with sudo.
+# "Plays on" choice (ADR-030). Installs CasterAudio.driver and restarts
+# coreaudiod so it picks the change up. Run with sudo.
 #   sudo ./install.sh           install/update
 #   sudo ./install.sh --remove  uninstall
 set -euo pipefail
@@ -16,7 +15,7 @@ if [ "${1:-}" = "--remove" ]; then
   echo "removed $DEST"
 else
   [ -d CasterAudio.driver ] || { echo "build first: ./build.sh"; exit 1; }
-  rm -rf "$DEST" "$HAL/ZeroFrictionAudio.driver"
+  rm -rf "$DEST"
   cp -R CasterAudio.driver "$DEST"
   echo "installed $DEST"
 fi

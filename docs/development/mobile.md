@@ -1,6 +1,6 @@
 # Mobile App Development Guide
 
-App: `/apps/mobile` · Id: `com.zerofriction.localcast` · Implemented in: Phases 1–13 (status: **Phase13 implemented — the polished scan flow's real-device walk remains; see [features/pairing.md](../features/pairing.md)**).
+App: `/apps/mobile` · Id: `io.github.silogos.caster` · Implemented in: Phases 1–13 (status: **Phase13 implemented — the polished scan flow's real-device walk remains; see [features/pairing.md](../features/pairing.md)**).
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ cd apps/mobile
 ./gradlew :app:assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:testDebugUnitTest      # unit tests
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.zerofriction.localcast/.MainActivity
+adb shell am start -n io.github.silogos.caster/.MainActivity
 ```
 
 `local.properties` (gitignored) must point `sdk.dir` at your SDK. First build downloads dependencies; later builds are incremental.
@@ -55,7 +55,7 @@ A known "Deprecated Gradle features … incompatible with Gradle 9.0" warning co
 apps/mobile/
 ├── settings.gradle.kts / build.gradle.kts / gradle.properties
 ├── gradle/libs.versions.toml        # every pinned version lives here
-└── app/src/main/java/com/zerofriction/localcast/
+└── app/src/main/java/io/github/silogos/caster/
     ├── MainActivity.kt              # single activity; Scan ⇄ Home ⇄ Settings navigation (state-based, no nav lib; Settings handles system back with BackHandler)
     ├── pairing/                     # QrPayload + parser, PairingClient state machine (Phase 3)
     ├── signaling/                   # Envelope codec, Handshake HMAC, SignalingClient + OkHttp transport (Phase 3)

@@ -170,7 +170,7 @@ pub struct DecodedFrame {
 /// per stream and reason by the frame loop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyReason {
-    /// `ZFC_VIDEO_COPY` is set: the A/B switch for measuring the two paths.
+    /// `CASTER_VIDEO_COPY` is set: the A/B switch for measuring the two paths.
     Forced,
     /// No VideoToolbox buffer behind the frame (a software decoder).
     NoDecoderBuffer,
@@ -182,7 +182,7 @@ pub enum CopyReason {
 
 /// Forces every frame through the I420 copy — for comparing the two paths
 /// on the same cast, never needed in use.
-const FORCE_COPY_ENV: &str = "ZFC_VIDEO_COPY";
+const FORCE_COPY_ENV: &str = "CASTER_VIDEO_COPY";
 
 fn copy_forced() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

@@ -1,0 +1,942 @@
+package io.github.silogos.caster.webrtc
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
+import android.media.projection.MediaProjection
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import android.view.Display
+import androidx.core.content.ContextCompat
+import io.github.silogos.caster.audio.GameAudioState
+import io.github.silogos.caster.audio.PlaybackCaptureAudioSource
+import io.github.silogos.caster.config.CastConfig
+import io.github.silogos.caster.capture.CaptureSize
+import io.github.silogos.caster.capture.DisplaySize
+import io.github.silogos.caster.capture.ScreenCapturer
+import io.github.silogos.caster.capture.StepFormat
+import io.github.silogos.caster.signaling.SignalingClient
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.EglBase
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoSource
+import org.webrtc.VideoTrack
+
+/**
+ * The mobile's media half (mobile.md module `webrtc`): the `media` PC —
+ * screen video + game audio in, offer/answer over signaling, ICE trickling,
+ * ~1 Hz getStats logging (webrtc.md). The `mic` PC (factory B) arrives in
+ * Phase8 (ADR-003).
+ *
+ * The mobile is always the offerer (webrtc.md): the offer encodes this
+ * session's send parameters — H.264 first, VP8 fallback ([SdpCodecOrderer]),
+ * the config's bitrate window and degradation preference on the sender.
+ *
+ * Resilience (issue #86, webrtc.md §Disconnect): a transient LAN UDP outage
+ * (band-steering, deprioritized background UDP, radio stress under game
+ * load) no longer kills the cast — [IceRestartController] drives bounded ICE
+ * restarts (`restartIce` + a fresh offer on the same pc), and only a bad
+ * stretch that outlives the whole ladder ends the cast honestly
+ * ([Failure.ConnectionLost]).
+ *
+ * Threading: libwebrtc demands every PC call from one thread, so all work runs
+ * on a private HandlerThread; signaling events arrive on transport threads and
+ * are posted over, and so are libwebrtc's own callbacks (connection state,
+ * set-description results, stats), which fire on its internal signaling
+ * thread — the candidate queue, the restart ladder and the stats deltas are
+ * only ever touched on the session thread. The signaling listener is registered here and removed on
+ * teardown — the session never outlives its socket's usefulness by itself.
+ */
+class MediaCastSession(
+    private val context: Context,
+    private val signaling: SignalingClient,
+    private val config: CastConfig,
+    /**
+     * The MediaProjection consent result (mobile.md ordering: consent is
+     * obtained from the activity BEFORE the service enters the foreground, and
+     * the service is in the foreground BEFORE the projection starts).
+     */
+    private val projectionPermissionIntent: Intent,
+    /** Physical display size in px — scaled down to the config's long edge. */
+    private val physicalWidth: Int,
+    private val physicalHeight: Int,
+    statsIntervalMs: Long = STATS_INTERVAL_MS,
+
+    /** Session state changes, delivered from the session thread. */
+    private val onState: (State) -> Unit = {},
+
+    /** Game-audio state changes (Phase7) — Off/Active/Muted/Silent/Failed (audio.md). */
+    private val onGameAudioState: (GameAudioState) -> Unit = {},
+
+    /**
+     * Every ~1 Hz video sender sample (Phase12's auto-quality input). Called
+     * from the session thread with the sample and the measured send bitrate.
+     */
+    private val onVideoStats: (SenderSample, Long) -> Unit = { _, _ -> },
+
+    /**
+     * The capture format changed live (rotation or a quality step) — the
+     * service re-sends its display-only `session-info` so the desktop's
+     * status line follows. Delivered from the session thread.
+     */
+    private val onCaptureFormat: (width: Int, height: Int, fps: Int) -> Unit = { _, _, _ -> },
+) {
+
+    enum class State { STARTING, NEGOTIATING, STREAMING, CLOSED }
+
+    sealed interface Failure {
+        /** The user (or system) revoked the projection — a first-class stop path (mobile.md). */
+        data object ProjectionRevoked : Failure
+
+        /** The desktop ended the session (`bye`, e.g. its window was closed). */
+        data object DesktopEnded : Failure
+
+        /**
+         * The link to the desktop is gone for good — ICE failed, or signaling
+         * hit a terminal error (session expired/unknown after the reconnect
+         * ladder ran out). The user-facing result is the same: rescan.
+         */
+        data object ConnectionLost : Failure
+
+        /** Anything unexpected — the service shows the simple message, details stay here. */
+        data class Error(val detail: String) : Failure
+    }
+
+    /** Fires exactly once, from any thread, when the cast can't (or can no longer) continue. */
+    private var onFatal: ((Failure) -> Unit)? = null
+
+    private var thread: HandlerThread? = null
+    private var handler: Handler? = null
+
+    private var factory: PeerConnectionFactory? = null
+    private var eglBase: EglBase? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private var videoSource: VideoSource? = null
+    private var capturer: ScreenCapturer? = null
+    private var videoTrack: VideoTrack? = null
+    private var pc: PeerConnection? = null
+    /**
+     * The raw-PCM game-audio channel, only for a Low latency profile
+     * (ADR-012, ADR-033); null with Standard, where the Opus track carries it.
+     */
+    private var gameAudioChannel: GameAudioDataChannel? = null
+
+    /** Game audio (Phase7) — null means game audio is off for this cast. */
+    private var audio: PlaybackCaptureAudioSource? = null
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
+
+    /**
+     * The offer/answer/ICE sequencing shared with the mic pc (finding #23):
+     * the offer carries the codec policy (config's preferred video codec
+     * first) and asks Opus for stereo; Chromium answers with its own default
+     * Opus fmtp (found live 2026-11-03), so the answer is relaxed to the same
+     * request before it is applied. Outcomes arrive on the session thread.
+     */
+    private val negotiator = PeerNegotiator(
+        label = PC_ID,
+        post = ::post,
+        sendOffer = { sdp -> signaling.sendSdpOffer(PC_ID, sdp) },
+        decodeCandidate = IceCandidateJson::decode,
+        onOfferFailed = { detail -> fatal(Failure.Error(detail)) },
+        offerTransform = { sdp ->
+            SdpOpusFmtp.preferStereo(
+                SdpCodecOrderer.preferVideoCodecs(sdp, SdpCodecOrderer.preferenceFor(config.preferredCodec)),
+            )
+        },
+        answerTransform = { sdp ->
+            Log.i(TAG, "answer opus fmtp: ${SdpOpusFmtp.opusFmtp(sdp) ?: "none"}")
+            SdpOpusFmtp.preferStereo(sdp).also {
+                Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(it) ?: "none"}")
+            }
+        },
+        onAnswerApplied = { if (active) pc?.let { applySenderParameters(it) } },
+        onAnswerFailed = {
+            if (active) {
+                // The offer in flight cannot connect — conclude it now
+                // instead of waiting out its deadline.
+                restarts.onFailed(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
+            }
+        },
+    )
+
+    /** The current pc reported CONNECTED and nothing worse since — session thread only. */
+    private var pcConnected = false
+
+    /** Grown once the answer's parameters exist; sampled by the stats poller. */
+    private var lastBytesSent = 0L
+    private var lastStatsAtMs = 0L
+    /**
+     * Phase16 encode-cost baseline: the previous tick's cumulative
+     * `totalEncodeTime` and `framesEncoded` — their deltas give ms/frame.
+     * Null until the first two samples with encode time exist.
+     */
+    private var lastTotalEncodeTimeSeconds: Double? = null
+    private var lastFramesEncoded = 0L
+    /** Previous pacer totals — their deltas give the per-packet pacer wait. */
+    private var lastPacketSendDelaySeconds: Double? = null
+    private var lastPacketsSent: Long? = null
+    /** Phase15 probe: first null-sample ticks log the report's shape (bounded — not a 1 Hz firehose). */
+    private var nullSampleLogs = 0
+    private val statsIntervalMs = statsIntervalMs
+
+    /**
+     * The sender's *live* bitrate window (Phase12): starts at the config's,
+     * moved by [changeQuality] when auto quality steps. [applySenderParameters]
+     * and the `session-info` summary both read this, never the frozen config.
+     */
+    private var liveBitrateMinBps = config.bitrateMinBps
+    private var liveBitrateMaxBps = config.bitrateMaxBps
+
+    /**
+     * Live format state. `liveLongEdgePx`/`liveFps` are the quality *rung*
+     * target (moved by [changeQuality]); `captureWidth`/`captureHeight` are
+     * the VirtualDisplay's size — the cast-start **ceiling**, never shrunk by
+     * a quality step (Phase17: steps adapt the source instead) and only
+     * resized by rotation. `adaptedWidth`/`adaptedHeight` are what
+     * `adaptOutputFormat` currently targets — what the encoder receives.
+     * All recomputed from the DISPLAY's current bounds — never the cast-start
+     * snapshot, which goes stale the moment the device rotates.
+     * Thread-confined to the session thread, published via
+     * [currentCaptureFormat] (the rung dims — what the desktop displays) for
+     * the service's `session-info`.
+     */
+    private var liveLongEdgePx = config.longEdgePx
+    private var liveFps = config.fps
+    private var captureWidth = 0
+    private var captureHeight = 0
+    private var adaptedWidth = 0
+    private var adaptedHeight = 0
+
+    /**
+     * The format in force right now — the rung target (the encoder's output
+     * size), read by the service from any thread.
+     */
+    data class CaptureFormat(val width: Int, val height: Int, val fps: Int)
+
+    @Volatile
+    var currentCaptureFormat: CaptureFormat? = null
+        private set
+
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    /**
+     * The ICE-restart policy (issue #86): bounded restarts before the honest
+     * ConnectionLost. All calls happen on the session thread (libwebrtc
+     * delivers pc callbacks on the creating thread); the commands it fires
+     * run inline — [restartIce] / [fatal].
+     */
+    private val restarts = IceRestartController(
+        onRestart = { attempt -> restartIce(attempt) },
+        onGiveUp = { summary ->
+            Log.w(TAG, "ice recovery exhausted — stopping the cast ($summary)")
+            fatal(Failure.ConnectionLost)
+        },
+    )
+
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.i(TAG, "media projection stopped — ending the cast")
+            fatal(Failure.ProjectionRevoked)
+        }
+    }
+
+    private val signalingListener: (SignalingClient.Event) -> Unit = { event ->
+        when (event) {
+            is SignalingClient.Event.Authorized ->
+                post {
+                    if (!active) return@post
+                    // The desktop keeps its pcs across a socket drop (only a
+                    // `bye` closes them), and media flows over its own UDP
+                    // path — a pc still CONNECTED survived the outage. Rebuilding
+                    // it froze video for a fresh keyframe and re-ran the game
+                    // audio handshake for nothing (mobile review, group D). A
+                    // pc that is not connected (or a desktop that restarted and
+                    // lost it — the pc then fails and the ICE ladder recovers)
+                    // is rebuilt as before.
+                    if (pc !== null && pcConnected) {
+                        Log.i(TAG, "re-auth: media pc still connected — keeping it")
+                    } else {
+                        negotiate()
+                    }
+                }
+
+            is SignalingClient.Event.SdpAnswer ->
+                if (event.pc == PC_ID) post { if (active) onAnswer(event.sdp) }
+
+            is SignalingClient.Event.IceCandidate ->
+                if (event.pc == PC_ID) post { if (active) negotiator.applyRemoteCandidate(event.candidate) }
+
+            is SignalingClient.Event.SessionEnded -> post { if (active) fatal(Failure.DesktopEnded) }
+
+            // Terminal signaling failure (ladder exhausted / expired QR after a
+            // desktop restart): no re-auth will ever come — end the cast.
+            is SignalingClient.Event.Failed ->
+                post { if (active) fatal(Failure.ConnectionLost) }
+
+            // Pairing/lifecycle events belong to the PairingClient; a mid-cast
+            // reconnect is normal (backoff ladder) and does not stop the cast.
+            else -> Unit
+        }
+    }
+
+    /**
+     * The remote session id of the last answer on the current pc — reset by
+     * [negotiate]. An ICE restart answered by a *restarted* desktop (a new
+     * remote pc, a new id) leaves this pc's game-audio DataChannel dead: the
+     * channel counts as open here, so it is never re-announced, and the
+     * desktop only ever gets the mono fallback track. Such an answer rebuilds
+     * the pc instead of being applied (ADR-019).
+     */
+    private var answeredSession: String? = null
+
+    private fun onAnswer(sdp: String) {
+        val session = SdpSession.id(sdp)
+        if (SdpSession.isNewRemote(answeredSession, session)) {
+            Log.i(TAG, "answer from a new desktop session — rebuilding the media pc (game-audio channel)")
+            negotiate()
+            return
+        }
+        answeredSession = session
+        negotiator.applyAnswer(sdp)
+    }
+
+    /** True between [start] and teardown — guards late signaling callbacks. */
+    private var active = false
+
+    fun start(onFatal: (Failure) -> Unit) {
+        check(!active) { "session already started" }
+        this.onFatal = onFatal
+        active = true
+        val sessionThread = HandlerThread("MediaCastSession").apply { start() }
+        thread = sessionThread
+        handler = Handler(sessionThread.looper)
+        signaling.addListener(signalingListener)
+        post { buildOnThread() }
+    }
+
+    fun stop() {
+        post { teardown() }
+    }
+
+    /**
+     * User mute of the game-audio track (audio.md): zeroes the captured
+     * frames sender-side — the Opus stream keeps flowing, no renegotiation,
+     * and the video track is untouched. No-op when game audio is off.
+     */
+    fun setGameAudioMuted(muted: Boolean) {
+        post { audio?.setMuted(muted) }
+    }
+
+    /** The current game-audio state (safe from any thread — read-only). */
+    val gameAudioState: GameAudioState get() = audio?.state ?: GameAudioState.Off
+
+    // ---- Everything below runs (or is posted to) the session thread ----
+
+    private fun post(block: () -> Unit) {
+        val h = handler
+        if (h !== null) {
+            h.post(block)
+        } else {
+            block()
+        }
+    }
+
+    private fun buildOnThread() {
+        try {
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(context)
+                    // Set 2026-11-04 believing stereo send was gated behind
+                    // this trial. The pinned lib has no such trial (ADR-012),
+                    // and the send path was stereo all along: the mono heard
+                    // on the desktop was its own decoder, mono because its
+                    // answer lacked stereo=1 (ADR-032). Harmless; left as is.
+                    // The mic pc stays trial-free: mono voice is by design.
+                    .setFieldTrials(MULTICHANNEL_SEND_FIELD_TRIAL)
+                    .createInitializationOptions(),
+            )
+            val egl = EglBase.create()
+            eglBase = egl
+            // Game audio rides the media pc (ADR-003): factory A's ADM is the
+            // playback-capture ADM. The track is ALWAYS part of the cast when
+            // permission allows (designs/mobile-app.html: only the microphone
+            // is ever fully removed) — `gameAudio=false` means muted, so the
+            // receiver's mixer row never disappears; the live toggle flips the
+            // same mute. The projection doesn't exist yet — the audio source
+            // fetches it lazily at record start (one consent = one projection,
+            // reused from the capturer).
+            val newAudio = if (hasRecordAudioPermission()) {
+                PlaybackCaptureAudioSource(context, projection = { capturer?.mediaProjection }, onState = onGameAudioState).also {
+                    if (!config.gameAudio) it.setMuted(true)
+                }
+            } else {
+                Log.w(TAG, "RECORD_AUDIO not granted — casting without game audio")
+                null
+            }
+            audio = newAudio
+            val factoryBuilder = PeerConnectionFactory.builder()
+                // Encoder policy from the config (designs/mobile-app.html):
+                // hardware-with-fallback (today's behavior) or software-only,
+                // H.264 High profile only when the user left it on.
+                .setVideoEncoderFactory(CastEncoderFactory.create(egl.eglBaseContext, config))
+                .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
+            if (newAudio !== null) factoryBuilder.setAudioDeviceModule(newAudio.adm)
+            val newFactory = factoryBuilder.createPeerConnectionFactory()
+            factory = newFactory
+
+            val (width, height) = CaptureSize.scaleTo(config.longEdgePx, physicalWidth, physicalHeight)
+            Log.i(TAG, "capture target ${width}x${height} @ ${config.fps} fps")
+
+            val source = newFactory.createVideoSource(/* isScreencast = */ true)
+            videoSource = source
+            val helper = SurfaceTextureHelper.create("CaptureThread", egl.eglBaseContext)
+            surfaceTextureHelper = helper
+            val newCapturer = ScreenCapturer(projectionPermissionIntent, projectionCallback)
+            capturer = newCapturer
+            newCapturer.initialize(helper, context, source.capturerObserver)
+            newCapturer.startCapture(width, height, config.fps)
+            // The projection is live the moment the capturer starts — open the
+            // capture record NOW, before WebRTC creates its microphone record
+            // at transport start (session-ordering fix for the one-channel
+            // fold, issue #101; see PlaybackCaptureAudioSource.preOpenCapture).
+            newAudio?.preOpenCapture()
+            captureWidth = width
+            captureHeight = height
+            // The cast starts at the user's own rung (= the ceiling) — the
+            // source adapter begins with no scaling to do.
+            adaptedWidth = width
+            adaptedHeight = height
+            currentCaptureFormat = CaptureFormat(width, height, config.fps)
+            // Follow device rotation live (Phase14 fix): the stock capturer
+            // does NOT resize on rotation (found live — a portrait-start cast
+            // kept its portrait virtual display forever, and Android squeezed
+            // the rotated screen into it). The default display's change
+            // events arrive on the session thread via the session handler;
+            // [applyCaptureFormat] no-ops unless a target actually changed.
+            // Since Phase17 a quality step does NOT come through here — it
+            // adapts the source instead ([changeQuality]).
+            val listener = object : DisplayManager.DisplayListener {
+                override fun onDisplayAdded(displayId: Int) = Unit
+                override fun onDisplayRemoved(displayId: Int) = Unit
+                override fun onDisplayChanged(displayId: Int) {
+                    if (displayId == Display.DEFAULT_DISPLAY && active) applyCaptureFormat()
+                }
+            }
+            context.getSystemService(DisplayManager::class.java)
+                .registerDisplayListener(listener, handler)
+            displayListener = listener
+
+            val track = newFactory.createVideoTrack(VIDEO_TRACK_ID, source)
+            videoTrack = track
+
+            if (newAudio !== null) {
+                val constraints = MediaConstraints().apply {
+                    // Captured playback is finished audio (audio.md): refuse
+                    // the APM's mic-shaped processing on it — every stage of
+                    // it, not just the three big ones.
+                    listOf(
+                        "googEchoCancellation", "googEchoCancellation2", "googDAEchoCancellation",
+                        "googAutoGainControl", "googAutoGainControl2",
+                        "googNoiseSuppression", "googNoiseSuppression2",
+                        "googHighpassFilter", "googTypingNoiseDetection",
+                    ).forEach { mandatory.add(MediaConstraints.KeyValuePair(it, "false")) }
+                }
+                val newAudioSource = newFactory.createAudioSource(constraints)
+                audioSource = newAudioSource
+                val newAudioTrack = newFactory.createAudioTrack(AUDIO_TRACK_ID, newAudioSource)
+                audioTrack = newAudioTrack
+            }
+
+            // The monitor's initial value has no transition to report —
+            // publish the starting state explicitly (Off = not in this cast;
+            // a cast with game audio muted starts in Muted).
+            onGameAudioState(
+                when {
+                    newAudio === null -> GameAudioState.Off
+                    !config.gameAudio -> GameAudioState.Muted
+                    else -> GameAudioState.Active
+                },
+            )
+
+            // Display-only summary for the desktop status line (webrtc.md) —
+            // not configuration; the desktop never acts on it. The mic flag is
+            // the config's *intent*; the service sends the authoritative
+            // summary (mic actually on) once it knows — see CastService.
+            signaling.sendSessionInfo(
+                profile = config.profile,
+                width = width,
+                height = height,
+                fps = config.fps,
+                gameAudio = newAudio !== null,
+                mic = config.mic,
+            )
+
+            negotiate()
+        } catch (t: Throwable) {
+            Log.e(TAG, "building the media pipeline failed", t)
+            fatal(Failure.Error(t.message ?: t.javaClass.simpleName))
+        }
+    }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** (Re)create the pc and send a fresh offer. Runs on the session thread. */
+    private fun negotiate() {
+        // Release the previous game-audio pipeline before its pc: a re-auth's
+        // negotiate() used to overwrite the fields and leak the old sender +
+        // encoder threads spinning on the dead pc.
+        releaseGameAudioPipeline()
+        closePc()
+        answeredSession = null
+        val newFactory = factory ?: return
+        val newTrack = videoTrack ?: return
+
+        val newPc = newFactory.createPeerConnection(LibWebRtcPeer.lanRtcConfiguration(), pcObserver)
+        if (newPc === null) {
+            fatal(Failure.Error("createPeerConnection returned null"))
+            return
+        }
+        pc = newPc
+        negotiator.attach(LibWebRtcPeer(newPc))
+        val trackSender = newPc.addTrack(newTrack, listOf(STREAM_ID))
+        if (trackSender === null) {
+            fatal(Failure.Error("addTrack returned null — native track wiring failed"))
+            return
+        }
+        // Game audio rides the same pc + stream as the video (ADR-003) — the
+        // desktop plays both from one MediaStream.
+        val currentAudioTrack = audioTrack
+        if (currentAudioTrack !== null) {
+            newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
+            // ADR-033: the profile's Low-latency audio picks the game-audio
+            // path, once per cast. Low latency: raw PCM on the DataChannel,
+            // played by the receiver's own playout (ADR-012/014/020), the
+            // stereo Opus track as its fallback. Standard: no channel — the
+            // receiver plays the stereo Opus track (ADR-032) from the start.
+            if (config.lowLatencyGameAudio) {
+                val channel = GameAudioDataChannel()
+                if (channel.attach(newPc)) {
+                    gameAudioChannel = channel
+                    audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+                }
+            } else {
+                Log.i(TAG, "game audio: standard — Opus track only, no DataChannel (ADR-033)")
+            }
+        }
+        onState(State.NEGOTIATING)
+        restarts.onNegotiating(System.currentTimeMillis())
+        // The offer's deadline needs the clock running even before any
+        // DISCONNECTED/FAILED — an answer that never comes is otherwise silent.
+        scheduleRecoveryWatchdog()
+        negotiator.offer()
+    }
+
+    /** Debug builds only (CastService): one ICE restart now, as the recovery ladder would send it. */
+    fun debugRestartIce() = post { if (active) restartIce(0) }
+
+    /**
+     * One ICE restart (issue #86): fresh ICE credentials on the **same** pc —
+     * tracks, senders, and DTLS state survive; only the ICE agent restarts.
+     * The desktop answers like any offer (it rebuilds its answerer per offer
+     * and re-attaches its sinks — webrtc.md). Runs on the session thread,
+     * fired by [restarts].
+     */
+    private fun restartIce(attempt: Int) {
+        if (pc === null) return
+        Log.i(TAG, "ice restart #$attempt — fresh offer with new ice credentials")
+        negotiator.restartIce()
+    }
+
+    /**
+     * Sender-side parameters from the config module only (webrtc.md): the
+     * *live* bitrate window ([liveBitrateMinBps]/[liveBitrateMaxBps] — the
+     * config's at cast start, moved by [changeQuality]), the degradation
+     * preference (Advanced → "Under network pressure"; BALANCED by default),
+     * and the encoder-side fps cap (Advanced → "Encoder fps limit"; none by
+     * default). Called once the answer exists; if the pc refuses (early
+     * states), the values reapply on the next call. Targets the *video*
+     * sender explicitly — since Phase7 the pc also carries an audio sender,
+     * and `senders` order is not a contract.
+     */
+    private fun applySenderParameters(currentPc: PeerConnection) {
+        val sender = currentPc.senders.firstOrNull { it.track()?.kind() == "video" } ?: return
+        val parameters = sender.parameters
+        if (parameters.encodings.isEmpty()) return
+        parameters.encodings.first().apply {
+            // The profile's range is the range, whatever its pressure choice:
+            // libwebrtc never sends less than the least (ADR-023, revised).
+            minBitrateBps = liveBitrateMinBps
+            maxBitrateBps = liveBitrateMaxBps
+            // Phase16: the encoder cap makes the profile's (or an adaptive
+            // step's) fps real — screencast capture cannot throttle it (the
+            // capturer's fps argument is ignored on MediaProjection; measured
+            // live: a 30 fps target kept encoding 61 fps). The user's own
+            // Advanced limit still wins when tighter ([effectiveEncoderFpsCap]).
+            maxFramerate = effectiveEncoderFpsCap(liveFps, config.encoderFpsLimit)
+        }
+        parameters.degradationPreference = when (config.degradationPreference) {
+            CastConfig.DEGRADATION_BALANCED -> RtpParameters.DegradationPreference.BALANCED
+            CastConfig.DEGRADATION_FRAMERATE -> RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            else -> RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+        }
+        val result = sender.setParameters(parameters)
+        if (!result) {
+            Log.w(TAG, "setParameters rejected — bitrate/degradation targets may not be applied")
+            return
+        }
+        Log.i(
+            TAG,
+            "sender targets: ${liveBitrateMinBps / 1_000}–${liveBitrateMaxBps / 1_000} kbps" +
+                ", under pressure: ${config.degradationPreference}",
+        )
+    }
+
+    /**
+     * Reconcile the live pipeline with the display's *current* bounds and
+     * the live quality target (rotation or a quality step — Phase17 unified
+     * the decision in [StepFormat]). Runs on the session thread — the
+     * display listener arrives on it via the session handler.
+     *
+     * A quality step lands as [StepFormat.Change.AdaptRung]:
+     * `adaptOutputFormat` downscales inside libwebrtc (GL scale before the
+     * encoder) and the VirtualDisplay is untouched — no capture-thread
+     * stall, no surface-buffer reallocation (Phase16 measured both on the
+     * old resize path, with freeze bursts and a jitter-buffer spike around
+     * the steps). Rotation lands as [StepFormat.Change.ResizeCapture]: an
+     * aspect flip cannot be downscaled, so the display resizes to the
+     * *ceiling* size for the new orientation (the rung is re-adapted after —
+     * it follows the new aspect). Unrelated display events resolve to
+     * [StepFormat.Change.None] and cost nothing.
+     */
+    private fun applyCaptureFormat() {
+        val (displayWidth, displayHeight) = DisplaySize.physicalPx(context)
+        val change = StepFormat.resolve(
+            displayWidth = displayWidth,
+            displayHeight = displayHeight,
+            // The session's config is the cast-start snapshot — its
+            // long edge IS the ceiling auto quality may not exceed.
+            ceilingLongEdgePx = config.longEdgePx,
+            rungLongEdgePx = liveLongEdgePx,
+            currentCaptureWidth = captureWidth,
+            currentCaptureHeight = captureHeight,
+            currentRungWidth = adaptedWidth,
+            currentRungHeight = adaptedHeight,
+        )
+        val rungWidth: Int
+        val rungHeight: Int
+        when (change) {
+            StepFormat.Change.None -> return
+            is StepFormat.Change.ResizeCapture -> {
+                rungWidth = change.rungWidth
+                rungHeight = change.rungHeight
+                capturer?.changeCaptureFormat(change.captureWidth, change.captureHeight, liveFps)
+                captureWidth = change.captureWidth
+                captureHeight = change.captureHeight
+                Log.i(
+                    TAG,
+                    "capture → ${change.captureWidth}x${change.captureHeight} @ ${liveFps} fps" +
+                        " (display ${displayWidth}x${displayHeight})",
+                )
+            }
+            is StepFormat.Change.AdaptRung -> {
+                rungWidth = change.rungWidth
+                rungHeight = change.rungHeight
+                Log.i(TAG, "adaptive step → source ${change.rungWidth}x${change.rungHeight} (capture untouched)")
+            }
+        }
+        // Both branches end at the same rung state — a resize re-applies the
+        // rung too (it follows the new aspect).
+        videoSource?.adaptOutputFormat(rungWidth, rungHeight, liveFps)
+        adaptedWidth = rungWidth
+        adaptedHeight = rungHeight
+        currentCaptureFormat = CaptureFormat(rungWidth, rungHeight, liveFps)
+        onCaptureFormat(rungWidth, rungHeight, liveFps)
+    }
+
+    /**
+     * One auto-quality step, applied live (Phase12, thermal.md — no
+     * renegotiation). Since Phase17 the step does NOT reconfigure the
+     * capture pipeline: [applyCaptureFormat] adapts the *source* to the new
+     * resolution (fps rides the sender parameters — the Phase16 encoder cap,
+     * now with the same target enforced at the source adapter), and the
+     * video sender's bitrate window moves. A step that changes nothing
+     * resolution-wise touches no capture state at all. Runs on the session
+     * thread; safe to call from any thread. The desktop's display-only
+     * status line follows via the service's fresh `session-info`.
+     */
+    fun changeQuality(longEdgePx: Int, fps: Int, bitrateMinBps: Int, bitrateMaxBps: Int) {
+        post {
+            if (!active) return@post
+            liveLongEdgePx = longEdgePx
+            liveFps = fps
+            // The display's live bounds — the cast-start snapshot goes stale
+            // on rotation, and a quality step after one would re-apply the
+            // wrong orientation (found live, fixed together with the
+            // rotation listener above).
+            applyCaptureFormat()
+            liveBitrateMinBps = bitrateMinBps
+            liveBitrateMaxBps = bitrateMaxBps
+            val currentPc = pc
+            if (currentPc !== null) applySenderParameters(currentPc)
+            Log.i(TAG, "adaptive quality: bitrate window → ${bitrateMinBps / 1_000}–${bitrateMaxBps / 1_000} kbps")
+        }
+    }
+
+    /** Local candidates and gathering go straight to signaling; connection state hops to the session thread. */
+    private val pcObserver = SignalingPeerObserver(PC_ID, signaling) { newState ->
+        post { if (active) onConnectionStateOnThread(newState) }
+    }
+
+    // The ladder, watchdog and stats state belong to the session thread.
+    private fun onConnectionStateOnThread(newState: PeerConnection.PeerConnectionState) {
+        Log.i(TAG, "connection state: $newState")
+        pcConnected = newState == PeerConnection.PeerConnectionState.CONNECTED
+        when (newState) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                if (restarts.busy) Log.i(TAG, "connection recovered — ice restart ladder reset")
+                restarts.onConnected(System.currentTimeMillis())
+                cancelRecoveryWatchdog()
+                onState(State.STREAMING)
+                // Silence detection only counts while actually connected (audio.md).
+                audio?.setStreaming(true)
+                scheduleStats()
+            }
+            PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                // Transient by default (webrtc.md): the grace window and
+                // the restart ladder own the verdict, not this event.
+                Log.w(TAG, "ice disconnected — recovery ladder armed")
+                restarts.onDisconnected(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
+            }
+            PeerConnection.PeerConnectionState.FAILED -> {
+                // Recovery is the offerer's job (ICE restart — webrtc.md;
+                // the desktop never renegotiates on its own). The ladder
+                // bounds it; only its exhaustion ends the cast.
+                Log.w(TAG, "ice failed — attempting recovery")
+                restarts.onFailed(System.currentTimeMillis())
+                scheduleRecoveryWatchdog()
+            }
+            else -> Unit
+        }
+    }
+
+    // ---- getStats logging (webrtc.md: ~1 Hz) ----
+
+    private val statsRunnable = object : Runnable {
+        override fun run() {
+            val currentPc = pc
+            if (currentPc === null || !active) return
+            currentPc.getStats { report -> post { if (active) onStatsReport(report) } }
+            if (active) handler?.postDelayed(this, statsIntervalMs)
+        }
+
+        /** Session thread: the stats deltas below are only touched here. */
+        private fun onStatsReport(report: org.webrtc.RTCStatsReport) {
+            run {
+                // RTCStats exposes `type` as a getter on the object, not a key in
+                // `members` (verified against the pinned 1.3.8 prebuilt on-device,
+                // Phase15 — every entry's members["type"] was null) — merge it in
+                // so the sampler sees it.
+                val entries = report.statsMap.values.map { stats ->
+                    buildMap<String, Any> {
+                        put("type", stats.type)
+                        putAll(stats.members)
+                    }
+                }
+                val sample = SenderStats.sampleVideoSend(entries)
+                if (sample !== null) {
+                    val nowMs = System.currentTimeMillis()
+                    val bitrateBps = sendBitrateBps(lastBytesSent, sample.bytesSent, lastStatsAtMs, nowMs)
+                    // Per-frame encode cost from the cumulative encode-time delta
+                    // — null until two samples exist, or the prebuilt reports no
+                    // `totalEncodeTime` at all (defensive, Phase16).
+                    val encodeMsPerFrame = sample.totalEncodeTimeSeconds?.let { now ->
+                        lastTotalEncodeTimeSeconds?.let { before ->
+                            val dFrames = sample.framesEncoded - lastFramesEncoded
+                            val dSeconds = now - before
+                            if (dFrames > 0 && dSeconds >= 0) dSeconds * 1000.0 / dFrames else null
+                        }
+                    }
+                    lastTotalEncodeTimeSeconds = sample.totalEncodeTimeSeconds
+                    lastFramesEncoded = sample.framesEncoded
+                    val encodePart = encodeMsPerFrame?.let { String.format(", encode %.1f ms/f", it) } ?: ""
+                    val pacerMs = perDelta(sample.totalPacketSendDelaySeconds, lastPacketSendDelaySeconds, sample.packetsSent, lastPacketsSent)
+                    lastPacketSendDelaySeconds = sample.totalPacketSendDelaySeconds
+                    lastPacketsSent = sample.packetsSent
+                    val pacerPart = pacerMs?.let { String.format(", pacer %.1f ms/pkt", it) } ?: ""
+                    Log.i(
+                        TAG,
+                        "stats: ${bitrateBps / 1_000} kbps" +
+                            (sample.targetBitrateBps?.let { " (target ${it / 1_000})" } ?: "") +
+                            ", ${sample.framesEncoded} encoded" +
+                            ", ${sample.framesDropped} dropped, ${sample.framesPerSecond} fps" +
+                            ", ${sample.frameWidth}x${sample.frameHeight}" +
+                            ", rtt ${sample.rttMs} ms, encoder ${sample.encoderImplementation ?: "unknown"}" + encodePart + pacerPart,
+                    )
+                    lastBytesSent = sample.bytesSent
+                    lastStatsAtMs = nowMs
+                    onVideoStats(sample, bitrateBps)
+                } else if (nullSampleLogs < 5) {
+                    nullSampleLogs += 1
+                    val types = report.statsMap.values.map { it.members["type"] }.groupBy { it }.mapValues { it.value.size }
+                    Log.w(TAG, "stats: no video outbound-rtp sample — report has ${report.statsMap.size} entries, types $types")
+                }
+            }
+        }
+    }
+
+    private fun scheduleStats() {
+        Log.d(TAG, "stats polling scheduled (interval ${statsIntervalMs} ms)")
+        handler?.removeCallbacks(statsRunnable)
+        handler?.postDelayed(statsRunnable, statsIntervalMs)
+    }
+
+    // ---- ICE-recovery watchdog (issue #86) — the restart ladder's clock ----
+
+    /**
+     * Ticks the restart policy while a bad stretch is active. The stats
+     * poller can't be this clock (it only starts after a first CONNECTED, and
+     * getStats dries up on a dead pc), so recovery carries its own timer —
+     * armed on a fresh full offer and on disconnect/failure, self-canceling
+     * on recovery.
+     */
+    private val recoveryRunnable = object : Runnable {
+        override fun run() {
+            if (!active) return
+            try {
+                restarts.onTick(System.currentTimeMillis())
+            } catch (t: Throwable) {
+                // A policy bug must never kill the process (found live
+                // 2026-11-02: a bad backoff index crashed the app five times
+                // overnight, taking the cast down with it). Same contract as
+                // [buildOnThread]: the unexpected becomes an honest cast
+                // failure — details to the log and the debug message.
+                Log.e(TAG, "recovery tick failed — ending the cast", t)
+                fatal(Failure.Error("recovery: ${t.message ?: t.javaClass.simpleName}"))
+                return
+            }
+            if (restarts.busy) {
+                handler?.postDelayed(this, RECOVERY_TICK_MS)
+            } else {
+                cancelRecoveryWatchdog()
+            }
+        }
+    }
+
+    private fun scheduleRecoveryWatchdog() {
+        handler?.removeCallbacks(recoveryRunnable)
+        handler?.postDelayed(recoveryRunnable, RECOVERY_TICK_MS)
+    }
+
+    private fun cancelRecoveryWatchdog() {
+        handler?.removeCallbacks(recoveryRunnable)
+    }
+
+    // ---- teardown ----
+
+    private fun teardown() {
+        if (!active && thread === null) return
+        active = false
+        signaling.removeListener(signalingListener)
+        displayListener?.let { listener ->
+            context.getSystemService(DisplayManager::class.java).unregisterDisplayListener(listener)
+        }
+        displayListener = null
+        onState(State.CLOSED)
+        handler?.removeCallbacks(statsRunnable)
+        cancelRecoveryWatchdog()
+        releaseGameAudioPipeline()
+        closePc()
+        try {
+            capturer?.stopCapture()
+        } catch (t: Throwable) {
+            // The projection may already be gone (revoked) — nothing to save.
+            Log.d(TAG, "stopCapture after projection death: ${t.message}")
+        }
+        capturer = null
+        videoTrack?.dispose()
+        videoTrack = null
+        videoSource?.dispose()
+        videoSource = null
+        audioTrack?.dispose()
+        audioTrack = null
+        audioSource?.dispose()
+        audioSource = null
+        // Release a pre-opened capture record the substitution never consumed
+        // (the consumed one is released by the ADM's own stop path).
+        audio?.release()
+        // The audio ADM is owned (and released) by the factory below —
+        // JavaAudioDeviceModule.release() must not be called from app code.
+        audio = null
+        surfaceTextureHelper?.dispose()
+        surfaceTextureHelper = null
+        factory?.dispose()
+        factory = null
+        eglBase?.release()
+        eglBase = null
+        thread?.quitSafely()
+        thread = null
+        handler = null
+        Log.i(TAG, "media session torn down")
+    }
+
+    /** Stop feeding, then release the AAC sender and the DataChannel (it frees its native object). */
+    private fun releaseGameAudioPipeline() {
+        audio?.onEncoderInputSamples = null
+        gameAudioChannel?.close()
+        gameAudioChannel = null
+    }
+
+    /**
+     * close() alone left every replaced pc's native object (and its
+     * observer's JNI ref) alive for the process lifetime — one per re-auth.
+     * dispose() closes it too, and frees its senders' track wrappers (the
+     * tracks themselves stay; they are owned and disposed by this session).
+     */
+    private fun closePc() {
+        pcConnected = false
+        negotiator.detach() // disposes the pc; its late callbacks are dropped
+        pc = null
+    }
+
+    private fun fatal(failure: Failure) {
+        if (!active) return
+        active = false
+        post { teardown() }
+        onFatal?.invoke(failure)
+    }
+
+    companion object {
+        private const val TAG = "MediaCastSession"
+
+        /** Ignored by the pinned lib; see initialize (ADR-032). */
+        private const val MULTICHANNEL_SEND_FIELD_TRIAL = "WebRTC-Audio-MultiChannelSend/Enabled/"
+
+        /** webrtc.md: each side polls getStats ~1 Hz. */
+        const val STATS_INTERVAL_MS = 1_000L
+
+        /**
+         * Recovery-watchdog tick — finer than the smallest backoff rung
+         * (2 s) so restarts fire on time, coarse enough to cost nothing.
+         */
+        const val RECOVERY_TICK_MS = 500L
+
+        private const val PC_ID = "media"
+        private const val VIDEO_TRACK_ID = "caster-video"
+        private const val AUDIO_TRACK_ID = "caster-game-audio"
+        private const val STREAM_ID = "caster-media"
+    }
+}

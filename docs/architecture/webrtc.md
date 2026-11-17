@@ -18,7 +18,7 @@ Signaling must remain usable/testable with WebRTC entirely absent (loopback prot
 
 ## Signaling channel
 
-One WebSocket per mobile connection: `ws://<host>:<port>/zfc/v1` (host/port from the QR payload).
+One WebSocket per mobile connection: `ws://<host>:<port>/caster/v1` (host/port from the QR payload).
 
 ### Envelope
 

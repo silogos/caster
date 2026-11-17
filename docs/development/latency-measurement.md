@@ -14,7 +14,7 @@ How to measure the cast's glass-to-glass latency — video from the phone's scre
 |---|---|---|
 | `LatencyTestActivity` | `apps/mobile/app/src/debug/` (debug builds only) | Flips the screen black ↔ white once a second, logging the vsync each flip was drawn for. A strip along the top changes every frame, so the stream runs at full fps like a game (a still screen sends no frames and would test an idle encoder). Writes a click into an already-running low-latency `AudioTrack` on every white flip, logging the moment. |
 | `LatencyClickProbe` | `apps/mobile/.../debug/`, called from the ADM samples callback in debug builds | When the click comes out of the playback-capture record — splits the audio path into "inside the phone" and "phone → Mac". |
-| `latency_probe.rs` | the native receiver, on with `ZFC_LATENCY_PROBE=1` | When each flip is decoded (sampled luma of the frame's centre) and how long the pacer holds it; when each click arrives and the playout ring depth ahead of it. |
+| `latency_probe.rs` | the native receiver, on with `CASTER_LATENCY_PROBE=1` | When each flip is decoded (sampled luma of the frame's centre) and how long the pacer holds it; when each click arrives and the playout ring depth ahead of it. |
 | `tools/latency/measure.py` | Mac | Aligns the two clocks over adb and pairs the marks. |
 
 Only a sampled luma mean and a peak amplitude are read — no frame or audio content is logged.
@@ -27,8 +27,8 @@ Only a sampled luma mean and a peak amplitude are read — no frame or audio con
 
 ## Running it
 
-1. Receiver: `ZFC_LATENCY_PROBE=1 ./target/release/desktop-native > rx.log 2>&1`
-2. Phone (debug build, cast running): `adb logcat -v time -s LatencyTest:I > phone.log`, then `adb shell am start -n com.zerofriction.localcast/.debug.LatencyTestActivity`
+1. Receiver: `CASTER_LATENCY_PROBE=1 ./target/release/desktop-native > rx.log 2>&1`
+2. Phone (debug build, cast running): `adb logcat -v time -s LatencyTest:I > phone.log`, then `adb shell am start -n io.github.silogos.caster/.debug.LatencyTestActivity`
 3. Keep the Mac's video window frontmost (a hidden window renders nothing, so no video marks) and leave the phone untouched for ~70 s.
 4. Read the pattern layer's present lag: `adb shell dumpsys SurfaceFlinger --latency '<the LatencyTestActivity layer>'` — median of (column 2 − column 1) over the rows, in ms.
 5. `python3 -I tools/latency/measure.py --logcat phone.log --receiver rx.log --phone-screen-lag <ms>` while adb is still connected (it aligns the clocks live).
@@ -74,7 +74,7 @@ Per-segment probes were added to find the standing queue behind the pass-to-pass
 - **capture age** (phone, debug): now minus the virtual display buffer's timestamp when the capture thread gets the frame;
 - **sender stats:** encode time and libwebrtc's pacer wait (`totalPacketSendDelay`);
 - **DataChannel send-buffer fill** (phone, debug);
-- **receive stats** (receiver, `ZFC_LATENCY_PROBE`): decode time, packet-to-decoded processing delay, jitter buffer.
+- **receive stats** (receiver, `CASTER_LATENCY_PROBE`): decode time, packet-to-decoded processing delay, jitter buffer.
 
 | Cast | Pass | Video → Mac screen | Capture age | Encode | Pacer | Mac decode / processing | Jitter buffer |
 |---|---|---|---|---|---|---|---|

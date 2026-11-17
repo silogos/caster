@@ -110,7 +110,7 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("zfc-settings-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("caster-settings-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

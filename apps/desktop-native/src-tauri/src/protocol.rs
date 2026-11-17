@@ -188,7 +188,7 @@ pub fn parse_session_info(payload: &Value) -> Result<Value, Rejection> {
 }
 
 /// The phone's model from its UA: the last `;`-separated part of the
-/// trailing "(...)" group — `LocalCast/1.0 (Android 16; TB321FU)` →
+/// trailing "(...)" group — `Caster/1.0 (Android 16; TB321FU)` →
 /// `TB321FU`, exactly like the Electron receiver's `deviceNameFromUa`.
 pub fn device_name_from_ua(ua: &str) -> String {
     let group = ua
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn hello_validation() {
-        let ok = parse_hello(&json!({ "ua": "zfc/1 (Pixel 8)", "protoMin": 1, "protoMax": 2 })).unwrap();
+        let ok = parse_hello(&json!({ "ua": "Caster/1 (Pixel 8)", "protoMin": 1, "protoMax": 2 })).unwrap();
         assert_eq!((ok.device_id, ok.resume), (None, false), "older clients omit deviceId");
         let resume = parse_hello(&json!({ "ua": "x", "protoMin": 1, "protoMax": 2, "deviceId": "d", "resume": true })).unwrap();
         assert!(resume.resume);
@@ -277,8 +277,8 @@ mod tests {
         let info = json!({ "profile": "balanced", "width": 1920, "height": 1200, "fps": 60, "gameAudio": true, "mic": false });
         assert_eq!(parse_session_info(&info).unwrap(), info);
         assert!(parse_session_info(&json!({ "profile": "balanced" })).is_err());
-        assert_eq!(device_name_from_ua("LocalCast/1.0 (Android 16; TB321FU)"), "TB321FU");
-        assert_eq!(device_name_from_ua("LocalCast/1.0 (Pixel 8)"), "Pixel 8");
+        assert_eq!(device_name_from_ua("Caster/1.0 (Android 16; TB321FU)"), "TB321FU");
+        assert_eq!(device_name_from_ua("Caster/1.0 (Pixel 8)"), "Pixel 8");
         assert_eq!(device_name_from_ua("no-parens"), "Android device");
         assert_eq!(device_name_from_ua("x (Android 16; )"), "Android device");
         assert_eq!(short_id("ééééééééé-rest"), "éééééééé");

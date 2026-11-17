@@ -509,7 +509,7 @@ names = vstack(name, "name · where it shows", gap=3, h="fill")
 text(names, "Where the name shows", 13, ON, "Medium", width=NAME_W - 40, line=18)
 for line in (
     "Phone: the launcher label “Caster”, the app bar's “Caster”, the notification.",
-    "Mac: the app “Caster” (was “Zero-Friction Local Cast Native”), the window and tray, the nameplate “CASTER”, "
+    "Mac: the app “Caster” (was “Caster”), the window and tray, the nameplate “CASTER”, "
     "the video window, the Syphon source in OBS (pick it again once).",
     "Unchanged: the app's ids, the signing key and the receiver's data folder, so updates install and saved "
     "pairings stay.",

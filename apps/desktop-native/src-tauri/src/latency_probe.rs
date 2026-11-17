@@ -4,7 +4,7 @@
 //!
 //! The phone's debug-only `LatencyTestActivity` flips the screen between
 //! black and white once a second and beeps on every white flip, logging the
-//! wall-clock time of each. With `ZFC_LATENCY_PROBE=1` the receiver logs the
+//! wall-clock time of each. With `CASTER_LATENCY_PROBE=1` the receiver logs the
 //! wall-clock time each flip is decoded (plus how long the pacer holds it)
 //! and each beep arrives (plus the playout ring's depth ahead of it).
 //! `tools/latency/measure.py` pairs the two logs. Off by default: no frame
@@ -16,7 +16,7 @@
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const ENV: &str = "ZFC_LATENCY_PROBE";
+const ENV: &str = "CASTER_LATENCY_PROBE";
 /// Mean luma below this is the pattern's black, above `BRIGHT` its white;
 /// in between (a game, a transition) changes nothing — hysteresis.
 const DARK: f64 = 64.0;

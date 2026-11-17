@@ -4,23 +4,23 @@ Implemented in: **Phase14** (see [roadmap](../development/roadmap.md)). Status: 
 
 ## Audio routing recipes for the stream (Feature 2026-11d)
 
-> **Native receiver + Syphon (ADR-029, ADR-030):** the Syphon Client source carries no sound. In the receiver set **Audio → Plays on: Caster Audio** and **Mic → Plays on: Caster Mic**, then add an **Audio Input Capture** of each device in OBS. The first click on Caster installs both devices (macOS asks for the password once). Installing them removes the Electron receiver's "Zero-Friction Game Audio" and "Zero-Friction Mic": an OBS scene that captured those must be pointed at "Caster Audio" and "Caster Mic" once. In the recipes below, read "Zero-Friction Game Audio" as "Caster Audio" and "Zero-Friction Mic" as "Caster Mic". Sound plays while the video window is open or Syphon is on; a track on Caster is silent on the speakers (listen on the phone, or monitor the source in OBS). The recipes below were written for the Electron receiver.
+> **Native receiver + Syphon (ADR-029, ADR-030):** the Syphon Client source carries no sound. In the receiver set **Audio → Plays on: Caster Audio** and **Mic → Plays on: Caster Mic**, then add an **Audio Input Capture** of each device in OBS. The first click on Caster installs both devices (macOS asks for the password once). Installing them removes the Electron receiver's "ADR-008 Game Audio" and "ADR-008 Mic": an OBS scene that captured those must be pointed at "Caster Audio" and "Caster Mic" once. In the recipes below, read "ADR-008 Game Audio" as "Caster Audio" and "ADR-008 Mic" as "Caster Mic". Sound plays while the video window is open or Syphon is on; a track on Caster is silent on the speakers (listen on the phone, or monitor the source in OBS). The recipes below were written for the Electron receiver.
 
 The streamer's PC mixes more than the cast — donation alerts (Saweria and friends) play through the **default output**. One rule prevents the classic double-game-audio:
 
-> **Game audio reaches OBS through exactly ONE source.** Capturing the desktop audio (speaker loopback) *and* the "Zero-Friction Game Audio" device at the same time records the game twice ([audio-mixer.md](audio-mixer.md) — in `both` routing the mix plays to the default output *and* the per-track device).
+> **Game audio reaches OBS through exactly ONE source.** Capturing the desktop audio (speaker loopback) *and* the "ADR-008 Game Audio" device at the same time records the game twice ([audio-mixer.md](audio-mixer.md) — in `both` routing the mix plays to the default output *and* the per-track device).
 
 **Config A — one desktop-audio source (the current setup; simplest):**
 
 - Mixer routing **Both** (ears get the cast at full latency freshness; the cable device still fills for other uses).
-- OBS sources: **Desktop audio** (the alert sounds + the game, mixed exactly as you hear them) + **"Zero-Friction Mic"**. Do **not** add "Zero-Friction Game Audio".
+- OBS sources: **Desktop audio** (the alert sounds + the game, mixed exactly as you hear them) + **"ADR-008 Mic"**. Do **not** add "ADR-008 Game Audio".
 - With the mobile's **Low-latency audio** toggle on ([game-audio.md](game-audio.md)), the game audio rides raw PCM (~1.5 Mbps wire) and lands with the smallest delay the pipeline can produce — A/V sync on the stream is then one small static per-source offset in OBS (dial it once against an on-screen clock; the paths are stable on a quiet LAN).
 - Trade-off: game vs alert volume in the stream follows the OS mix — no independent stream-side balance.
 
 **Config B — separate sources (only if you need independent game/alert volumes):**
 
 - The alerts must leave the default device first (Windows: OBS *Application Audio Capture* of the alert app; macOS: a per-app output routing tool) — only then is the desktop-audio capture free of the game.
-- OBS sources: **"Zero-Friction Game Audio"** (the cast's game-audio device) + the alerts' capture + **"Zero-Friction Mic"**.
+- OBS sources: **"ADR-008 Game Audio"** (the cast's game-audio device) + the alerts' capture + **"ADR-008 Mic"**.
 - The follow-up work item (bounded playout buffer on the cable path + a raised receiver delay on video/mic, candidate ADR-014) exists to make this config's game audio glitch-free and pre-synced for OBS; until it ships, Config B runs on the same play-on-arrival ring as your ears.
 
 ## What is implemented
@@ -37,7 +37,7 @@ The cast summary line ("Connected to Pixel 8 — 1280×720 · 30 fps · balanced
 
 - Small (520×64), frameless, always-on-top, draggable via a CSS app-region, closed via its ✕. The text ellipsizes; while no phone event has arrived yet it shows a muted "Cast info" placeholder.
 - It exists exactly while **a cast is live AND the user wants it**. Created at cast start (if enabled), destroyed at cast end; a mid-cast toggle creates/destroys it live, replaying the cached mobile state so the fresh window immediately shows the current line.
-- The preference defaults **off** (a second window must never surprise anyone) and persists in renderer `localStorage` (`zfc.session-info-overlay.v1`) like the mixer levels — per-receiver-machine trivia that never crosses the IPC boundary. The main process owns the effective state at runtime because it owns the windows; the Settings checkbox and the window's ✕ both funnel through one IPC call (`window:session-info-overlay`), and the main process pushes the state back so the checkbox can never lie about the window's existence.
+- The preference defaults **off** (a second window must never surprise anyone) and persists in renderer `localStorage` (`session-info-overlay.v1`) like the mixer levels — per-receiver-machine trivia that never crosses the IPC boundary. The main process owns the effective state at runtime because it owns the windows; the Settings checkbox and the window's ✕ both funnel through one IPC call (`window:session-info-overlay`), and the main process pushes the state back so the checkbox can never lie about the window's existence.
 - The line is formatted by one pure module, `sessionInfoLine.ts` (moved out of `main.ts`), rendered both in the receiver's hover overlay and in this window — one copy, two windows, unit-tested.
 
 ### 3. Letterboxing is the default — "Match window to video" on demand
@@ -66,7 +66,7 @@ The old behavior survives as the explicit **"Match window to video"** action in 
 **Live via CDP against the production build (14/14 checks):**
 
 - Markup fix: exactly one `#hint`, one `#regenerate`.
-- Settings modal: both Phase14 controls present; checkbox defaults off with fresh storage; toggling persists `zfc.session-info-overlay.v1=true`.
+- Settings modal: both Phase14 controls present; checkbox defaults off with fresh storage; toggling persists `session-info-overlay.v1=true`.
 - A simulated cast start (`setCastActive(true)`, the same IPC the ReceiverSession sink fires) opened the session-info window; its line showed the styled placeholder pre-pairing and the ✕ was present.
 - **✕ close**: window closed *and* the Settings checkbox synced off (the pushed state) — one shared state, verified.
 - **Mid-cast toggle re-opened** the window; cast end closed it.

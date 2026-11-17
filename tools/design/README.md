@@ -25,15 +25,15 @@
    It is opt-in, so CI skips it:
 
    ```bash
-   cd apps/mobile && DESIGN_EXPORT_DIR=/tmp/zfc-design ./gradlew :app:testDebugUnitTest --tests '*DesignExportTest'
+   cd apps/mobile && DESIGN_EXPORT_DIR=/tmp/caster-design ./gradlew :app:testDebugUnitTest --tests '*DesignExportTest'
    ```
 
 2. **Build.**
 
    ```bash
-   python3 -I tools/design/build_custom_profiles_spec.py /tmp/zfc-design/custom-profiles.figcraft
-   python3 -I tools/design/build_mobile_figcraft.py /tmp/zfc-design designs/mobile-app.figcraft \
-     --spec designs/mobile-ux-a11y.figcraft --spec /tmp/zfc-design/custom-profiles.figcraft
+   python3 -I tools/design/build_custom_profiles_spec.py /tmp/caster-design/custom-profiles.figcraft
+   python3 -I tools/design/build_mobile_figcraft.py /tmp/caster-design designs/mobile-app.figcraft \
+     --spec designs/mobile-ux-a11y.figcraft --spec /tmp/caster-design/custom-profiles.figcraft
    ```
 
    This produces three pages (one measured, then one per `--spec`):

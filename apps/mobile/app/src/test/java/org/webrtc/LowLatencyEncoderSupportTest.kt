@@ -1,7 +1,7 @@
 package org.webrtc
 
 import android.media.MediaFormat
-import com.zerofriction.localcast.webrtc.EncoderLatencyKeys
+import io.github.silogos.caster.webrtc.EncoderLatencyKeys
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame

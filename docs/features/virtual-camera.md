@@ -23,14 +23,14 @@ Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.
 
 ## Live on macOS (2026-10-31, this machine)
 
-- **The native half end-to-end, standalone**: `syphon-helper` fed a synthetic 64×32 30 fps stream publishes cleanly (clean EOF exit), and — after the **discovery-runloop fix** (ADR-007 addendum; the first cut read stdin in a blocking loop and the server was invisible to later-starting clients) — a `SyphonServerDirectory` probe lists **"Zero-Friction Local Cast"** continuously while it publishes. The helper is universal (arm64+x86_64), built from source by `resources/syphon/build.sh` together with the Syphon framework.
+- **The native half end-to-end, standalone**: `syphon-helper` fed a synthetic 64×32 30 fps stream publishes cleanly (clean EOF exit), and — after the **discovery-runloop fix** (ADR-007 addendum; the first cut read stdin in a blocking loop and the server was invisible to later-starting clients) — a `SyphonServerDirectory` probe lists **"Caster"** continuously while it publishes. The helper is universal (arm64+x86_64), built from source by `resources/syphon/build.sh` together with the Syphon framework.
 - **Packaged app**: the `.app` carries the helper + framework; the packaged binary runs.
 
 ## Manual — PENDING
 
 **macOS (needs the phone in hand — everything else is ready on this machine):**
 
-- [ ] Pair + cast → the phone shows the "Virtual camera" card (Mac reports available, no setup state) → toggle on → receiver swaps to the placeholder → **OBS (Syphon Client source)** lists "Zero-Friction Local Cast" and shows the feed; orientation correct (flip check), letterbox on rotation.
+- [ ] Pair + cast → the phone shows the "Virtual camera" card (Mac reports available, no setup state) → toggle on → receiver swaps to the placeholder → **OBS (Syphon Client source)** lists "Caster" and shows the feed; orientation correct (flip check), letterbox on rotation.
 - [ ] **No-signal stage (ADR-007 addendum)**: disconnect from the phone mid-VC → OBS shows the **"No input video" still** (server stays listed, no frozen frame); cast again → frames resume; toggle off (desktop Settings row, the placeholder's Turn-off, or the phone) → the server disappears from OBS instantly.
 - [ ] **Desktop toggle**: Settings (also reachable from the No-input stage) → "Virtual camera" row toggles the same state as the phone's card.
 - [ ] **Always-on (batch B)**: Settings → "Start with every cast" → each new cast brings the camera up by itself (no toggle); between casts it idles on the no-input still — capture-card behavior. Windows too (softcam flag flipped; verify the still in the OS camera list on the rig).
@@ -51,7 +51,7 @@ Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.
 **Linux (adapter shipped — issue #73; needs a Linux rig with PipeWire + GStreamer):**
 
 - [ ] `gst-launch-1.0` present → the phone's card shows available; absent → honestly unavailable (install guidance in the log).
-- [ ] Firefox (camera portal) sees **"Zero-Friction Camera"** and shows the feed; aspect correct. OBS: check its current PipeWire-camera transition state and record honestly.
+- [ ] Firefox (camera portal) sees the Electron receiver's camera and shows the feed; aspect correct. OBS: check its current PipeWire-camera transition state and record honestly.
 - [ ] 60 fps cast → smooth node output; the declared-caps 60/1 vs real-rate interplay is the knob if pacing looks wrong (`DECLARED_FRAMERATE`, `vc/pipewirePublisher.ts`).
 - [ ] No-signal idle, minimize, rotation letterbox, every teardown path — the same matrix as above.
 - [ ] Raw `/dev/video*` consumers: confirm they do **not** see it (the recorded reach limitation).

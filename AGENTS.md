@@ -1,6 +1,6 @@
 # AGENTS.md — Rules for coding agents working in this repository
 
-This is **Caster** (called Zero-Friction Local Cast until v0.2.0): an Android → desktop screen/audio/mic caster over LAN Wi-Fi. Read [docs/README.md](docs/README.md) before doing anything. If architecture docs conflict with code, fix the mismatch — do not silently work around documentation.
+This is **Caster** (renamed in v0.2.0, [ADR-027](docs/decisions/ADR-027-the-product-is-called-caster.md); identifiers since [ADR-035](docs/decisions/ADR-035-machine-identifiers-carry-caster.md)): an Android → desktop screen/audio/mic caster over LAN Wi-Fi. Read [docs/README.md](docs/README.md) before doing anything. If architecture docs conflict with code, fix the mismatch — do not silently work around documentation.
 
 ## Non-negotiables
 
