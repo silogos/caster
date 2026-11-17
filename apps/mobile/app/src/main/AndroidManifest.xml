@@ -57,11 +57,20 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- USB cast (ADR-034): opened by Android when the receiver
+                 switches the phone into accessory mode over the cable. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
         </activity>
 
         <!-- Minimal Phase5 skeleton (service/CastService.kt): owns the
@@ -70,6 +79,13 @@
              is on (and RECORD_AUDIO is granted) — CastForegroundTypes. -->
         <service
             android:name=".service.CastService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- A cast over the USB cable (ADR-034): video, game audio and the mic
+             (the `microphone` type is added at runtime only while the mic is on). -->
+        <service
+            android:name=".usb.UsbCastService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
     </application>

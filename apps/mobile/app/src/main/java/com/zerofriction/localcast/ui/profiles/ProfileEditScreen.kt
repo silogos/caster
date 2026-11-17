@@ -1,5 +1,9 @@
 package com.zerofriction.localcast.ui.profiles
 
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.layout.width
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -186,6 +190,7 @@ fun ProfileEditContent(
                         options = rates.map { stringResource(R.string.settings_fps_value, it) to (it == values.fps) },
                         onSelect = { index -> onEdit { it.copy(fps = rates[index]) } },
                     )
+                    if (values.fps > CastSettingChoices.BEST_OVER_USB_FPS_ABOVE) HintText(R.string.profile_hint_fps_120)
 
                     BitrateRange(
                         minBps = values.bitrateMinBps,
@@ -199,7 +204,7 @@ fun ProfileEditContent(
             SilkscreenLabel(stringResource(R.string.profile_card_behaviour))
             CastCard {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp)) {
-                    SubLabel(R.string.settings_degradation)
+                    SubLabel(R.string.settings_degradation, wifiOnly = true)
                     CastChipRow(
                         options = DegradationStrategy.entries.map { strategy ->
                             stringResource(
@@ -213,6 +218,7 @@ fun ProfileEditContent(
                         onSelect = { index -> onEdit { it.copy(degradationStrategy = DegradationStrategy.entries[index]) } },
                     )
                     HintText(R.string.settings_degradation_hint)
+                    HintText(R.string.profile_hint_pressure_cable)
 
                     SubLabel(R.string.settings_auto_quality)
                     CastChipRow(
@@ -258,7 +264,7 @@ fun ProfileEditContent(
                         },
                     )
 
-                    SubLabel(R.string.profile_video_codec)
+                    SubLabel(R.string.profile_video_codec, wifiOnly = true)
                     CastChipRow(
                         options = listOf(
                             stringResource(R.string.settings_codec_h264) to (values.preferredCodec == PreferredVideoCodec.H264),
@@ -270,6 +276,7 @@ fun ProfileEditContent(
                             }
                         },
                     )
+                    HintText(R.string.profile_hint_codec_cable)
 
                     SubLabel(R.string.settings_h264_profile)
                     CastChipRow(
@@ -302,7 +309,7 @@ fun ProfileEditContent(
             SilkscreenLabel(stringResource(R.string.profile_card_audio))
             CastCard {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp)) {
-                    SubLabel(R.string.settings_low_latency_game_audio)
+                    SubLabel(R.string.settings_low_latency_game_audio, wifiOnly = true)
                     CastChipRow(
                         options = listOf(
                             stringResource(R.string.low_latency_audio_on) to values.lowLatencyGameAudio,
@@ -311,6 +318,7 @@ fun ProfileEditContent(
                         onSelect = { index -> onEdit { it.copy(lowLatencyGameAudio = index == 0) } },
                     )
                     HintText(R.string.settings_low_latency_game_audio_hint)
+                    HintText(R.string.profile_hint_audio_cable)
                 }
             }
 
@@ -385,7 +393,8 @@ private fun BitrateRange(minBps: Int, maxBps: Int, onCommit: (Int, Int) -> Unit)
         modifier = Modifier.padding(top = 8.dp),
     )
     Text(
-        text = stringResource(R.string.profile_bitrate_hint, sliderMin, sliderMax),
+        text = stringResource(R.string.profile_bitrate_hint, sliderMin, sliderMax) + " " +
+            stringResource(R.string.profile_hint_bitrate_cable, shown.endInclusive.roundToInt()),
         fontSize = 13.sp,
         lineHeight = 19.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -394,12 +403,37 @@ private fun BitrateRange(minBps: Int, maxBps: Int, onCommit: (Int, Int) -> Unit)
 
 /** A lighter label for the items inside a card. */
 @Composable
-private fun SubLabel(labelRes: Int) {
+private fun SubLabel(labelRes: Int, wifiOnly: Boolean = false) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
+        Text(
+            text = stringResource(labelRes),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (wifiOnly) {
+            Spacer(Modifier.width(8.dp))
+            WifiOnlyTag()
+        }
+    }
+}
+
+/** A field that only shapes a cast over Wi-Fi (ADR-034, design v4 E1): the cable doesn't use it. */
+@Composable
+private fun WifiOnlyTag() {
+    val ink = MaterialTheme.colorScheme.onSurfaceVariant
     Text(
-        text = stringResource(labelRes),
-        fontSize = 13.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 12.dp),
+        text = stringResource(R.string.profile_wifi_only).uppercase(),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        fontFamily = FontFamily.Monospace,
+        letterSpacing = 0.8.sp,
+        lineHeight = 14.sp,
+        color = ink,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(ink.copy(alpha = 0.14f))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
 

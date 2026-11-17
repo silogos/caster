@@ -89,10 +89,10 @@ class CastProfilesTest {
 
     @Test
     fun `a bitrate range stays inside the slider with its two ends a step apart`() {
-        assertEquals(1_000_000 to 20_000_000, sharp60.withBitrateRange(0, 99_000_000).window())
+        assertEquals(1_000_000 to 40_000_000, sharp60.withBitrateRange(0, 99_000_000).window())
         assertEquals("the most cannot meet the least", 9_000_000 to 10_000_000, sharp60.withBitrateRange(9_000_000, 9_000_000).window())
         assertEquals("nor pass it", 9_000_000 to 10_000_000, sharp60.withBitrateRange(9_000_000, 3_000_000).window())
-        assertEquals(19_000_000 to 20_000_000, sharp60.withBitrateRange(20_000_000, 20_000_000).window())
+        assertEquals(39_000_000 to 40_000_000, sharp60.withBitrateRange(40_000_000, 40_000_000).window())
         assertTrue(sharp60.withBitrateRange(0, 99_000_000).isValid)
     }
 

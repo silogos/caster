@@ -1,5 +1,6 @@
 package com.zerofriction.localcast
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,6 +19,7 @@ import com.zerofriction.localcast.ui.home.HomeScreen
 import com.zerofriction.localcast.ui.pairing.ScanScreen
 import com.zerofriction.localcast.ui.profiles.ProfileEditScreen
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
+import com.zerofriction.localcast.usb.UsbLink
 
 class MainActivity : ComponentActivity() {
 
@@ -33,6 +35,8 @@ class MainActivity : ComponentActivity() {
         // Home with its one-tap Connect. No store (or an unusable one) keeps
         // the scan-first flow.
         ConnectedDesktop.hydrateSaved(this)
+        // USB cast (ADR-034): Android opened us for Caster's accessory.
+        UsbLink.attachFrom(this, intent)
         setContent {
             LocalCastTheme {
                 // Scan-first (designs/mobile-app.html): a fresh launch opens on
@@ -65,6 +69,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        UsbLink.attachFrom(this, intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // A cable already in (and granted) when the app comes back.
+        UsbLink.attachFrom(this, null)
     }
 
     /**

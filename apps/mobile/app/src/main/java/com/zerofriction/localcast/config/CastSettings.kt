@@ -24,6 +24,12 @@ data class CastSettings(
     val mic: Boolean,
     /** Which microphone the cast records from (MicDeviceSource, audio.md). */
     val micDevice: MicDeviceSource = MicDeviceSource.BUILTIN,
+    /**
+     * The profile a cast over the USB cable uses (ADR-034): Capture until the
+     * user picks another while the cable is in. [selection] stays the Wi-Fi
+     * pick, so unplugging goes back to it.
+     */
+    val cableSelection: ProfileSelection = ProfileSelection.BuiltIn(QualityProfile.CAPTURE),
 ) {
     /** The user's profile with this id, or null. */
     fun customProfile(id: Int): CustomProfile? = customProfiles.firstOrNull { it.id == id }
@@ -35,22 +41,32 @@ data class CastSettings(
      * rather than on nothing.
      */
     val active: ProfileValues
-        get() = when (val selected = selection) {
-            is ProfileSelection.BuiltIn -> selected.profile.toValues()
-            is ProfileSelection.Custom -> customProfile(selected.id)?.values ?: CustomProfileRules.FALLBACK.toValues()
-        }
+        get() = valuesOf(selection)
 
     /** The selected profile's name for the desktop's display-only status line (session-info, webrtc.md). */
     val activeName: String
-        get() = when (val selected = selection) {
-            is ProfileSelection.BuiltIn -> selected.profile.label
-            is ProfileSelection.Custom -> customProfile(selected.id)?.name ?: CustomProfileRules.FALLBACK.label
-        }
+        get() = nameOf(selection)
 
-    fun toConfig(): CastConfig {
-        val values = active
+    private fun valuesOf(target: ProfileSelection): ProfileValues = when (target) {
+        is ProfileSelection.BuiltIn -> target.profile.toValues()
+        is ProfileSelection.Custom -> customProfile(target.id)?.values ?: CustomProfileRules.FALLBACK.toValues()
+    }
+
+    private fun nameOf(target: ProfileSelection): String = when (target) {
+        is ProfileSelection.BuiltIn -> target.profile.label
+        is ProfileSelection.Custom -> customProfile(target.id)?.name ?: CustomProfileRules.FALLBACK.label
+    }
+
+    /** What a cast over Wi-Fi runs on: the selected profile. */
+    fun toConfig(): CastConfig = configFor(selection)
+
+    /** What a cast over the USB cable runs on: the cable's profile (ADR-034). */
+    fun toCableConfig(): CastConfig = configFor(cableSelection)
+
+    private fun configFor(target: ProfileSelection): CastConfig {
+        val values = valuesOf(target)
         return CastConfig(
-            profile = activeName,
+            profile = nameOf(target),
             longEdgePx = values.longEdgePx,
             fps = values.fps,
             bitrateMinBps = values.bitrateMinBps,
@@ -117,7 +133,18 @@ data class CastSettings(
                 selection
             },
             customProfiles = customProfiles.filterNot { it.id == id },
+            cableSelection = if (cableSelection == ProfileSelection.Custom(id)) {
+                ProfileSelection.BuiltIn(QualityProfile.CAPTURE)
+            } else {
+                cableSelection
+            },
         )
+    }
+
+    /** Makes [target] the cable's profile when it names a profile that exists. */
+    fun withCableSelection(target: ProfileSelection): CastSettings = when (target) {
+        is ProfileSelection.BuiltIn -> copy(cableSelection = target)
+        is ProfileSelection.Custom -> if (customProfile(target.id) !== null) copy(cableSelection = target) else this
     }
 
     /** Selects [target] when it names a profile that exists. */
