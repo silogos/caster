@@ -7,7 +7,7 @@ like the other desktop builders.
   11  Deck · on air by cable                 the cast runs over USB
   12  Deck · cable unplugged                 the link is gone; nothing to reconnect to
   13  QR hero · a phone on the cable isn't paired with this Mac (superseded by
-      frame 15, ADR-037: the cable needs no QR; kept to show what changed)
+      frame 17, ADR-037: the cable guide; kept to show what changed)
   14  Deck · opened with a saved phone that isn't connected yet (not the QR)
 
 Re-running replaces frames 10–14; the others are untouched.
@@ -39,7 +39,7 @@ FRAMES = [
     ("10 Deck · Connected by cable, standby", "DESKTOP — 10 · DECK / CONNECTED BY CABLE, STANDBY (USB CAST, ADR-034)"),
     ("11 Deck · On air by cable", "DESKTOP — 11 · DECK / ON AIR BY CABLE (USB CAST)"),
     ("12 Deck · Cable unplugged", "DESKTOP — 12 · DECK / CABLE UNPLUGGED — NOTHING TO RECONNECT TO (USB CAST)"),
-    ("13 QR hero · Cable phone not paired", "DESKTOP — 13 · SUPERSEDED BY 15 (ADR-037: THE CABLE NEEDS NO QR) — WAS: A CABLE PHONE ISN'T PAIRED"),
+    ("13 QR hero · Cable phone not paired", "DESKTOP — 13 · SUPERSEDED BY 17 (ADR-037: THE CABLE GUIDE) — WAS: A CABLE PHONE ISN'T PAIRED"),
     ("14 Deck · Saved phone, not connected", "DESKTOP — 14 · DECK / OPENED WITH A SAVED PHONE THAT ISN'T CONNECTED YET — NOT THE QR"),
 ]
 

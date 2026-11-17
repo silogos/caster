@@ -1,17 +1,23 @@
-"""Builds the "Mobile flow v7 · Cable and Wi-Fi, end to end (ADR-037)" page:
-the whole UI flow of ADR-037 as a storyboard, step by step with arrows, the
-Mac's side drawn in line where it matters. Screens are the ones of design v6
-(cable auth C1–C4, Home with its WI-FI / CABLE tag) plus the ones a full
-flow needs: Scan, Android's two dialogs, and Home with a Mac saved by cable.
+"""Builds the "Mobile flow v8 · The link is chosen first (ADR-037)" page: the
+whole phone flow as a storyboard, screen to screen with arrows, the
+computer's side drawn in line where it matters.
 
-  A  First time by cable      Scan → plug in → Android dialog → checking → the Mac asks → Home CABLE
-  B  Later, by cable          saved Home → plug in → reconnecting (no prompt) → Home → Share → on air
-  C  Wi-Fi, as today          Scan → pairing → Home WI-FI → Disconnect → saved → Connect → Home WI-FI
-  D  When it goes wrong       not allowed · older Mac · unplugged mid-cast · forget (Terminate)
+The phone opens on a choice, Wireless or Cable. Wireless leads to today's
+Scan; Cable leads to a cable guide (plug in → Android's "Open Caster" → the
+computer's one-time Allow). Once paired, the app opens straight on Home;
+switching link needs Terminate. Home is today's, plus one card above Share
+screen naming the link and its connection status.
+
+  A  First run, Wireless   choose → Scan → pairing → Home · Wireless · Connected
+  B  First run, Cable      cable guide → Android's dialog → the computer allows → Home · Cable · Connected
+  C  Later, already paired straight to Home; the cable reconnects by itself; Share → on air
+  D  Wireless later, switching and errors
+
+It replaces the earlier drafts' pages v6 and v7 (removed from the file).
 
 Usage:
-  python3 -I tools/design/build_link_flow_spec.py OUT.figcraft
-  python3 -I tools/design/build_link_flow_spec.py OUT.figcraft --into designs/mobile-app.figcraft
+  python3 -I tools/design/build_link_first_spec.py OUT.figcraft
+  python3 -I tools/design/build_link_first_spec.py OUT.figcraft --into designs/mobile-app.figcraft
 --into also writes the page into that file, replacing an earlier copy of it.
 """
 import json
@@ -24,14 +30,17 @@ import autolayout  # noqa: E402
 
 from spec_dsl import *  # noqa: E402,F401,F403
 
-PAGE_NAME = "Mobile flow v7 · Cable and Wi-Fi, end to end (ADR-037)"
+PAGE_NAME = "Mobile flow v8 · The link is chosen first (ADR-037)"
+OLD_PAGE_NAMES = ("Mobile design v6 · The link is chosen at Connect (ADR-037)",
+                  "Mobile design v6 · One link per connection (ADR-037)",
+                  "Mobile flow v7 · Cable and Wi-Fi, end to end (ADR-037)")
 CARD_INNER_W = CONTENT_W - 32
 GAP = 170
 COLUMN = PHONE_W + GAP
 NOTES_GAP = 24
 ROW_GAP = 150
 MONO_ADVANCE = 0.6
-MAC = "MacBook Pro"
+PC = "MacBook Pro"
 PHONE_NAME = "Lenovo TB321FU"
 TEAL, MAC_BG, MAC_SHEET = "#2FD1B6", "#0C1013", "#1E242B"
 DIALOG_BG = "#2B2F36"
@@ -193,8 +202,6 @@ def scan_screen(f, pairing=False):
     if pairing:
         status_card(f, wifi_glyph, "Pairing with the desktop…", "Over Wi-Fi, from the QR code.",
                     pill_label="WI-FI", pill_tone="muted")
-    else:
-        hint_line(f, "No Wi-Fi? Plug the cable into the Mac instead.")
 
 
 def system_dialog(f, title, body, options, buttons):
@@ -276,12 +283,148 @@ def arrow(page, x, y, label):
     autolayout.solve(nodes, a, text_height)
 
 
+
+# ---- v8 components ------------------------------------------------------------
+
+def back(f, label="Back"):
+    r = hstack(f, "back", cross="center", h="fill")
+    text_button(r, "‹  " + label, ON)
+
+
+def choice_screen(f):
+    bar(f, "STANDBY")
+    head = vstack(f, "heading", gap=6, h="fill")
+    text(head, "Connect to your computer", 22, ON, "SemiBold", line=28)
+    text(head, "Choose how. To change it later, Terminate on Home.", 14, VARIANT, width=CONTENT_W, line=20)
+    tiles = hstack(f, "choices", gap=12, h="fill")
+    for title, sub, glyph in (("Wireless", "Same Wi-Fi. Scan the code on the computer.", wifi_glyph),
+                              ("Cable", "USB cable. No Wi-Fi needed.", usb_glyph)):
+        t = vstack(tiles, f"choice · {title}", gap=10, pad=(22, 16, 22, 16), cross="center", h="fill",
+                   fill=SURFACE, radius=18, stroke=OUTLINE)
+        glyph(t, PRIMARY)
+        text(t, title, 16, ON, "SemiBold", line=22)
+        text(t, sub, 12.5, VARIANT, width=(CONTENT_W - 12) / 2 - 32, line=17)
+    hint_line(f, "Both need Caster open on the computer, set to the same choice.")
+
+
+def step(parent, n, title, sub, state):
+    """One guide step: done (check), now (amber ring) or later (muted)."""
+    r = hstack(parent, f"step {n}", gap=14, cross="min", h="fill")
+    color = {"done": GOOD, "now": PRIMARY, "later": OUTLINE}[state]
+    c = hstack(r, "number", main="center", cross="center", h="fixed", v="fixed", width=30, height=30, radius=15,
+               fill=color if state == "done" else None, stroke=None if state == "done" else color)
+    text(c, "✓" if state == "done" else str(n), 13, BG if state == "done" else (PRIMARY if state == "now" else VARIANT),
+         "Bold", line=16)
+    t = vstack(r, "texts", gap=3, h="fill")
+    text(t, title, 15, ON if state != "later" else VARIANT, "Medium", width=CARD_INNER_W - 44, line=20)
+    text(t, sub, 13, VARIANT, width=CARD_INNER_W - 44, line=19)
+
+
+GUIDE = [
+    ("Plug the cable into the computer", "Use a cable that carries data, not one for charging only."),
+    ("Tap OK on “Open Caster”", "Android asks once. Tick “Use by default” and later plug-ins open Caster by "
+                                "themselves."),
+    ("Allow this phone on the computer", f"The computer asks once: “Allow {PHONE_NAME} to cast over the cable?”"),
+]
+
+
+def cable_guide(f, states, card=None, hint=None):
+    bar(f, "STANDBY")
+    back(f)
+    head = vstack(f, "heading", gap=6, h="fill")
+    text(head, "Connect with a cable", 22, ON, "SemiBold", line=28)
+    text(head, "No Wi-Fi and no QR code needed.", 14, VARIANT, line=20)
+    steps = card_steps(f)
+    for i, ((title, sub), state) in enumerate(zip(GUIDE, states), 1):
+        step(steps, i, title, sub, state)
+    if card:
+        card(f)
+    if hint:
+        hint_line(f, hint)
+
+
+def card_steps(f):
+    c = card(f, "card · steps")
+    return vstack(c, "steps", gap=18, pad=(18, 16, 18, 16), h="fill")
+
+
+def link_card(parent, link, status, sub=None):
+    """The one Home change (ADR-037 §7): the link and its connection status, above Share screen."""
+    dot = {"Connected": GOOD, "Reconnecting…": PRIMARY, "Not connected": VARIANT}[status]
+    c = card(parent, f"card · link · {link}")
+    row = hstack(c, "row", gap=14, pad=(13, 16, 13, 16), cross="center", h="fill")
+    (usb_glyph if link == "Cable" else wifi_glyph)(row, ON)
+    texts = vstack(row, "texts", gap=3, h="fill")
+    text(texts, link, 15, ON, "Medium", line=20)
+    st = hstack(texts, "status", gap=8, cross="center")
+    rect(st, "dot", 8, 8, dot, radius=4)
+    text(st, status, 13, dot if status != "Not connected" else VARIANT, "Medium", line=18)
+    if sub:
+        text(texts, sub, 13, VARIANT, width=CARD_INNER_W - 52, line=19)
+    return c
+
+
+def home(f, link, status, on_air=False, sub=None, countdown=None):
+    bar(f, "RECONNECTING" if countdown else ("ON AIR" if on_air else "STANDBY"),
+        tone="amber" if (on_air or countdown) else "muted")
+    connected = status == "Connected" or countdown
+    hero_plate(f, PC, [] if (on_air or countdown) else
+               ([("Disconnect", "muted"), ("Terminate", "muted")] if connected else [("Terminate", "muted")]))
+    c = link_card(f, link, status, sub)
+    if countdown:
+        hairline(c, CONTENT_W)
+        z = hstack(c, "countdown", gap=10, pad=(12, 16, 14, 16), main="spaceBetween", cross="center", h="fill")
+        mono(z, "STOPS IN", 11, VARIANT, "Medium", spacing=1.1, line=14)
+        mono(z, countdown, 15, PRIMARY, "Bold", spacing=0.6, line=20)
+    if on_air or countdown:
+        stop_button(f, "Stop sharing")
+    elif status == "Connected":
+        go_button(f, "Share screen")
+    elif link == "Wireless":
+        go_button(f, "Connect")
+    usb = link == "Cable"
+    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB" if usb else "1920 px · 120 fps · 20–30 Mbps",
+                  casting=on_air or bool(countdown))
+    audio(f, paused=bool(countdown))
+
+
+def computer_guide(page, x, y, allowed=False):
+    m = vstack(page, "computer · cable guide", gap=14, pad=(20, 20, 22, 20), h="fixed", width=PHONE_W, fill=MAC_BG,
+               radius=14, stroke="#2A313A")
+    nodes[m]["transform"][4], nodes[m]["transform"][5] = float(x), float(y)
+    nodes[m]["child_layout"]["absolute"] = False
+    mono(m, "ON THE COMPUTER · CABLE GUIDE", 11, TEAL, "Bold", spacing=1.2, line=14)
+    s = vstack(m, "steps", gap=14, pad=(18, 18, 18, 18), h="fill", fill=MAC_SHEET, radius=14, stroke="#2A313A")
+    for n, title, state in ((1, f"Plug your phone in — {PHONE_NAME} found", "done"),
+                            (2, "On the phone, tap OK on “Open Caster”", "done"),
+                            (3, f"Allow {PHONE_NAME} to cast over the cable?", "now"),
+                            (4, "Start casting from the phone", "later")):
+        r = hstack(s, f"step {n}", gap=12, cross="center", h="fill")
+        col = {"done": TEAL, "now": TEAL, "later": "#3A424C"}[state]
+        c = hstack(r, "n", main="center", cross="center", h="fixed", v="fixed", width=24, height=24, radius=12,
+                   fill=col if state == "done" else None, stroke=None if state == "done" else col)
+        text(c, "✓" if state == "done" else str(n), 11, "#08171A" if state == "done" else ON, "Bold", line=14)
+        text(r, title, 13.5, ON if state != "later" else VARIANT, "Medium" if state == "now" else "Regular",
+             width=PHONE_W - 112, line=18)
+        if state == "now":
+            row = hstack(s, "buttons", gap=10, pad=(0, 0, 0, 36), h="fill")
+            for label, primary in (("Don't Allow", False), ("Allow", True)):
+                b = hstack(row, f"button · {label}", main="center", cross="center", h="fill", v="fixed", height=36,
+                           radius=12, fill=TEAL if primary else None, stroke=None if primary else "#3A424C")
+                text(b, label, 13.5, "#08171A" if primary else ON, "SemiBold", line=18)
+    return m
+
+
 PAGE = nid()
 nodes[PAGE] = {"id": PAGE, "name": PAGE_NAME, "type": "page", "background": hexc(PAGE_BG), "flows": [],
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
-page_caption(PAGE, "ADR-037 · THE WHOLE FLOW — SCAN STAYS FIRST · THE CABLE ASKS THE MAC ONCE, THEN RECONNECTS BY "
-                   "ITSELF LIKE WI-FI · HOME ONLY GAINS A WI-FI / CABLE TAG", 40, 30, 15, "Bold", ON)
+page_caption(PAGE, "ADR-037 · THE LINK IS CHOSEN FIRST — WIRELESS OR CABLE · ONLY THAT LINK RUNS · PAIRED → STRAIGHT "
+                   "TO HOME · SWITCHING NEEDS TERMINATE · HOME GAINS ONE LINK CARD", 40, 30, 15, "Bold", ON)
+
+
+def mac_card(page, x, y, *_):
+    return computer_guide(page, x, y)
 
 
 def flow_row(top, title, steps):
@@ -307,101 +450,82 @@ def flow_row(top, title, steps):
     return bottom
 
 
-ALLOW_LINES = ["It's plugged into this Mac. If you allow it, it connects by itself whenever it's plugged in. "
-               "Allow only a phone you know.", "Closes in 0:52 — no answer means Don't Allow."]
 
 y = 190
-y = flow_row(y, "A · FIRST TIME BY CABLE — NO QR CODE, NO WI-FI, THE MAC ASKS ONCE", [
-    ("A1 · SCAN — THE FIRST SCREEN", "phone", lambda f: scan_screen(f), "Plug the cable into the Mac",
-     ["The app opens on Scan, as today. Nothing asks which link to use.",
-      "OPEN: the one quiet line under the camera is the only new thing here; drop it if Scan must stay exactly as is."]),
-    ("A2 · ANDROID — OPEN CASTER?", "phone",
-     lambda f: system_dialog(f, "Open Caster to handle Caster Receiver?", None,
-                             [("Use by default for this USB accessory", True)], ["Cancel", "OK"]),
-     "OK",
-     ["Android's own dialog, once. With “use by default” ticked, every later plug-in opens Caster by itself — "
-      "that is what makes flow B one step."]),
-    ("A3 · CABLE AUTH — CHECKING", "phone",
-     lambda f: (cable_auth(f), status_card(f, usb_glyph, MAC, "Checking the Mac on the cable…", pill_label="USB",
-                                           pill_tone="muted"), stop_button(f, "Cancel")),
-     "A new phone",
-     ["The redirect: plugging in on Scan (or on a Home that isn't connected) opens this screen.",
-      "The card names the Mac from the cable, before anything is shared."]),
-    ("A4 · CABLE AUTH — THE MAC ASKS", "phone",
-     lambda f: (cable_auth(f), status_card(f, usb_glyph, "Allow this phone on the Mac",
-                                           f"{MAC} asks “Allow {PHONE_NAME} to cast over the cable?” Click Allow "
-                                           "there. It asks only this once.", color=PRIMARY, pill_label="USB"),
-                hint_line(f, "Not your Mac? Unplug the cable."), stop_button(f, "Cancel")),
-     "Meanwhile, on the Mac",
-     ["The phone and the Mac have made a cable key; the Mac now asks its user."]),
-    ("A5 · MAC — ALLOW, ONCE", "mac",
-     (f"Allow {PHONE_NAME} to cast over the cable?", ALLOW_LINES, (("Don't Allow", False), ("Allow", True))),
-     "Allow",
-     ["Desktop frame 15. Return = Don't Allow; Allow needs a click.",
-      "Allow stores the key on both sides: this phone is remembered on the cable from now on."]),
-    ("A6 · HOME — CONNECTED BY CABLE", "phone", lambda f: home(f, "CABLE"), None,
-     ["Home as it ships, tagged CABLE. Share screen casts over the cable."]),
+y = flow_row(y, "A · FIRST RUN, WIRELESS — CHOOSE, THEN TODAY'S SCAN", [
+    ("A1 · CHOOSE THE LINK", "phone", choice_screen, "Wireless",
+     ["The first screen when nothing is paired. Nothing runs yet: no Wi-Fi socket, no accessory.",
+      "The computer opens on the same choice (desktop frame 15)."]),
+    ("A2 · SCAN — TODAY'S SCREEN", "phone", lambda f: (back(f), scan_screen(f)), "Scan the computer's QR code",
+     ["Today's Scan, with Back to the choice. The computer shows its QR after choosing Wireless (frame 16).",
+      "Only now does the phone use Wi-Fi."]),
+    ("A3 · SCAN — PAIRING", "phone", lambda f: (back(f), scan_screen(f, pairing=True)), "Paired",
+     ["The QR pairing and its auth are unchanged (ADR-002/ADR-006)."]),
+    ("A4 · HOME — WIRELESS, CONNECTED", "phone", lambda f: home(f, "Wireless", "Connected"), None,
+     ["Home as it ships, plus the link card above Share screen.",
+      "From now on the app opens here. The cable is never opened while this pairing is Wireless."]),
 ])
 
-y = flow_row(y + ROW_GAP + 74, "B · LATER — PLUG IN AND IT RECONNECTS BY ITSELF (REMEMBERED, LIKE WI-FI)", [
-    ("B1 · HOME — SAVED BY CABLE, UNPLUGGED", "phone", lambda f: saved_home(f, by_cable=True, by_wifi=False),
+y = flow_row(y + ROW_GAP + 74, "B · FIRST RUN, CABLE — A GUIDE, ANDROID'S DIALOG, THE COMPUTER ALLOWS ONCE", [
+    ("B1 · CABLE GUIDE — PLUG IN", "phone", lambda f: cable_guide(f, ("now", "later", "later")),
      "Plug the cable in",
-     ["What the app opens on when the Mac is remembered by cable only (no Wi-Fi pairing, so no Connect).",
-      "Scan QR code adds Wi-Fi to the same Mac; Terminate forgets it."]),
-    ("B2 · CABLE AUTH — RECONNECTING", "phone",
-     lambda f: (cable_auth(f), status_card(f, usb_glyph, MAC, "Reconnecting — this Mac remembers this phone.",
-                                           pill_label="USB", pill_tone="muted"), stop_button(f, "Cancel")),
-     "A moment, no prompt",
-     ["Android opens Caster by itself (A2's “use by default”); even with the app closed, plugging in is enough.",
-      "Shown for well under a second: the stored key proves both sides."]),
-    ("B3 · MAC — NOTHING TO ANSWER", "mac",
-     ("Connected by cable", [f"No prompt: this Mac remembers {PHONE_NAME} on the cable.",
-                             "The deck shows “Connected by cable — start casting from your phone” (frame 10)."]),
-     "Connected", ["Disconnect on the deck forgets the phone on the cable: the next plug-in asks again (A5)."]),
-    ("B4 · HOME — CONNECTED BY CABLE", "phone", lambda f: home(f, "CABLE"), "Share screen",
-     ["Same as A6."]),
-    ("B5 · ANDROID — CAPTURE CONSENT", "phone",
+     ["A1 → Cable. Each step ticks by itself as it happens (no Done buttons).",
+      "Only the accessory side runs: no Wi-Fi socket, no WebRTC."]),
+    ("B2 · ANDROID — OPEN CASTER?", "phone",
+     lambda f: system_dialog(f, "Open Caster to handle Caster Receiver?", None,
+                             [("Use by default for this USB accessory", True)], ["Cancel", "OK"]), "OK",
+     ["Android's own dialog, once. “Use by default” is what lets later plug-ins reconnect with no tap (C1)."]),
+    ("B3 · CABLE GUIDE — THE COMPUTER ASKS", "phone",
+     lambda f: cable_guide(f, ("done", "done", "now"),
+                           card=lambda g: status_card(g, usb_glyph, PC, "Found on the cable. Waiting for Allow…",
+                                                      color=PRIMARY, pill_label="USB")),
+     "Meanwhile, on the computer",
+     ["The card names the computer from the cable before anything is shared (ADR-037 §Risks).",
+      "No answer in 60 s reads as Don't Allow → D4."]),
+    ("B4 · COMPUTER — ALLOW, INLINE", "mac", (), "Allow",
+     ["The computer's cable guide, step 3 (desktop frame 17). The Allow lives in the guide, not a separate dialog."]),
+    ("B5 · HOME — CABLE, CONNECTED", "phone", lambda f: home(f, "Cable", "Connected"), None,
+     ["Same Home, the link card says Cable. The pairing is remembered on both sides."]),
+])
+
+y = flow_row(y + ROW_GAP + 74, "C · LATER, ALREADY PAIRED — STRAIGHT TO HOME; THE CABLE RECONNECTS BY ITSELF", [
+    ("C1 · HOME — CABLE, NOT CONNECTED", "phone",
+     lambda f: home(f, "Cable", "Not connected", sub="Plug the cable in to reconnect."), "Plug the cable in",
+     ["The app opens on Home, never on the choice, while a pairing exists.",
+      "Nothing to tap: no Connect for the cable."]),
+    ("C2 · HOME — CABLE, CONNECTED", "phone", lambda f: home(f, "Cable", "Connected"), "Share screen",
+     ["Android opens Caster by itself, the stored key proves both sides: no prompt on either side.",
+      "Even with the app closed, plugging in is enough."]),
+    ("C3 · ANDROID — CAPTURE CONSENT", "phone",
      lambda f: system_dialog(f, "Start recording or casting with Caster?",
                              "Caster will have access to everything shown on your screen or played from your device "
                              "while recording or casting.", [("Share entire screen", True)], ["Cancel", "Start"]),
      "Start", ["Android asks before every cast, on both links."]),
-    ("B6 · HOME — ON AIR BY CABLE", "phone", lambda f: home(f, "CABLE", on_air=True), None,
-     ["Unplug the cable now → D3. Stop sharing → B4; the cable stays connected."]),
+    ("C4 · HOME — CABLE, ON AIR", "phone", lambda f: home(f, "Cable", "Connected", on_air=True), None,
+     ["Unplug now → D5 (the cast waits five minutes, ADR-036)."]),
 ])
 
-y = flow_row(y + ROW_GAP + 74, "C · WI-FI — EXACTLY AS TODAY, PLUS THE TAG", [
-    ("C1 · SCAN — THE FIRST SCREEN", "phone", lambda f: scan_screen(f), "Scan the Mac's QR code",
-     ["Same screen as A1."]),
-    ("C2 · SCAN — PAIRING", "phone", lambda f: scan_screen(f, pairing=True), "Paired",
-     ["The QR pairing and its auth are unchanged (ADR-002/ADR-006)."]),
-    ("C3 · HOME — CONNECTED BY WI-FI", "phone", lambda f: home(f, "WI-FI"), "Disconnect",
-     ["Tagged WI-FI. A cable plugged in now is ignored on both sides: to use it, Disconnect first."]),
-    ("C4 · HOME — SAVED BY WI-FI", "phone", lambda f: saved_home(f, by_cable=False, by_wifi=True), "Connect",
-     ["Today's one-tap reconnect. No tag: nothing is connected.",
-      "Plugging the cable in here goes to A3 (a known Mac: B2)."]),
-    ("C5 · HOME — CONNECTED BY WI-FI", "phone", lambda f: home(f, "WI-FI"), None,
-     ["Same as C3."]),
-])
-
-y = flow_row(y + ROW_GAP + 74, "D · WHEN IT GOES WRONG, AND HOW TRUST ENDS", [
-    ("D1 · CABLE AUTH — NOT ALLOWED", "phone",
-     lambda f: (cable_auth(f, "STANDBY", "muted"),
-                link_row(status_card(f, usb_glyph, "The Mac didn't allow this phone",
-                                     "Unplug the cable and plug it in again to ask again.", color=BAD),
-                         ["Scan QR code instead"])), None,
-     ["After A5's Don't Allow, a closed prompt, or 60 s. One prompt per plug-in."]),
-    ("D2 · CABLE AUTH — THE MAC IS OLDER", "phone",
-     lambda f: (cable_auth(f, "STANDBY", "muted"),
-                link_row(status_card(f, usb_glyph, "Update Caster on the Mac",
-                                     "The Caster on this Mac is older and can't use the cable. Wi-Fi still works.",
-                                     color=BAD), ["Scan QR code instead"])), None,
-     ["A Mac on link v1. An older app on the phone is shown on the Mac instead (desktop frame 17)."]),
-    ("D3 · HOME — UNPLUGGED MID-CAST", "phone", lambda f: home(f, "CABLE", drop=True), None,
-     ["ADR-036: the cast waits five minutes. Plugging back in reconnects with no prompt (the key is remembered) "
-      "and the cast carries on."]),
-    ("D4 · HOME — SAVED ON BOTH LINKS", "phone", lambda f: saved_home(f, by_cable=True, by_wifi=True), None,
-     ["A Mac remembered on Wi-Fi and on the cable: Connect for Wi-Fi, or plug in.",
-      "Terminate on Home forgets the link it was last connected by; the other stays (separate trust)."]),
+flow_row(y + ROW_GAP + 74, "D · WIRELESS LATER, SWITCHING LINK, AND WHEN IT GOES WRONG", [
+    ("D1 · HOME — WIRELESS, NOT CONNECTED", "phone", lambda f: home(f, "Wireless", "Not connected"), None,
+     ["Today's one-tap Connect (ADR-006), with the link card.", "Connect → A4."]),
+    ("D2 · TERMINATE — BACK TO THE CHOICE", "phone", choice_screen, None,
+     ["Switching link: Terminate on Home ends the pairing on both sides (bye forget) and the app is back on A1.",
+      "Disconnect keeps the pairing, as today."]),
+    ("D3 · CABLE GUIDE — COMPUTER ON WIRELESS", "phone",
+     lambda f: cable_guide(f, ("now", "later", "later"),
+                           hint="Plugged in but nothing yet? On the computer, choose Cable too."), None,
+     ["The computer is set to Wireless, so it never switches the phone: the guide waits at step 1 and, after "
+      "10 s, shows the hint."]),
+    ("D4 · CABLE GUIDE — NOT ALLOWED", "phone",
+     lambda f: cable_guide(f, ("done", "done", "now"),
+                           card=lambda g: status_card(g, usb_glyph, "The computer didn't allow this phone",
+                                                      "Unplug the cable and plug it in again to ask again.",
+                                                      color=BAD)), None,
+     ["Don't Allow, a closed prompt, or 60 s. Other cable errors use this card: “Update Caster on the computer” "
+      "(link v1) and “The computer is paired with another phone.” (busy)."]),
+    ("D5 · HOME — CABLE, UNPLUGGED MID-CAST", "phone",
+     lambda f: home(f, "Cable", "Reconnecting…", sub="Plug it back in to carry on.", countdown="4:52"), None,
+     ["ADR-036's wait, shown in the same link card. Plugging back in reconnects with no prompt."]),
 ])
 
 
@@ -415,7 +539,7 @@ def write(path, doc_nodes, pages, name):
         z.writestr("versions/index.json", json.dumps({"versions": []}))
 
 
-write(sys.argv[1], nodes, [PAGE], "mobile-link-flow")
+write(sys.argv[1], nodes, [PAGE], "mobile-link-first")
 frames = [n for n in nodes.values() if n["type"] == "frame"]
 print(sys.argv[1], len(nodes), "nodes,", len(frames), "frames")
 
@@ -424,7 +548,7 @@ if "--into" in sys.argv:
     doc = json.loads(zipfile.ZipFile(target).read("document.json"))
     all_nodes = {int(k): v for k, v in doc["nodes"].items()}
     # Drop an earlier copy of this page and everything under it.
-    for p in [p for p in doc["pages"] if all_nodes[p]["name"] == PAGE_NAME]:
+    for p in [p for p in doc["pages"] if all_nodes[p]["name"] in (PAGE_NAME,) + OLD_PAGE_NAMES]:
         stack = [p]
         while stack:
             i = stack.pop()
