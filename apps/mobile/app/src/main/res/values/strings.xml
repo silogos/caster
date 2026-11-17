@@ -83,8 +83,6 @@
     <string name="reconnecting">Reconnecting to the desktop…</string>
     <string name="session_ended">The desktop ended the session. Scan again to connect.</string>
     <string name="disconnect">Disconnect</string>
-    <string name="manual_payload_label">Debug: paste the QR payload JSON</string>
-    <string name="manual_payload_connect">Connect from payload</string>
 
     <!-- Cast controls (Phase 5), shown once paired. -->
     <string name="starting_cast">Starting the cast…</string>

@@ -120,5 +120,5 @@ The phone's launcher icon is the same mark written as a vector (`ic_launcher_for
 ## Known simplifications
 
 - **Text font.** Text uses **Roboto**, the Android default; FigCraft falls back if Roboto isn't installed. Monospace becomes Liberation Mono. A single measured line is set to no-wrap, so a slightly wider fallback font can't break it.
-- **Debug-only affordances are dropped.** The test-tone row is removed and its gap closed. The Scan screen's debug "paste the QR payload" field stays and is labeled debug in the app itself.
+- **Debug-only affordances are dropped.** The test-tone row is removed and its gap closed. The Scan screen's debug "paste the QR payload" field was removed from the app on 2026-11-18.
 - **Not shown.** The camera preview (CameraX doesn't run on the JVM) and animations, which are captured at a single frame.
