@@ -63,6 +63,8 @@ A separate, small path in the `usb` package. It is not a mode of `CastService`, 
 - `UsbHandshake` proves the trust key and checks the desktop's proof.
 - `UsbCastService` (FGS `mediaProjection`) owns one cable cast: `UsbVideoEncoder`, which drives MediaCodec directly, `UsbGameAudioCapture`, which reads playback capture as 10 ms PCM16, and `UsbMicCapture`.
 
+`UsbVideoEncoder`'s drain thread is the only thread that touches the codec once it runs: it copies each access unit straight into one link frame (one copy, `UsbFrame.framed`), and on its way out it stops and releases the codec. `stop()` only releases the VirtualDisplay and signals the thread, so a cable pulled mid-cast can never release the codec under a call in flight. Whichever ends first — `stop()` or the loop itself (link gone, codec error) — owns the end, so `onStopped` fires at most once. The video write is still synchronous on that thread and shares the link's write lock with audio and control; whether that costs frames at 120 fps is unmeasured.
+
 `UsbMicCapture` follows ADR-004: source `MIC`, the chosen input at its own rate, resampled to the link's 48 kHz mono. Adaptive quality, thermal steering and live quality changes do not exist on this path yet. Wire format: [usb-link.md](usb-link.md).
 
 ## Permissions
