@@ -35,11 +35,20 @@ The phone decides at cast start, from the profile:
 - **Standard:** two casts after the install (~24 min together). The offers carried no `m=application` section, the receiver saw no DataChannel and logged no `dc:` line, and it played the Opus track: 1 467 seconds with sound, 2 of them L = R. The product owner heard stereo.
 - **Low latency:** the offer carried the channel, and the receiver played its PCM (75 s, 7 500 chunks, 21 underruns totalling 470 ms). The product owner heard stereo with minimal delay.
 - Android `testDebugUnitTest`: 405 tests, 0 failures. `compileDebugKotlin` and `assembleDebug` clean. The design file was regenerated from the built UI (`check_auto_layout.py`: 0 layers off on all three pages).
-- Not measured: the latency difference between the two settings in milliseconds.
+- **Latency, measured** (click-track probe, `docs/development/latency-measurement.md`; one cast each, ~44 clicks and 88 flips per run):
+
+  | | Standard | Low latency |
+  |---|---|---|
+  | Audio: click → Mac playout | **321 ms** (302–336) | **254 ms** (247–296) |
+  | — of which captured → Mac arrival | 84 ms (Opus encode + NetEq) | 5 ms (DataChannel) |
+  | — of which inside the phone | 220 ms | 221 ms |
+  | Video: phone screen → Mac screen | 30 ms | 65 ms |
+
+  Standard's audio is **~67 ms later**, all of it between the phone's capture and the receiver's ring. The click track is a tool for comparing builds, not a game's A/V sync (latency-measurement.md). The video difference is not the setting: the video path is identical in both, libwebrtc's video jitter buffer held 6.0 vs 5.6 ms per frame in a separate pair of casts, and this cast-to-cast spread of 30–100 ms is the one recorded in latency-measurement.md since 2026-11-10.
 
 ## Consequences
 
-- **Standard costs latency.** The Opus track goes through NetEq on the receiver, whose depth the receiver cannot set (ADR-014). Low latency keeps the receiver's own playout (ADR-020). The difference was not measured in this change.
+- **Standard costs latency.** The Opus track goes through NetEq on the receiver, whose depth the receiver cannot set (ADR-014). Low latency keeps the receiver's own playout (ADR-020). Measured: Standard's audio arrives ~67 ms later (Verified above).
 - **Wi-Fi:** Standard sends ~0.2 Mbps of game audio instead of ~1.7 Mbps (PCM on the channel plus the Opus track).
 - **The setting applies at the next cast**, as before: the channel is created, or not, before the offer.
 - Removed tests went with their code (`AdtsFramerTest`, `GameAudioFormatNegotiatorTest`, `GameAudioSenderTest`, `DropOldestQueueTest`).
