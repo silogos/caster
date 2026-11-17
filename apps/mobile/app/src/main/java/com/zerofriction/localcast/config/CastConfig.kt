@@ -44,11 +44,10 @@ data class CastConfig(
      */
     val autoQuality: Boolean,
     /**
-     * Feature 2026-11d: keep the game-audio DataChannel on raw PCM16 (ADR-012)
-     * instead of negotiating AAC (ADR-013) — the codec's ~40–50 ms latency
-     * leaves the ear path, at the cost of wire bitrate (~1.5 vs ~0.2 Mbps,
-     * trivial on a LAN). Off = today's AAC default; the wire never changes
-     * shape (the `pcm16` announce already exists in the channel sub-protocol).
+     * ADR-033: on = the game audio also rides the `game-audio` DataChannel as
+     * raw PCM16 (ADR-012), played by the receiver's own low-latency playout,
+     * at ~1.5 Mbps more on the wire. Off ("Standard") = no channel; the
+     * stereo Opus track alone (ADR-032), a little more delay.
      */
     val lowLatencyGameAudio: Boolean = DEFAULT_LOW_LATENCY_GAME_AUDIO,
     // ---- The profile's encoder choices (AdvancedCastSettings.kt) ----
@@ -83,7 +82,7 @@ data class CastConfig(
         /** thermal.md Phase12: auto quality is part of the good default cast; a switch turns it off. */
         const val DEFAULT_AUTO_QUALITY = true
 
-        /** Feature 2026-11d: AAC (ADR-013) stays the default wire; the toggle opts into raw PCM. */
+        /** ADR-033: Standard (the Opus track) is the default; the toggle opts into the PCM channel. */
         const val DEFAULT_LOW_LATENCY_GAME_AUDIO = false
 
         fun default(): CastConfig = CastConfig(
