@@ -52,10 +52,6 @@ class ScanViewModel(
         }
     }
 
-    fun onManualPayloadSubmit(payloadJson: String) {
-        pairingClient.startFromQrText(payloadJson)
-    }
-
     fun onDisconnect() {
         pairingClient.disconnect()
     }

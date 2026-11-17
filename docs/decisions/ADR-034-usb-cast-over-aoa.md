@@ -1,6 +1,6 @@
 # ADR-034: USB cast over Android Open Accessory
 
-- **Status:** accepted (2026-11-17) by the product owner after the spike in [proposals/usb-cast.md §8.1](../proposals/usb-cast.md). The first phase carries video and game audio as PCM16 (product owner, 2026-11-17: "video + pcm/opus"), and the mic as its own track ("sekaligus headset", the same day).
+- **Status:** accepted (2026-11-17) by the product owner after the spike in [proposals/usb-cast.md §8.1](../proposals/usb-cast.md). The first phase carries video and game audio as PCM16 (product owner, 2026-11-17: "video + pcm/opus"), and the mic as its own track ("sekaligus headset", the same day). **Amended by [ADR-036](ADR-036-a-cast-survives-a-five-minute-drop.md) (2026-11-18):** unplugging no longer ends the cast; it waits five minutes for the cable to come back.
 
 ## Context
 

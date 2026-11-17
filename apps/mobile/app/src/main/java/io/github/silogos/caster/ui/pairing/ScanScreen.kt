@@ -42,7 +42,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +49,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +70,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -82,7 +79,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import io.github.silogos.caster.BuildConfig
 import io.github.silogos.caster.R
 import io.github.silogos.caster.hotspot.HotspotControl
 import io.github.silogos.caster.hotspot.HotspotMachine
@@ -133,7 +129,6 @@ fun ScanScreen(
     ScanContent(
         pairingState = pairingState,
         onQrScanned = viewModel::onQrScanned,
-        onManualPayloadSubmit = viewModel::onManualPayloadSubmit,
     )
 }
 
@@ -169,7 +164,6 @@ private fun scanViewModelFactory(): ViewModelProvider.Factory {
 fun ScanContent(
     pairingState: PairingClient.State,
     onQrScanned: (String) -> Unit,
-    onManualPayloadSubmit: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -245,16 +239,6 @@ fun ScanContent(
                             torchOn = torchOn,
                             onTorchToggle = { torchOn = !torchOn },
                         )
-                        if (BuildConfig.DEBUG) {
-                            ManualPayloadInput(
-                                onSubmit = onManualPayloadSubmit,
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 88.dp)
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp),
-                            )
-                        }
                     }
                 } else {
                     // No camera permission yet: the pre-camera state stays the
@@ -306,12 +290,6 @@ fun ScanContent(
                             shape = RoundedCornerShape(12.dp),
                         ) {
                             Text(stringResource(R.string.grant_camera))
-                        }
-                        if (BuildConfig.DEBUG) {
-                            ManualPayloadInput(
-                                onSubmit = onManualPayloadSubmit,
-                                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                            )
                         }
                     }
                 }
@@ -605,38 +583,6 @@ private fun PairingProgress(modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * Debug-only manual payload input: lets the WebSocket+handshake path be
- * tested on an emulator, which cannot scan a real desktop QR (Phase3
- * decision). Never in release builds.
- */
-@Composable
-private fun ManualPayloadInput(
-    onSubmit: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var manualPayload by rememberSaveable { mutableStateOf("") }
-    Column(modifier) {
-        OutlinedTextField(
-            value = manualPayload,
-            onValueChange = { manualPayload = it },
-            label = { Text(stringResource(R.string.manual_payload_label)) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(
-            onClick = {
-                if (manualPayload.isNotBlank()) onSubmit(manualPayload)
-            },
-            modifier = Modifier
-                .padding(top = 8.dp)
-                .align(Alignment.CenterHorizontally),
-        ) {
-            Text(stringResource(R.string.manual_payload_connect))
-        }
-    }
-}
 
 /** Icon + plain-words message row — the pairing screen's friendly states. */
 @Composable
@@ -681,7 +627,6 @@ private fun ScanContentPreview() {
         ScanContent(
             pairingState = PairingClient.State.Idle,
             onQrScanned = {},
-            onManualPayloadSubmit = {},
         )
     }
 }

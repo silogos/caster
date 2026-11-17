@@ -1,5 +1,6 @@
 package io.github.silogos.caster.signaling
 
+import io.github.silogos.caster.config.CastDropWindow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -190,6 +191,52 @@ class SignalingClientTest {
             events.filterIsInstance<SignalingClient.Event.Failed>(),
         )
         assertEquals(0, scheduler.pendingCount()) // no auto-retry past expiry (webrtc.md)
+    }
+
+    // ADR-036, found live 2026-11-18: a cast begun right after a QR pairing
+    // died on its first drop once the QR's ten minutes were over, although
+    // the desktop had granted a persistent session at that pairing.
+    @Test
+    fun `after the QR session expires, a granted persistent session is resumed instead`() {
+        setUp()
+        fake.listener?.onTransportOpen()
+        fake.sentFrames.clear()
+        fake.listener?.onTransportText(challengeFrame())
+        fake.sentFrames.clear()
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(
+                Envelope.TYPE_AUTH_OK,
+                2,
+                VECTOR_SID,
+                buildJsonObject {
+                    put("name", TEST_DESKTOP_NAME)
+                    put("proto", 1)
+                    put("desktopId", "desktop-uuid-1")
+                },
+            ),
+        )
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+
+        clockMs = EXPIRES_AT * 1000 + 1
+        fake.listener?.onTransportClosed(1000, "wifi gone")
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
+        assertTrue(events.none { it is SignalingClient.Event.Failed })
+
+        scheduler.advance(scheduler.nextDelayMs()!!)
+        fake.listener?.onTransportOpen()
+        val hello = EnvelopeCodec.parse(fake.sentFrames.removeFirstOrNull()!!) as EnvelopeParseResult.Valid
+        assertEquals(TEST_DEVICE_ID, hello.envelope.sid)
+        assertEquals("true", hello.envelope.payload["resume"].toString())
+
+        fake.listener?.onTransportText(
+            EnvelopeCodec.encode(Envelope.TYPE_CHALLENGE, 3, TEST_DEVICE_ID, buildJsonObject { put("n", VECTOR_NONCE) }),
+        )
+        val auth = EnvelopeCodec.parse(fake.sentFrames.removeFirstOrNull()!!) as EnvelopeParseResult.Valid
+        val trustKey = Handshake.deriveTrustKey(Handshake.decodeSecret(VECTOR_SECRET), VECTOR_SID)
+        assertEquals(
+            Handshake.computeMac(trustKey, TEST_DEVICE_ID, VECTOR_NONCE),
+            auth.envelope.payload["mac"].toString().trim('"'),
+        )
     }
 
     @Test
@@ -427,11 +474,13 @@ class SignalingClientResumeTest {
     private lateinit var client: SignalingClient
     private val events = mutableListOf<SignalingClient.Event>()
     private val trustKey = Handshake.deriveTrustKey(Handshake.decodeSecret(VECTOR_SECRET_B64URL), VECTOR_SID)
+    private var clockMs = 0L
 
     private fun setUp() {
         fake = FakeTransport()
         scheduler = FakeScheduler()
         events.clear()
+        clockMs = 0
         client = SignalingClient(
             hosts = listOf("192.168.1.42"),
             port = 52341,
@@ -442,6 +491,7 @@ class SignalingClientResumeTest {
             expiresAtUnixSeconds = null, // trusted: no expiry (ADR-006)
             transport = fake,
             scheduler = scheduler,
+            nowMs = { clockMs },
             resume = true,
         )
         client.connect { events += it }
@@ -589,6 +639,65 @@ class SignalingClientResumeTest {
             events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
         )
         assertEquals(0, scheduler.pendingCount())
+    }
+
+    // ADR-036: a cast waits five minutes for the desktop, not ten attempts.
+    @Test
+    fun `during a cast the trusted ladder lasts the drop window, with rungs of at most 10 s`() {
+        setUp()
+        authorizeResume()
+        client.castActive = true
+
+        fake.listener?.onTransportClosed(1000, "wifi gone")
+        val delays = mutableListOf<Long>()
+        while (client.state.value == SignalingClient.State.RECONNECTING) {
+            val delay = scheduler.nextDelayMs()!!
+            delays += delay
+            clockMs += delay
+            scheduler.advance(delay)
+            fake.listener?.onTransportFailure(RuntimeException("still gone"))
+        }
+
+        assertEquals(SignalingClient.State.FAILED, client.state.value)
+        assertTrue(delays.size > SignalingClient.TRUSTED_RECONNECT_MAX_ATTEMPTS)
+        assertTrue(delays.all { it <= 10_000L })
+        assertTrue(clockMs >= CastDropWindow.MS)
+        assertTrue(clockMs < CastDropWindow.MS + 10_000L)
+        assertEquals(
+            listOf(SignalingError.CONNECT_UNREACHABLE),
+            events.filterIsInstance<SignalingClient.Event.Failed>().map { it.error },
+        )
+    }
+
+    @Test
+    fun `during a cast a desktop back within the window resumes, and the next drop gets the full window`() {
+        setUp()
+        authorizeResume()
+        client.castActive = true
+
+        fake.listener?.onTransportClosed(1000, "wifi gone")
+        while (clockMs < CastDropWindow.MS - 30_000L) {
+            val delay = scheduler.nextDelayMs()!!
+            clockMs += delay
+            scheduler.advance(delay)
+            fake.listener?.onTransportFailure(RuntimeException("still gone"))
+        }
+        val delay = scheduler.nextDelayMs()!!
+        clockMs += delay
+        scheduler.advance(delay)
+        authorizeResume() // back in time
+        assertEquals(SignalingClient.State.AUTHORIZED, client.state.value)
+
+        // A later drop starts its own five minutes.
+        fake.listener?.onTransportClosed(1000, "wifi gone again")
+        val second = clockMs
+        while (client.state.value == SignalingClient.State.RECONNECTING && clockMs - second < CastDropWindow.MS - 10_000L) {
+            val d = scheduler.nextDelayMs()!!
+            clockMs += d
+            scheduler.advance(d)
+            fake.listener?.onTransportFailure(RuntimeException("still gone"))
+        }
+        assertEquals(SignalingClient.State.RECONNECTING, client.state.value)
     }
 
     private fun parseFrame(raw: String?): Envelope {

@@ -15,6 +15,7 @@ import io.github.silogos.caster.audio.GameAudioState
 import io.github.silogos.caster.audio.MicState
 import io.github.silogos.caster.capture.CaptureSize
 import io.github.silogos.caster.config.CastConfig
+import io.github.silogos.caster.config.CastDropWindow
 import io.github.silogos.caster.config.MicDeviceSource
 import io.github.silogos.caster.config.PROFILE_CUSTOM
 import io.github.silogos.caster.config.matchingProfile
@@ -407,6 +408,8 @@ class CastService : Service() {
         }
         pendingStart = null
         signaling = args.signaling
+        // ADR-036: while this cast runs, a dropped socket keeps trying for the drop window.
+        args.signaling.castActive = true
         config = args.config
         desktopName = args.desktopName
         physicalWidth = args.physicalWidth
@@ -430,7 +433,13 @@ class CastService : Service() {
             physicalHeight = args.physicalHeight,
             onState = { sessionState ->
                 if (sessionState == MediaCastSession.State.STREAMING) {
-                    _state.value = CastState.Casting(args.desktopName, System.currentTimeMillis())
+                    // A re-auth or recovery streams again: the cast's clock keeps running.
+                    val startedAt = when (val current = _state.value) {
+                        is CastState.Casting -> current.startedAtMillis
+                        is CastState.Interrupted -> current.startedAtMillis
+                        else -> System.currentTimeMillis()
+                    }
+                    _state.value = CastState.Casting(args.desktopName, startedAt)
                     // The media session's own summary rides its build; this
                     // one is the authoritative last word — by streaming time
                     // the mic decision (config + permission) is settled, so
@@ -445,6 +454,7 @@ class CastService : Service() {
             // The display-only summary follows every live capture-format
             // change (rotation, quality step) — the session owns the truth.
             onCaptureFormat = { _, _, _ -> sendSessionInfo() },
+            onInterruption = { sinceMs -> onInterruption(args.desktopName, sinceMs) },
         )
         session = newSession
         newSession.start(onFatal = { failure -> onFatal(failure) })
@@ -540,6 +550,30 @@ class CastService : Service() {
         )
     }
 
+    /**
+     * ADR-036: Home and the notification say the cast is waiting (with the
+     * drop window's end) instead of ON AIR; back to ON AIR when it streams.
+     */
+    private fun onInterruption(desktopName: String, sinceMs: Long?) {
+        val current = _state.value
+        if (sinceMs != null) {
+            val startedAt = (current as? CastState.Casting)?.startedAtMillis ?: return
+            val endsAt = sinceMs + CastDropWindow.MS
+            _state.value = CastState.Interrupted(desktopName, CastLink.WIFI, sinceMs, endsAt, startedAt)
+            notifications.notify(
+                notifications.build(
+                    desktopName,
+                    textOverride = getString(R.string.cast_waiting_wifi_text),
+                    titleOverride = getString(R.string.cast_waiting_wifi_title, desktopName),
+                    countdownTo = endsAt,
+                ),
+            )
+        } else if (current is CastState.Interrupted) {
+            _state.value = CastState.Casting(desktopName, current.startedAtMillis)
+            notifications.notify(notifications.build(desktopName))
+        }
+    }
+
     /** First-class stop paths (mobile.md): simple user-facing message, details stay in logs. */
     private fun onFatal(failure: MediaCastSession.Failure) {
         val message = when (failure) {
@@ -596,6 +630,7 @@ class CastService : Service() {
         val currentSignaling = signaling
         val currentDesktopName = desktopName
         signaling = null
+        currentSignaling?.castActive = false
         if (keepSession && currentSignaling !== null) {
             ConnectedDesktop.adopt(currentSignaling, currentDesktopName)
         } else if (forget) {
@@ -671,7 +706,8 @@ internal fun startRefusal(
     castState: CastState,
     signaling: SignalingClient.State,
 ): StartRefusal? = when {
-    pending || castState is CastState.Starting || castState is CastState.Casting -> StartRefusal.BUSY
+    pending || castState is CastState.Starting || castState is CastState.Casting ||
+        castState is CastState.Interrupted -> StartRefusal.BUSY
     signaling != SignalingClient.State.AUTHORIZED && signaling != SignalingClient.State.RECONNECTING -> StartRefusal.DEAD_PAIRING
     else -> null
 }

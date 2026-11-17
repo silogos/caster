@@ -1,5 +1,7 @@
 package io.github.silogos.caster.webrtc
 
+import io.github.silogos.caster.config.CastDropWindow
+
 /**
  * The ICE-restart policy (issue #86, webrtc.md §Disconnect): a pure,
  * JVM-testable state machine — no Android types, no WebRTC types.
@@ -22,11 +24,12 @@ package io.github.silogos.caster.webrtc
  *  - `failed` (or a disconnect that outlives the grace) triggers restart #1
  *    immediately; each restart gets [RESTART_DEADLINE_MS] to reconnect.
  *  - A restart that dies (`failed` again) or times out starts the next after
- *    a backoff rung ([RESTART_BACKOFF_MS]) — bounded by [MAX_RESTARTS].
- *  - Two honest bounds close the ladder: restart exhaustion, or a bad
- *    stretch older than [SUSTAINED_FAILURE_GIVE_UP_MS] — whichever first —
- *    surface the existing ConnectionLost failure. A genuinely dead network
- *    still fails honestly, within a bounded window.
+ *    a backoff rung ([RESTART_BACKOFF_MS]); past the last rung, restarts
+ *    keep coming at that rung's pace.
+ *  - One honest bound closes the ladder (ADR-036, amending ADR-009's count
+ *    of 3): a bad stretch older than [SUSTAINED_FAILURE_GIVE_UP_MS] — the
+ *    cast's five-minute drop window — surfaces the existing ConnectionLost
+ *    failure. A genuinely dead network still fails, within that window.
  *  - Any `connected` resets everything: each transient outage gets the full
  *    budget again (recovery is the common case, not the exception).
  *
@@ -41,6 +44,13 @@ class IceRestartController(
 
     /** The ladder is exhausted — surface the honest connection-lost failure. */
     private val onGiveUp: (summary: String) -> Unit,
+
+    /**
+     * The cast is interrupted (ADR-036): [sinceMs] is when the bad stretch
+     * began, set when its first restart goes out (a `failed`, or a disconnect
+     * past the grace); null when the pc connects again or the ladder gives up.
+     */
+    private val onInterruption: (sinceMs: Long?) -> Unit = {},
 ) {
 
     /** When the current not-connected stretch began — null while healthy. */
@@ -60,6 +70,9 @@ class IceRestartController(
 
     private var gaveUp = false
 
+    /** The stretch has been reported as an interruption ([onInterruption]). */
+    private var interrupted = false
+
     /**
      * True while a bad stretch is active — the session keeps its watchdog
      * ticking exactly while this is true (and cancels it on recovery).
@@ -75,6 +88,7 @@ class IceRestartController(
         lastOfferAtMs = null
         nextRestartAtMs = null
         gaveUp = false
+        endInterruption()
     }
 
     fun onDisconnected(nowMs: Long) {
@@ -140,10 +154,6 @@ class IceRestartController(
         }
         // Nothing in flight, nothing scheduled: first restart of the stretch.
         if (failedSeen || nowMs - badSince >= DISCONNECT_GRACE_MS) {
-            if (restartsSent >= MAX_RESTARTS) {
-                giveUp(nowMs, "$restartsSent ice restarts exhausted")
-                return
-            }
             sendRestart(nowMs)
         }
     }
@@ -152,16 +162,22 @@ class IceRestartController(
         restartsSent += 1
         lastOfferAtMs = nowMs
         nextRestartAtMs = null
+        if (!interrupted) {
+            interrupted = true
+            onInterruption(badSinceMs ?: nowMs)
+        }
         onRestart(restartsSent)
     }
 
-    /** The in-flight attempt concluded without connecting — back off or give up. */
+    private fun endInterruption() {
+        if (!interrupted) return
+        interrupted = false
+        onInterruption(null)
+    }
+
+    /** The in-flight attempt concluded without connecting — back off before the next. */
     private fun attemptFailed(nowMs: Long) {
         lastOfferAtMs = null
-        if (restartsSent >= MAX_RESTARTS) {
-            giveUp(nowMs, "$restartsSent ice restarts exhausted")
-            return
-        }
         nextRestartAtMs = nowMs + nextBackoffMs()
     }
 
@@ -186,6 +202,7 @@ class IceRestartController(
         lastOfferAtMs = null
         nextRestartAtMs = null
         gaveUp = true
+        endInterruption()
         onGiveUp(summary)
     }
 
@@ -196,9 +213,6 @@ class IceRestartController(
          */
         const val DISCONNECT_GRACE_MS = 10_000L
 
-        /** Bounded retries (issue #86): restart offers per bad stretch. */
-        const val MAX_RESTARTS = 3
-
         /**
          * A fresh offer gets this long to reconnect before the attempt is
          * declared failed — generous vs the 1–3 s a recovering LAN needs,
@@ -208,15 +222,16 @@ class IceRestartController(
 
         /**
          * Backoff before restart #2, #3, … — the same shape as the socket
-         * ladder's rungs (small, LAN-scale; nothing needs 30 s here).
+         * ladder's rungs (small, LAN-scale; nothing needs 30 s here). Every
+         * restart after the last rung waits the last rung.
          */
         val RESTART_BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L)
 
         /**
-         * The honest bound: a bad stretch this old means the network is
-         * genuinely dead, not steering — surface ConnectionLost (existing UX)
-         * even if the restart ladder has not formally exhausted.
+         * The honest bound: a bad stretch this old ends the cast with
+         * ConnectionLost (existing UX). ADR-036: the cast's drop window,
+         * five minutes (was 60 s with at most 3 restarts, ADR-009).
          */
-        const val SUSTAINED_FAILURE_GIVE_UP_MS = 60_000L
+        const val SUSTAINED_FAILURE_GIVE_UP_MS = CastDropWindow.MS
     }
 }

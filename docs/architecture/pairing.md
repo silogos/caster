@@ -115,7 +115,7 @@ Mobile                                   Desktop
 
 ### Reconnect rules for a trusted session
 
-The phone's reconnects are **not bounded by the QR's expiry** (there is none to read). They run the same backoff ladder with a bounded attempt count (`TRUSTED_RECONNECT_MAX_ATTEMPTS`, 10 steps ≈ 3 min), then fail `connect-unreachable` with the saved entry **kept** (the desktop may simply be off) — retry with one tap, or scan a QR / forget from the failure card.
+The phone's reconnects are **not bounded by the QR's expiry** (there is none to read). They run the same backoff ladder with a bounded attempt count (`TRUSTED_RECONNECT_MAX_ATTEMPTS`, 10 steps ≈ 3 min), then fail `connect-unreachable` with the saved entry **kept** (the desktop may simply be off) — retry with one tap, or scan a QR / forget from the failure card. **During a cast** ([ADR-036](../decisions/ADR-036-a-cast-survives-a-five-minute-drop.md)) the bound is the cast's five-minute drop window instead, with rungs of at most 2 s. A connection made from a QR switches to these rules once its auth-ok grants a persistent session: its next reconnect resumes that session rather than the QR's, which expires.
 
 ## Hotspot pairing mode (no shared Wi-Fi)
 

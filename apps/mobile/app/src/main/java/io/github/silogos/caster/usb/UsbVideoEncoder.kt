@@ -1,12 +1,9 @@
 package io.github.silogos.caster.usb
 
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
-import android.media.projection.MediaProjection
 import android.util.Log
 import android.view.Surface
 import java.io.IOException
@@ -15,21 +12,23 @@ import kotlin.concurrent.thread
 
 /**
  * The screen → H.264 half of a USB cast (ADR-034): a MediaCodec surface
- * encoder fed by a VirtualDisplay, its access units handed out as they leave
- * the codec. libwebrtc owns the encoder on Wi-Fi; over the cable there is no
+ * encoder shown on the cast's [UsbScreen], its access units handed out as
+ * they leave the codec. One encoder per link: when the cable comes back
+ * (ADR-036) the service starts a new one on the same screen. libwebrtc owns the encoder on Wi-Fi; over the cable there is no
  * WebRTC, so this drives MediaCodec directly with the ADR-018 latency keys.
  *
  * Ownership: after [start], the drain thread alone touches the codec, and it
- * stops and releases it on its way out. [stop] only ends the picture and asks
- * the thread to finish, so the codec is never released under a call in flight.
+ * takes its surface off the screen, then stops and releases the codec on its
+ * way out. [stop] only asks the thread to finish, so the codec is never
+ * released under a call in flight.
  */
 class UsbVideoEncoder(
-    private val projection: MediaProjection,
+    /** The cast's display: this encoder's input surface is shown on it while it runs. */
+    private val screen: UsbScreen,
     private val width: Int,
     private val height: Int,
     private val fps: Int,
     private val bitrateBps: Int,
-    private val densityDpi: Int,
     /** The profile's Encoder choice: a software H.264 encoder instead of the hardware one. */
     private val software: Boolean = false,
     /** The profile's H.264 profile: High, or Baseline. */
@@ -44,7 +43,6 @@ class UsbVideoEncoder(
 ) {
     /** True from [start] until the first of [stop] or the drain loop ending on its own claims the end. */
     private val running = AtomicBoolean(false)
-    @Volatile private var display: VirtualDisplay? = null
     private var drainThread: Thread? = null
 
     /** The codec's name once started (logs, the Status readout). */
@@ -95,17 +93,7 @@ class UsbVideoEncoder(
             throw IOException("encoder refused ${width}x$height@$fps: ${e.message}", e)
         }
         codecName = c.name
-        val vd = try {
-            projection.createVirtualDisplay(
-                "caster-usb", width, height, densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, null,
-            )
-        } catch (e: RuntimeException) {
-            runCatching { c.stop() }
-            c.release()
-            surface.release()
-            throw e
-        }
-        display = vd
+        screen.show(surface)
         running.set(true)
         val kind = if (c.codecInfo.isSoftwareOnly) "software" else "hardware"
         Log.i(TAG, "encoder ${c.name} ($kind) ${width}x$height @$fps fps, ${bitrateBps / 1000} kbps")
@@ -128,7 +116,7 @@ class UsbVideoEncoder(
                 // (getOutputBuffer needs nothing from it).
                 if (index < 0) continue
                 if (!handOut(c, index, info)) {
-                    reason = "link gone"
+                    reason = REASON_LINK_GONE
                     break
                 }
             }
@@ -138,7 +126,7 @@ class UsbVideoEncoder(
         // Whoever flips `running` first owns the end: here only when the
         // loop ended on its own, otherwise stop() already did.
         val endedOnItsOwn = running.getAndSet(false)
-        if (endedOnItsOwn) releaseDisplay()
+        screen.detach(surface) // no frame goes into a codec on its way out
         runCatching { c.stop() }
         runCatching { c.release() }
         surface.release()
@@ -198,13 +186,12 @@ class UsbVideoEncoder(
     }
 
     /**
-     * Ends the cast's picture and lets the drain thread release the codec.
-     * Waits for it at most [STOP_WAIT_MS] (called on the main thread); a
-     * thread stuck in a USB write still releases the codec when it returns.
+     * Lets the drain thread take the surface off the screen and release the
+     * codec. Waits for it at most [STOP_WAIT_MS] (called on the main thread);
+     * a thread stuck in a USB write still releases the codec when it returns.
      */
     fun stop() {
         if (!running.getAndSet(false)) return
-        releaseDisplay()
         val t = drainThread ?: return
         if (t !== Thread.currentThread()) {
             t.join(STOP_WAIT_MS)
@@ -212,16 +199,13 @@ class UsbVideoEncoder(
         }
     }
 
-    private fun releaseDisplay() {
-        display?.let { runCatching { it.release() } }
-        display = null
-    }
-
-    private companion object {
-        const val TAG = "UsbVideo"
-        const val KEYFRAME_INTERVAL_S = 2
-        const val REPEAT_AFTER_US = 100_000L
-        const val DEQUEUE_TIMEOUT_US = 10_000L
-        const val STOP_WAIT_MS = 250L
+    companion object {
+        /** [onStopped]'s reason when a frame could not be written: the link is gone (a drop, ADR-036). */
+        const val REASON_LINK_GONE = "link gone"
+        private const val TAG = "UsbVideo"
+        private const val KEYFRAME_INTERVAL_S = 2
+        private const val REPEAT_AFTER_US = 100_000L
+        private const val DEQUEUE_TIMEOUT_US = 10_000L
+        private const val STOP_WAIT_MS = 250L
     }
 }

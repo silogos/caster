@@ -4,7 +4,7 @@ App: `/apps/mobile` · Id: `io.github.silogos.caster` · Implemented in: Phases 
 
 ## Prerequisites
 
-See [setup.md](setup.md). Concretely: JDK 17, Android SDK with platform 36 + build-tools, an Android 10+ device or AVD for run verification. **Camera QR scanning requires a real device** — an emulator has no camera pointed at your monitor; emulator verification uses the debug manual payload input instead (below).
+See [setup.md](setup.md). Concretely: JDK 17, Android SDK with platform 36 + build-tools, an Android 10+ device or AVD for run verification. **Pairing requires a real device:** QR scanning needs a camera pointed at the desktop's screen. The debug paste-payload input that stood in for it on an emulator was removed on 2026-11-18 (product owner).
 
 ## Build & run
 
@@ -97,4 +97,4 @@ Thermal profiles (Phase 11) and adaptive quality (Phase 12). Casting (Phases 5�
 - User-visible strings go in `res/values/strings.xml` (status enum labels are the current exception — they map 1:1 to enum values). Error strings follow [pairing.md](../architecture/pairing.md) §Failure modes verbatim — simple and non-technical; codes stay in logs.
 - `pairing/` and `signaling/` know nothing about UI or Android widgets; the UI drives them ([architecture/mobile.md](../architecture/mobile.md)).
 - Tests live in `app/src/test` (unit, plain JVM — `android.util.Log` is a stub, no-op'd via `unitTests.isReturnDefaultValues`). The design file `designs/mobile-app.figcraft` is generated from the shipped UI (`DesignExportTest` measures it, `tools/design/` builds the file — see tools/design/README.md); regenerate it after a UI change. Compose screens are tested on Robolectric in the same source set (`*UiTest`; resources via `unitTests.isIncludeAndroidResources`). Instrumented tests are added when there is real device behavior to assert — capture, hardware codecs and libwebrtc natives stay manual device checks.
-- Debug-only UI affordances (manual payload input) are gated on `BuildConfig.DEBUG` and must never ship in release builds.
+- Debug-only UI affordances are gated on `BuildConfig.DEBUG` and must never ship in release builds.

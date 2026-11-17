@@ -126,9 +126,9 @@ class DesignExportTest {
     fun exportFullScreens() = export(fullScreens(), fixedHeight = PHONE_HEIGHT_DP)
 
     private fun fullScreens(): List<Pair<String, @Composable () -> Unit>> = listOf(
-        "10 Scan · Camera permission" to { ScanContent(PairingClient.State.Idle, {}, {}) },
-        "11 Scan · Pairing" to { ScanContent(PairingClient.State.Connecting, {}, {}) },
-        "12 Scan · Failed" to { ScanContent(PairingClient.State.Failed(PairingError.EXPIRED), {}, {}) },
+        "10 Scan · Camera permission" to { ScanContent(PairingClient.State.Idle, {}) },
+        "11 Scan · Pairing" to { ScanContent(PairingClient.State.Connecting, {}) },
+        "12 Scan · Failed" to { ScanContent(PairingClient.State.Failed(PairingError.EXPIRED), {}) },
     )
 
     private fun scrollingScreens(): List<Pair<String, @Composable () -> Unit>> = listOf(

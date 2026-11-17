@@ -90,6 +90,14 @@ class MediaCastSession(
      * status line follows. Delivered from the session thread.
      */
     private val onCaptureFormat: (width: Int, height: Int, fps: Int) -> Unit = { _, _, _ -> },
+
+    /**
+     * ADR-036: media can't reach the desktop and the restart ladder is
+     * running — [sinceMs] is when the drop began; null once it connects
+     * again (or the ladder gives up, just before the fatal ConnectionLost).
+     * Delivered from the session thread.
+     */
+    private val onInterruption: (sinceMs: Long?) -> Unit = {},
 ) {
 
     enum class State { STARTING, NEGOTIATING, STREAMING, CLOSED }
@@ -146,7 +154,10 @@ class MediaCastSession(
     private val negotiator = PeerNegotiator(
         label = PC_ID,
         post = ::post,
-        sendOffer = { sdp -> signaling.sendSdpOffer(PC_ID, sdp) },
+        sendOffer = { sdp ->
+            offerUnanswered = true
+            signaling.sendSdpOffer(PC_ID, sdp)
+        },
         decodeCandidate = IceCandidateJson::decode,
         onOfferFailed = { detail -> fatal(Failure.Error(detail)) },
         offerTransform = { sdp ->
@@ -160,7 +171,15 @@ class MediaCastSession(
                 Log.i(TAG, "negotiated opus fmtp: ${SdpOpusFmtp.opusFmtp(it) ?: "none"}")
             }
         },
-        onAnswerApplied = { if (active) pc?.let { applySenderParameters(it) } },
+        onAnswerApplied = {
+            offerUnanswered = false
+            if (active) {
+                pc?.let { applySenderParameters(it) }
+                // A re-offer answered on a pc that never left CONNECTED gets
+                // no state change to close its watch: close it here.
+                if (pcConnected) restarts.onConnected(System.currentTimeMillis())
+            }
+        },
         onAnswerFailed = {
             if (active) {
                 // The offer in flight cannot connect — conclude it now
@@ -243,6 +262,10 @@ class MediaCastSession(
             Log.w(TAG, "ice recovery exhausted — stopping the cast ($summary)")
             fatal(Failure.ConnectionLost)
         },
+        onInterruption = { sinceMs ->
+            Log.i(TAG, if (sinceMs != null) "cast interrupted — waiting for the desktop" else "cast interruption over")
+            onInterruption(sinceMs)
+        },
     )
 
     private val projectionCallback = object : MediaProjection.Callback() {
@@ -265,10 +288,10 @@ class MediaCastSession(
                     // pc that is not connected (or a desktop that restarted and
                     // lost it — the pc then fails and the ICE ladder recovers)
                     // is rebuilt as before.
-                    if (pc !== null && pcConnected) {
-                        Log.i(TAG, "re-auth: media pc still connected — keeping it")
-                    } else {
-                        negotiate()
+                    when (reauthAction(pc !== null, pcConnected, offerUnanswered)) {
+                        ReauthAction.KEEP -> Log.i(TAG, "re-auth: media pc still connected — keeping it")
+                        ReauthAction.REOFFER -> reofferAfterReauth()
+                        ReauthAction.REBUILD -> negotiate()
                     }
                 }
 
@@ -311,6 +334,9 @@ class MediaCastSession(
         answeredSession = session
         negotiator.applyAnswer(sdp)
     }
+
+    /** An offer went out and its answer hasn't been applied (session thread). */
+    private var offerUnanswered = false
 
     /** True between [start] and teardown — guards late signaling callbacks. */
     private var active = false
@@ -542,6 +568,21 @@ class MediaCastSession(
         // DISCONNECTED/FAILED — an answer that never comes is otherwise silent.
         scheduleRecoveryWatchdog()
         negotiator.offer()
+    }
+
+    /**
+     * ADR-036, found live 2026-11-18: an offer sent while the socket was down
+     * never reached the desktop. Its pc may have failed meanwhile (the
+     * receiver then stops its frame loop until it gets an offer), even if
+     * ours reconnected on the old credentials. Re-offer on the same pc: the
+     * receiver keeps its pc for the same session (ADR-019) and restarts its
+     * frame loop.
+     */
+    private fun reofferAfterReauth() {
+        Log.i(TAG, "re-auth: an offer went unanswered while the socket was down — re-offering on the same pc")
+        restarts.onNegotiating(System.currentTimeMillis())
+        scheduleRecoveryWatchdog()
+        negotiator.restartIce()
     }
 
     /** Debug builds only (CastService): one ICE restart now, as the recovery ladder would send it. */

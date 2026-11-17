@@ -77,6 +77,9 @@ import io.github.silogos.caster.service.AdaptiveUiState
 import io.github.silogos.caster.service.AudioRoutingUiState
 import io.github.silogos.caster.service.CastService
 import io.github.silogos.caster.service.CastState
+import io.github.silogos.caster.service.isLive
+import io.github.silogos.caster.service.liveDesktopName
+import io.github.silogos.caster.service.liveStartedAtMillis
 import io.github.silogos.caster.service.ConnectedDesktop
 import io.github.silogos.caster.service.MicRoutingUiState
 import io.github.silogos.caster.service.VcCapability
@@ -134,7 +137,9 @@ fun HomeScreen(
     val usbState by UsbLink.state.collectAsStateWithLifecycle()
     val usbGameAudio by UsbCastService.gameAudioState.collectAsStateWithLifecycle()
     val usbMicState by UsbCastService.micState.collectAsStateWithLifecycle()
-    val usbCasting = usbState is UsbLink.State.Casting
+    val usbCastState by UsbCastService.castState.collectAsStateWithLifecycle()
+    // ADR-036: a cable cast waiting for its cable is still this cast.
+    val usbCasting = usbCastState.isLive()
 
     // No pairing session → nothing to show here: back to the scan screen.
     LaunchedEffect(connection) {
@@ -242,10 +247,10 @@ fun HomeScreen(
         liveQuality = liveQuality,
         onSetGameAudio = { on ->
             settingsViewModel.setGameAudio(on)
-            if (castState is CastState.Casting && (gameAudioState == GameAudioState.Muted) != !on) {
+            if (castState.isLive() && (gameAudioState == GameAudioState.Muted) != !on) {
                 CastService.requestToggleGameAudio(context)
             }
-            if (usbState is UsbLink.State.Casting && usbGameAudio != GameAudioState.Off &&
+            if (usbCasting && usbGameAudio != GameAudioState.Off &&
                 (usbGameAudio == GameAudioState.Muted) != !on
             ) {
                 UsbCastService.requestToggleGameAudio(context)
@@ -265,7 +270,7 @@ fun HomeScreen(
                     MicPermissionAsks.markAsked(context)
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
-                castState is CastState.Casting && on != recording &&
+                castState.isLive() && on != recording &&
                     !(!on && micState == MicState.NeedsPermission) -> CastService.requestToggleMic(context)
             }
         },
@@ -297,6 +302,7 @@ fun HomeScreen(
         onShareScreen = shareScreen,
         onStopShareScreen = { CastService.requestStop(context) },
         usbState = usbState,
+        usbCastState = usbCastState,
         onShareOverUsb = shareOverUsb,
         onStopUsb = { UsbCastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
@@ -352,6 +358,8 @@ fun HomeContent(
         onStopShareScreen: () -> Unit = {},
         /** The cable link (ADR-034); None hides everything USB. */
         usbState: UsbLink.State = UsbLink.State.None,
+        /** The cable cast (ADR-036): Casting, Interrupted while the cable is out, Failed when the wait ran out. */
+        usbCastState: CastState = CastState.Idle,
         onShareOverUsb: () -> Unit = {},
         onStopUsb: () -> Unit = {},
         onDisconnect: () -> Unit = {},
@@ -363,11 +371,18 @@ fun HomeContent(
         onStartHotspot: () -> Unit = {},
         onStopHotspot: () -> Unit = {},
     ) {
-    val casting = castState is CastState.Casting
-    val usbCasting = usbState is UsbLink.State.Casting
+    // ADR-036: a cast waiting for its link is still the running cast.
+    val casting = castState.isLive()
+    val usbCasting = usbCastState.isLive()
+    val interruption = (castState as? CastState.Interrupted) ?: (usbCastState as? CastState.Interrupted)
     // The cable takes Share screen only while no Wi-Fi cast is starting or running.
-    val usbReady = usbState is UsbLink.State.Ready && !casting && castState !is CastState.Starting
-    val annunc = if (usbCasting) ConsoleAnnunciator.ON_AIR else annunciatorFor(castState)
+    val usbReady = usbState is UsbLink.State.Ready && !casting && !usbCasting && castState !is CastState.Starting
+    val annunc = when {
+        interruption != null -> ConsoleAnnunciator.RECONNECTING
+        usbCasting -> ConsoleAnnunciator.ON_AIR
+        castState == CastState.Idle && usbCastState is CastState.Failed -> ConsoleAnnunciator.FAULT
+        else -> annunciatorFor(castState)
+    }
     val connected = connection is ConnectedDesktop.State.Connected
     val saved = connection as? ConnectedDesktop.State.Saved
     val reconnecting = pairingState is PairingClient.State.Connecting ||
@@ -446,15 +461,17 @@ fun HomeContent(
         // live 2026-10-31: "The connection to the desktop…" used to replace
         // it, leaving the failure without its destination plate — Connect and
         // Terminate must stay reachable in that exact moment). ----
-        if (castState is CastState.Failed) {
+        val failure = (castState as? CastState.Failed) ?: (usbCastState as? CastState.Failed)?.takeIf { castState == CastState.Idle }
+        if (failure != null) {
             Spacer(Modifier.height(12.dp))
             CastCard {
-                IconListRow(iconRes = R.drawable.ic_warning, title = castState.message, err = true)
+                IconListRow(iconRes = R.drawable.ic_warning, title = failure.message, err = true)
             }
         }
         OnAirHero(
             desktopName = when {
-                casting -> (castState as CastState.Casting).desktopName
+                casting -> castState.liveDesktopName() ?: ""
+                usbCasting -> usbCastState.liveDesktopName() ?: ""
                 connected -> (connection as ConnectedDesktop.State.Connected).desktopName
                 saved != null -> saved.desktopName
                 else -> stringResource(R.string.home_not_connected)
@@ -509,12 +526,17 @@ fun HomeContent(
             is ProfileSelection.BuiltIn -> profileName(cable.profile)
             is ProfileSelection.Custom -> settings.customProfile(cable.id)?.name ?: ""
         }
-        UsbLinkCard(
-            state = usbState,
-            onScanQr = onScanQr,
-            cableProfileName = cableProfileName,
-            modifier = Modifier.padding(top = 12.dp),
-        )
+        // ADR-036 (design v5 D1/D2): the cast waits for its link — why, how long, and Stop below.
+        if (interruption != null) {
+            CastWaitingCard(interruption, modifier = Modifier.padding(top = 12.dp))
+        } else {
+            UsbLinkCard(
+                state = usbState,
+                onScanQr = onScanQr,
+                cableProfileName = cableProfileName,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
 
         // ---- The transport control: amber to go, outlined to stop ----
         // (stopping leaves the pairing connected — only the video stops)
@@ -583,7 +605,7 @@ fun HomeContent(
             casting = casting,
             settings = settings,
             liveQuality = liveQuality,
-            startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
+            startedAtMillis = castState.liveStartedAtMillis() ?: 0L,
             onSelect = onSelectProfile,
             onApplyLive = onApplyLiveQuality,
             // The cable in and no Wi-Fi cast running: the list is the cable's (ADR-034).
@@ -625,7 +647,7 @@ fun HomeContent(
                 iconRes = R.drawable.ic_gamepad,
                 title = stringResource(R.string.home_game_audio),
                 sub = stringResource(R.string.home_game_audio_hint),
-                fact = when (gameAudioState) {
+                fact = if (interruption != null) stringResource(R.string.cast_waiting_audio_sub) else when (gameAudioState) {
                     GameAudioState.Silent -> stringResource(R.string.game_audio_cannot_capture)
                     GameAudioState.Failed -> stringResource(R.string.game_audio_unavailable)
                     GameAudioState.Off -> if (casting) stringResource(R.string.game_audio_off) else null
@@ -663,7 +685,7 @@ fun HomeContent(
                     micCasting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
                     else -> stringResource(R.string.mic_records_from, micSourceName(effectiveDevice))
                 },
-                fact = when (micState) {
+                fact = if (interruption != null && micOn) stringResource(R.string.cast_waiting_mic_sub) else when (micState) {
                     MicState.Silenced -> stringResource(R.string.mic_silenced)
                     MicState.Failed -> stringResource(R.string.mic_unavailable)
                     else -> null
@@ -846,6 +868,7 @@ internal enum class ConsoleAnnunciator(val labelRes: Int, val tone: AnnuncTone) 
     STANDBY(R.string.app_bar_state_standby, AnnuncTone.QUIET),
     STARTING(R.string.app_bar_state_starting, AnnuncTone.LIVE),
     ON_AIR(R.string.app_bar_state_on_air, AnnuncTone.LIVE),
+    RECONNECTING(R.string.app_bar_state_reconnecting, AnnuncTone.LIVE),
     FAULT(R.string.app_bar_state_fault, AnnuncTone.FAULT),
 }
 
@@ -863,6 +886,7 @@ internal fun vcSublineRes(state: VirtualCameraUiState): Int = when {
 internal fun annunciatorFor(castState: CastState): ConsoleAnnunciator = when (castState) {
     is CastState.Starting -> ConsoleAnnunciator.STARTING
     is CastState.Casting -> ConsoleAnnunciator.ON_AIR
+    is CastState.Interrupted -> ConsoleAnnunciator.RECONNECTING
     is CastState.Failed -> ConsoleAnnunciator.FAULT
     CastState.Idle -> ConsoleAnnunciator.STANDBY
 }

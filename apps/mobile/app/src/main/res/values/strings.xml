@@ -10,6 +10,7 @@
     <string name="app_bar_state_starting">Starting</string>
     <string name="app_bar_state_on_air">On air</string>
     <string name="app_bar_state_fault">Fault</string>
+    <string name="app_bar_state_reconnecting">Reconnecting</string>
 
     <!-- The profile card (ADR-024): one list on Home in both states — idle
          picks the profile for the next cast, casting steers the RUNNING cast
@@ -82,8 +83,6 @@
     <string name="reconnecting">Reconnecting to the desktop…</string>
     <string name="session_ended">The desktop ended the session. Scan again to connect.</string>
     <string name="disconnect">Disconnect</string>
-    <string name="manual_payload_label">Debug: paste the QR payload JSON</string>
-    <string name="manual_payload_connect">Connect from payload</string>
 
     <!-- Cast controls (Phase 5), shown once paired. -->
     <string name="starting_cast">Starting the cast…</string>
@@ -95,6 +94,19 @@
     <string name="cast_failed_connection_lost">The connection to the desktop was lost. Scan the QR code to reconnect.</string>
     <string name="cast_notification_channel">Screen cast</string>
     <string name="cast_notification_text">Your screen is being shared with the desktop.</string>
+    <!-- ADR-036: the cast waits up to five minutes for its link. -->
+    <string name="cast_waiting_wifi_title">Reconnecting to %1$s</string>
+    <string name="cast_waiting_wifi_text">Your screen share stays on. The cast carries on when the Wi-Fi connection is back.</string>
+    <string name="cast_waiting_cable_title">Waiting for the cable</string>
+    <string name="cast_waiting_cable_text">Your screen share stays on. Plug the cable back in and the cast carries on.</string>
+    <string name="cast_waiting_wifi_card_title">Wi-Fi connection lost</string>
+    <string name="cast_waiting_wifi_card_sub">The cast carries on by itself when the desktop is reachable again. No need to share your screen again.</string>
+    <string name="cast_waiting_cable_card_title">Cable unplugged</string>
+    <string name="cast_waiting_cable_card_sub">Plug it back in to carry on. No need to share your screen again. Nothing is captured while it\'s out.</string>
+    <string name="cast_waiting_stops_in">Stops in</string>
+    <string name="cast_waiting_audio_sub">Paused until the link is back.</string>
+    <string name="cast_waiting_mic_sub">Not recording until the link is back.</string>
+    <string name="usb_cast_timed_out">The cable stayed unplugged for 5 minutes. Plug it in and share your screen again.</string>
     <string name="cast_notification_stop">Stop</string>
 
     <!-- Game audio (Phase 7) — simple, non-technical (AGENTS.md); the raw
@@ -282,7 +294,7 @@
     <string name="usb_ready_title">Connected by cable</string>
     <string name="usb_ready_sub">Sharing goes over the USB cable. Wi-Fi isn\'t needed while it\'s plugged in.</string>
     <string name="usb_casting_title">Sharing by cable</string>
-    <string name="usb_casting_sub">Unplugging the cable stops the cast.</string>
+    <string name="usb_casting_sub">Unplugging the cable pauses the cast for up to 5 minutes; plug it back in to carry on.</string>
     <string name="usb_casting_quality">Over the cable the picture stays at the profile for the whole cast: automatic quality and live changes work over Wi-Fi only for now.</string>
     <string name="usb_refused_title">This desktop doesn\'t know this phone</string>
     <string name="usb_refused_sub">Scan the desktop\'s QR code over Wi-Fi once, then plug the cable in again.</string>

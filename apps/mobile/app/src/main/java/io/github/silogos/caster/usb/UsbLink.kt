@@ -65,6 +65,10 @@ object UsbLink {
     /** Called by the cast when the link drops under it. */
     @Volatile var onLinkClosed: (() -> Unit)? = null
 
+    /** The desktop that proved the shared key on this link; null until it has (ADR-036 resumes only to it). */
+    @Volatile var trustedDesktopId: String? = null
+        private set
+
     fun isCaster(accessory: UsbAccessory): Boolean =
         accessory.manufacturer == ACCESSORY_MANUFACTURER && accessory.model == ACCESSORY_MODEL
 
@@ -149,6 +153,7 @@ object UsbLink {
             is UsbHandshake.Outcome.Send -> sendControl(outcome.message)
             is UsbHandshake.Outcome.Trusted -> {
                 Log.i(TAG, "desktop proved the shared key — link ready")
+                trustedDesktopId = outcome.desktopId
                 _state.value = State.Ready(outcome.desktopName)
             }
             UsbHandshake.Outcome.NotPaired -> {
@@ -192,6 +197,7 @@ object UsbLink {
         Log.i(TAG, "link ended: $reason")
         link = null
         handshake = null
+        trustedDesktopId = null
         accessory = null
         permissionAskedFor = null
         _state.value = State.None

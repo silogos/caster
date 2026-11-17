@@ -15,6 +15,9 @@ import io.github.silogos.caster.signaling.VcStatus
  * is being cast to without asking the pairing machine, which handed its
  * connection over when the cast started.
  */
+/** Which link a cast runs over: the waiting state words it differently (ADR-036). */
+enum class CastLink { WIFI, CABLE }
+
 sealed interface CastState {
     data object Idle : CastState
     data class Starting(val desktopName: String) : CastState
@@ -22,7 +25,37 @@ sealed interface CastState {
     /** [startedAtMillis] feeds the Home hero's live elapsed readout (wall
      * clock at the streaming transition; 0 = unknown, the UI falls back). */
     data class Casting(val desktopName: String, val startedAtMillis: Long = 0L) : CastState
+
+    /**
+     * ADR-036: the link dropped mid-cast and the cast waits for it, the
+     * projection kept, until [endsAtMillis] (the drop window after
+     * [sinceMillis]). Back to [Casting] (same [startedAtMillis]) when the link
+     * returns; [Failed] when the window runs out.
+     */
+    data class Interrupted(
+        val desktopName: String,
+        val link: CastLink,
+        val sinceMillis: Long,
+        val endsAtMillis: Long,
+        val startedAtMillis: Long = 0L,
+    ) : CastState
     data class Failed(val message: String) : CastState
+}
+
+/** A cast exists: streaming, or waiting for its link (ADR-036). */
+fun CastState.isLive(): Boolean = this is CastState.Casting || this is CastState.Interrupted
+
+fun CastState.liveDesktopName(): String? = when (this) {
+    is CastState.Casting -> desktopName
+    is CastState.Interrupted -> desktopName
+    else -> null
+}
+
+/** The running cast's start, kept across a wait (the STATUS timecode). */
+fun CastState.liveStartedAtMillis(): Long? = when (this) {
+    is CastState.Casting -> startedAtMillis
+    is CastState.Interrupted -> startedAtMillis
+    else -> null
 }
 
 /**
