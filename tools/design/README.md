@@ -83,6 +83,13 @@ python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 
 
 `build_link_choice_spec.py` writes **"Mobile design v6 · One link per connection (ADR-037)"**, drawn ahead of the code. The link is the one the phone connected with: the QR (Wi-Fi, auth unchanged) or the cable, never both. The first screen stays Scan; plugging the cable in redirects to the cable auth screen, and the Mac asks once (usb-link.md v2). Row 1 is that screen: C1 checking the Mac, C2 waiting for the Mac's Allow, C3 not allowed, C4 the Mac's Caster is older. Row 2 is Home, unchanged except for a **WI-FI / CABLE** tag in the app bar: H1 connected by Wi-Fi (a cable plugged in is ignored), H2 connected by cable, H3 on air by cable, H4 saved and not connected. Render: `designs/preview/mobile-link-choice.png`.
 
+`build_link_flow_spec.py` writes **"Mobile flow v7 · Cable and Wi-Fi, end to end (ADR-037)"**: the whole flow as a storyboard, screen to screen with arrows and the Mac's side in line. A is the first time by cable (Scan → plug in → Android's dialog → checking → the Mac asks once → Home CABLE); B is every later plug-in, which reconnects by itself with no prompt (Home for a Mac saved by cable → reconnecting → Home → capture consent → on air); C is Wi-Fi as today plus the tag; D is not allowed, an older Mac, unplugged mid-cast (ADR-036) and a Mac saved on both links. Render: `designs/preview/mobile-link-flow.png`.
+
+```bash
+python3 -I tools/design/build_link_flow_spec.py /tmp/link-flow.figcraft --into designs/mobile-app.figcraft
+python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 7
+```
+
 `build_desktop_cable_allow.py` writes the Mac's side as frames **15–17** of `designs/desktop-signal-deck.figcraft` (run it after `build_desktop_usb_cast.py`, whose frame 14 it copies): 15 the one-time **"Allow <phone> to cast over the cable?"** sheet over the QR hero, 16 the same sheet on a Mac that already knows the phone over Wi-Fi (cable trust is its own entry), 17 the QR hero when the phone on the cable runs an older Caster. Frame 13 (pair over Wi-Fi first) is kept, captioned as superseded by 15. Render: `designs/preview/desktop-15-17-cable-allow.png`.
 
 ```bash

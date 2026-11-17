@@ -30,8 +30,9 @@ So both links can be up at once, and the phone and the Mac disagree about which 
    - The phone keeps its saved Wi-Fi desktop and, separately, the Macs that allowed it on the cable.
    - Ending one never ends the other. A phone paired over Wi-Fi meets the Allow prompt once on its first plug-in.
 6. **Home is unchanged except for one tag.** In the app bar, beside the status (STANDBY / ON AIR), a tag says how this connection runs: **WI-FI** or **CABLE**. The cable's own Home card (design v3, "Connected by cable") goes away: the cable auth screen carries its states, and Home is the same screen for both links. Disconnect and Terminate act on the connected link.
-7. **Switching** is Disconnect on Home (or unplug, for the cable), then connect the other way. A running cast is stopped first; nothing moves a cast from one link to the other (ADR-036 already resumes a cast only on its own link).
-8. **The receiver serves one link at a time.** While a phone is connected on one link, the receiver refuses the other (`busy` on Wi-Fi as today; `busy` on the cable). Its deck and tray show only the link that is connected.
+7. **The cable is remembered, like Wi-Fi.** After the one Allow, every later plug-in reconnects by itself with no prompt and no tap: Android opens Caster for the accessory (its "use by default" from the first plug-in), the stored cable key proves both sides, and the app lands on Home tagged CABLE. A Mac remembered only by cable (no Wi-Fi pairing) is a saved desktop like a Wi-Fi one: the app opens on Home for it, and where Wi-Fi has Connect, Home says **"Plug the cable in to reconnect"** (with Scan QR code to add Wi-Fi, and Terminate to forget it). A Mac remembered on both shows Connect and "Or plug the cable in."
+8. **Switching** is Disconnect on Home (or unplug, for the cable), then connect the other way. A running cast is stopped first; nothing moves a cast from one link to the other (ADR-036 already resumes a cast only on its own link).
+9. **The receiver serves one link at a time.** While a phone is connected on one link, the receiver refuses the other (`busy` on Wi-Fi as today; `busy` on the cable). Its deck and tray show only the link that is connected.
 
 ## Risks
 
