@@ -1,7 +1,5 @@
 # Caster
 
-(Called Zero-Friction Local Cast until v0.2.0.)
-
 Cast your **Android screen**, **game audio**, and **microphone** to a desktop over the local Wi-Fi network or a USB cable — no ADB, no Developer Options.
 
 Built for mobile gamers and streamers: the phone runs the game and controls the cast; the desktop is a receiver that is trivially easy to capture in OBS.
@@ -39,31 +37,13 @@ Game audio and microphone are **never mixed on Android** — they travel as sepa
 └── package.json         # Root metadata
 ```
 
-## Desktop receivers
+## Desktop receiver
 
-There are two desktop apps in the tree. Only one is being developed.
+The receiver is `apps/desktop-native` ([ADR-015](docs/decisions/ADR-015-native-receiver-tauri-libwebrtc.md), [docs/architecture/desktop-native.md](docs/architecture/desktop-native.md)): a Tauri shell with Rust, libwebrtc, and native video and audio. **macOS only.**
 
-| | `apps/desktop-native` | `apps/desktop` |
-|---|---|---|
-| **Status** | **Current.** All receiver work since 2026-11-09 lands here ([ADR-015](docs/decisions/ADR-015-native-receiver-tauri-libwebrtc.md)) | **Superseded.** No further work; removal is planned in [issue #152](https://github.com/silogos/caster/issues/152) |
-| Stack | Tauri shell, Rust, libwebrtc, native video and audio | Electron, TypeScript, Chromium's WebRTC |
-| Platforms | macOS only | macOS, Windows, Linux (there is no Windows test machine — [ADR-007](docs/decisions/ADR-007-virtual-camera.md)) |
-| Video | Shown on arrival with a bounded 50 ms pacer ([ADR-017](docs/decisions/ADR-017-receiver-frame-pacing.md)) | Chromium's playout, ~91 ms floor ([ADR-014](docs/decisions/ADR-014-native-low-latency-audio-output.md)) |
-| Game audio | Stereo PCM over the DataChannel, CoreAudio output ([ADR-020](docs/decisions/ADR-020-audio-playout-steers-the-trough.md)) | Stereo PCM through a Rust sidecar engine |
-| Microphone playback | **Not yet** (the connection is answered, the track is not played) | Yes |
-| Output to OBS | Syphon, switched on the receiver ([ADR-021](docs/decisions/ADR-021-native-syphon-output.md)) | Syphon / softcam / PipeWire, switched from the phone |
-| Audio routing | **Not yet** (speaks protocol version 1) | Yes (protocol version 2) |
-| Launch at login, frameless window | **Not yet** | Yes |
-| Game audio after an ICE restart | Stays on the stereo channel ([ADR-019](docs/decisions/ADR-019-ice-restart-keeps-the-receivers-pc.md)) | Not checked; the fix was made in the native receiver only |
-| Tests | 94 `cargo test` tests, **run locally only** | Vitest suite, run by the CI `desktop` job |
-
-Things to know before touching either:
-
-- **Use `apps/desktop-native` on a Mac.** It is the receiver the latency figures in [docs/development/latency-measurement.md](docs/development/latency-measurement.md) were measured on. Details: [docs/architecture/desktop-native.md](docs/architecture/desktop-native.md).
-- **Both apps share the pairing store** (`trust.json`, `desktop-id`), so a phone moves between them without scanning a new QR code.
-- **CI does not test the native receiver.** A green `desktop` check covers the Electron app only.
-- **`apps/desktop` still holds things the native app needs later:** the source of the virtual audio driver (`resources/zfaudio/`) and the virtual camera's native pieces. They must be moved out before the directory is removed.
-- **Windows and Linux** are served only by the Electron app today. The native receiver's video, audio output and power management are macOS code and would have to be ported.
+- The Electron receiver (`apps/desktop`, superseded since 2026-11-09) was removed on 2026-11-18 ([ADR-035](docs/decisions/ADR-035-machine-identifiers-carry-caster.md), [issue #152](https://github.com/silogos/caster/issues/152)). Git history keeps it, including its Windows and Linux outputs (softcam, PipeWire) and its virtual audio driver.
+- **There is no Windows or Linux receiver today.** The native receiver's video, audio output and power management are macOS code and would have to be ported.
+- **CI does not test the receiver**: its `cargo test --lib` suite runs locally only (it needs macOS frameworks).
 
 ## Documentation
 

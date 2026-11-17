@@ -4,7 +4,7 @@ Status: Phase 0 (planned architecture; applications not yet implemented).
 
 ## What the system does
 
-**Zero-Friction Local Cast** sends three streams from an Android device to a desktop over the same local Wi-Fi network:
+**Caster** sends three streams from an Android device to a desktop over the same local Wi-Fi network:
 
 ```text
 Android (sender, controls everything)

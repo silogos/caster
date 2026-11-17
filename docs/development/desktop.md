@@ -59,7 +59,7 @@ apps/desktop/
     │   └── signaling/
     │       ├── envelope.ts        # webrtc.md message envelope parse/serialize
     │       ├── handshake.ts       # nonce, HMAC, constant-time compare, proto negotiation
-    │       └── signalingServer.ts # ws server at /zfc/v1 — handshake state, rate limit — Electron-free
+    │       └── signalingServer.ts # ws server at /caster/v1 — handshake state, rate limit — Electron-free
     ├── preload/index.ts + index.d.ts  # contextBridge → window.desktopApi (sandboxed)
     ├── shared/                    # typed IPC channels + shared types (no runtime code)
     └── renderer/                  # Chromium: dark pairing screen + WebRTC, framework-free TS + CSS

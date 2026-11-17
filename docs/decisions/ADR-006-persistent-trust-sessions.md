@@ -12,13 +12,13 @@ Constraints:
 
 - **LAN only** — no cloud, no push, no STUN/TURN; the phone must find the desktop itself.
 - **ADR-002's handshake must stay the only auth** — a new secret must not cross the (sniffable, plain `ws://`) wire.
-- **Zero friction** — the first pairing is already one scan + consent; remembering must add no step, or the feature defeats itself.
+- **No friction** — the first pairing is already one scan + consent; remembering must add no step, or the feature defeats itself.
 - **Honest state** — the removed registry taught that display-only state which can disagree with reality is worse than none ([ADR-005 removal addendum](ADR-005-device-identity-and-registry.md)); whatever persists must *grant* something, not just claim it.
 - Versioning rules allow documented optional additive fields without bumping QR `v` or `proto` (the ADR-005 precedent).
 
 ## Decision
 
-1. **One persistent session per side, established automatically by the first successful QR pairing.** Both sides derive — never transmit — a 256-bit resume key: `trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "zfc-trust-v1")`. Both endpoints hold `k` and `s` at auth-ok, so no new message is needed to grant trust; a passive sniffer still cannot compute it. The desktop also gains a persistent `desktopId` UUID (`auth-ok.desktopId`), and both sides learn the desktop's current hosts on every connection (`auth-ok.h`).
+1. **One persistent session per side, established automatically by the first successful QR pairing.** Both sides derive — never transmit — a 256-bit resume key: `trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "caster-trust-v1")`. Both endpoints hold `k` and `s` at auth-ok, so no new message is needed to grant trust; a passive sniffer still cannot compute it. The desktop also gains a persistent `desktopId` UUID (`auth-ok.desktopId`), and both sides learn the desktop's current hosts on every connection (`auth-ok.h`).
 2. **Resume handshake** ([pairing.md](../architecture/pairing.md) §Persistent sessions): `hello {resume: true}` with the envelope `sid` = the phone's `deviceId`; the challenge–response runs unchanged with the trustKey as the HMAC key. A new terminal error `unknown-device` tells a forgotten phone to rescan. An older desktop answers `unknown-session`, and the phone falls back to the QR flow — lockstep deployment is not required.
 3. **Trust ends only via Disconnect.** The reserved `bye {reason: "forget"}` revokes on both sides — it is exactly what the mobile hero's and the desktop no-input stage's Disconnect buttons send. App kills, Wi-Fi drops, restarts, notification Stops, and ended casts keep the session: the phone's Home hero morphs Disconnect→**Connect** (one-tap resume), and a trusted desktop opens on the receiver's "No input video" stage (with its Disconnect) instead of the QR hero.
 4. **Single session, last-pairing-wins per side.** The phone stores one desktop; the desktop stores one phone. A second phone can only become the trusted one while the desktop shows a QR (i.e. while nothing is trusted) — physical presence at the desktop remains the authority. Pairing with a different desktop replaces the phone's entry; the retired desktop's own Disconnect is its cleanup.
@@ -41,7 +41,7 @@ ADR-002 accepted "anyone who can photograph the desktop's QR obtains `k`" becaus
 |---|---|
 | Send a persistent secret over the (plain `ws://`) channel after pairing | **Rejected** — a passive sniffer captures it and owns the desktop forever; derivation keeps ADR-002's core property. |
 | mTLS certificates / self-signed pin-on-first-use | **Rejected** (again, ADR-002) — trust-store and TOFU flows for a LAN hobby tool; HKDF keeps the server tiny. |
-| A "Remember this desktop?" prompt after pairing | **Rejected** — adds a step to the zero-friction path and a protocol round-trip; the user asked for WhatsApp-like, which remembers. |
+| A "Remember this desktop?" prompt after pairing | **Rejected** — adds a step to the frictionless path and a protocol round-trip; the user asked for WhatsApp-like, which remembers. |
 | Multi-desktop list on the phone / multi-phone registry on the desktop | **Rejected for v1** — the request is one session ("di desktop ada session di hp juga ada session"); lists resurrect the removed registry's stale-display problem. Single entry, last-wins. |
 | mDNS/Bonjour discovery for desktop IP changes | **Deferred** (Phase 5 precedent) — last-known hosts + a one-scan fallback is honest; discovery adds router-dependent failure modes. |
 | Trust with expiry / periodic renewal | **Rejected** — "hilang hanya ketika pencet tombol disconnect" is the requirement; silent expiry would betray it. |

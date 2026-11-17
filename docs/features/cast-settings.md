@@ -28,7 +28,7 @@ The panel itself is `ui/settings/CastSettingsPanel.kt` (stateless — settings +
 
 ### Persistence
 
-`CastSettingsStore` keeps one JSON document in SharedPreferences (`zfc.cast-settings.v1`, versioned), written on every change and read **fresh at cast start** (ScanScreen's consent callback) — that read is the whole "next cast" mechanism. `CastSettingsCodec` is pure Kotlin: round-trip, unknown-keys tolerance (forward compat), and strict validation — corrupt JSON, wrong version, unknown preset, or out-of-choice values decode to null and the store falls back to defaults with a logged warning. Same convention as the desktop mixer's localStorage: never a cast on guessed values.
+`CastSettingsStore` keeps one JSON document in SharedPreferences (`caster.cast-settings.v1`, versioned), written on every change and read **fresh at cast start** (ScanScreen's consent callback) — that read is the whole "next cast" mechanism. `CastSettingsCodec` is pure Kotlin: round-trip, unknown-keys tolerance (forward compat), and strict validation — corrupt JSON, wrong version, unknown preset, or out-of-choice values decode to null and the store falls back to defaults with a logged warning. Same convention as the desktop mixer's localStorage: never a cast on guessed values.
 
 ### Sender-stats: resolution now visible
 
@@ -42,7 +42,7 @@ The panel itself is `ui/settings/CastSettingsPanel.kt` (stateless — settings +
 
 **Remaining acceptance item (real device, live cast — needs the phone in hand):** the phone was PIN-locked during the verification window, so the end-to-end proof is documented, not yet exercised:
 
-1. In settings, pick **light** (or any value visibly distinct from the default; on the 800×1280 test tablet `light` is the one that changes resolution — `sharp`'s 1920 long edge exceeds the physical 1280, so capture stays native, [capture/CaptureSize.kt](../../apps/mobile/app/src/main/java/com/zerofriction/localcast/capture/CaptureSize.kt) never upscales).
+1. In settings, pick **light** (or any value visibly distinct from the default; on the 800×1280 test tablet `light` is the one that changes resolution — `sharp`'s 1920 long edge exceeds the physical 1280, so capture stays native, [capture/CaptureSize.kt](../../apps/mobile/app/src/main/java/io/github/silogos/caster/capture/CaptureSize.kt) never upscales).
 2. Scan → cast.
 3. Watch the sender stats line (~1 Hz, `MediaCastSession`): resolution drops to `960x600` and the receive bitrate ceilings at ~3 Mbps (vs `800x1280` / ~6 Mbps on the default profile); the desktop status line reads `light`.
 4. Settings survive the app being killed (the store is read at cast start, so also visible in a follow-up cast).

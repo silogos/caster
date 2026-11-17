@@ -23,7 +23,7 @@ There are two ways in:
    - Local candidates go through a sender swapped on every answer, so they reach the phone's current signaling connection.
    - A new session id still builds a new pc, as before.
 2. **Phone (`MediaCastSession`):** an answer whose session id differs from the previous answer on the same pc comes from a **different remote pc** (the receiver restarted). It is not applied; the phone runs a full `negotiate()` (new pc, new channel) instead. Pure helper: `SdpSession`.
-3. **Debug only:** `DebugIceRestartReceiver` (`adb shell am broadcast -n com.zerofriction.localcast/.debug.DebugIceRestartReceiver`) asks the running cast for one ICE restart. It exists so this path can be exercised without breaking the network.
+3. **Debug only:** `DebugIceRestartReceiver` (`adb shell am broadcast -n io.github.silogos.caster/.debug.DebugIceRestartReceiver`) asks the running cast for one ICE restart. It exists so this path can be exercised without breaking the network.
 
 No protocol message changes: both sides read a field every SDP already carries.
 

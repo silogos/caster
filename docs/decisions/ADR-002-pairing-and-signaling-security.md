@@ -4,7 +4,7 @@
 
 ## Context
 
-The mobile app must connect to the desktop without the user typing IPs, on a LAN where plain `ws://` is sniffable. TLS with self-signed certificates adds a trust-store/TOFU flow that directly harms the "zero-friction" goal, and the product has no server infrastructure. The QR code displayed on the desktop is an available out-of-band channel: the phone's camera.
+The mobile app must connect to the desktop without the user typing IPs, on a LAN where plain `ws://` is sniffable. TLS with self-signed certificates adds a trust-store/TOFU flow that directly harms the frictionless goal, and the product has no server infrastructure. The QR code displayed on the desktop is an available out-of-band channel: the phone's camera.
 
 ## Decision
 

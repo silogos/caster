@@ -24,7 +24,7 @@ Exact dependency versions are pinned when the project is created in Phase 1.
 Small, explicit modules — no giant `CastManager` (see AGENTS.md):
 
 ```text
-com.zerofriction.localcast/
+io.github.silogos.caster/
 ├── ui/            # Compose screens: Scan (the launch screen), Home (the connected hub: the profile list + audio), Profiles (edit one, add one — ADR-024)
 ├── pairing/       # QR scan, payload parsing, pairing state machine, saved-session store (SavedDesktops + TrustVault, ADR-006)
 ├── hotspot/       # Hotspot pairing mode (ADR-011): pure HotspotMachine + the LocalOnlyHotspot platform wrapper (HotspotControl)

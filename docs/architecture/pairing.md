@@ -9,14 +9,14 @@ Status: Phase 0 spec (implemented in Phase 3, reviewed again before implementati
 
 The QR code is generated fresh each time the desktop waits for a device, and expires quickly.
 
-## QR payload v1
+## QR payload v2
 
 Compact JSON encoded as QR (type 2/byte, error correction M). Field names are deliberately short to keep QR density low for fast scanning:
 
 ```json
 {
-  "v": 1,
-  "t": "zfc",
+  "v": 2,
+  "t": "caster",
   "h": ["192.168.1.42", "192.168.137.1"],
   "p": 52341,
   "s": "6Xk…b64url…",
@@ -27,17 +27,17 @@ Compact JSON encoded as QR (type 2/byte, error correction M). Field names are de
 
 | Field | Type | Meaning |
 |---|---|---|
-| `v` | int | Payload schema version. This doc specifies `1`. Unknown `v` → mobile shows "Desktop app is newer/older — please update." |
-| `t` | string | Literal `"zfc"` (zero-friction cast). Guards against scanning unrelated QR codes. |
+| `v` | int | Payload schema version. This doc specifies `2` (2026-11-18, [ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md): the tag and the path below were renamed; `1` was the same payload with `t = "caster"`). Unknown `v` → mobile shows "Desktop app is newer/older — please update." |
+| `t` | string | Literal `"caster"`. Guards against scanning unrelated QR codes. |
 | `h` | string[] | **All** candidate IPv4 addresses of the desktop on non-loopback interfaces (Wi-Fi, Ethernet). The mobile tries them in order — this survives multi-interface/VPN ambiguity that breaks single-IP designs. |
 | `p` | int | WebSocket signaling port. Default `52341`; the desktop falls back to an ephemeral port if occupied and always writes the actual port here. |
 | `s` | string | Session ID — 16 random bytes, base64url. |
 | `k` | string | Pairing secret — 32 random bytes, base64url. Never transmitted again; used only as an HMAC key. |
 | `e` | int | Expiry — Unix seconds. Default `now + 600` (10 minutes). |
 
-Wire endpoint: `ws://<host>:<port>/zfc/v1`.
+Wire endpoint: `ws://<host>:<port>/caster/v1`.
 
-**LAN-only host check (phone side, 2026-11-09, mobile review group C):** the phone connects only to `h` entries that are IPv4 literals in a private or link-local range (RFC 1918, RFC 3927), or inside a subnet the phone is on right now (a LAN that hands out public addresses is still the same LAN). Anything else (internet addresses, names, loopback, CGNAT/VPN ranges) is dropped, and a QR left with no host fails as `connect-unreachable`. The same rule filters `auth-ok.hosts` before they are saved, and the saved hosts when reconnecting. No protocol change: `v` stays 1. (`pairing/LanHosts.kt`)
+**LAN-only host check (phone side, 2026-11-09, mobile review group C):** the phone connects only to `h` entries that are IPv4 literals in a private or link-local range (RFC 1918, RFC 3927), or inside a subnet the phone is on right now (a LAN that hands out public addresses is still the same LAN). Anything else (internet addresses, names, loopback, CGNAT/VPN ranges) is dropped, and a QR left with no host fails as `connect-unreachable`. The same rule filters `auth-ok.hosts` before they are saved, and the saved hosts when reconnecting. No protocol change. (`pairing/LanHosts.kt`)
 
 Approximate encoded size: 130–170 bytes → comfortably scannable QR.
 
@@ -76,25 +76,25 @@ Mobile                                   Desktop
 
 ## Persistent sessions (trusted reconnect without a QR)
 
-Since 2026-10-30 ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)): one QR pairing establishes a **persistent session** between this phone and this desktop. Both sides remember it — the phone reconnects with one tap (`hello {resume}`) and no camera — until either side presses **Disconnect** (`bye` with the reserved reason `forget`). Everything else (app kills, Wi-Fi drops, restarts, a stopped cast) keeps it. The QR payload and `proto` stay at `1`; everything below is additive-optional per the versioning rules.
+Since 2026-10-30 ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)): one QR pairing establishes a **persistent session** between this phone and this desktop. Both sides remember it — the phone reconnects with one tap (`hello {resume}`) and no camera — until either side presses **Disconnect** (`bye` with the reserved reason `forget`). Everything else (app kills, Wi-Fi drops, restarts, a stopped cast) keeps it. The QR payload and `proto` stayed at `1` for this; everything below is additive-optional per the versioning rules.
 
 ### Trust establishment — derived, never transmitted
 
 After a successful QR handshake, **both sides locally derive** the resume key from that session's own material:
 
 ```text
-trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "zfc-trust-v1", L = 32)
+trustKey = HKDF-SHA256(ikm = k, salt = ASCII(s), info = "caster-trust-v1", L = 32)
 ```
 
 No protocol message carries it; a passive sniffer sees only HMAC outputs and cannot compute the key (the same property that protects the handshake itself, ADR-002). A **re-pair rotates the key** (fresh `k` per QR session) — regenerating the QR and re-pairing evicts any trust derived from a photographed older code.
 
-- **Desktop** persists `{deviceId, name, trustKey, createdAt, lastConnectedAt}` (single entry — the last phone that paired while nothing was trusted) in `trust.json` under the Electron userData dir, plus its own persistent `desktopId` UUID.
-- **Phone** persists `{desktopId, name, hosts, port, trustKey}` (single entry) in SharedPreferences, the key sealed with an Android Keystore AES-GCM vault (`pairing/TrustVault`) — the app allows OS backups, but **this entry and the install deviceId (`zfc_device`) are excluded** from cloud backup and device-to-device transfer (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`; mobile review 2026-11-09, group C). A restored deviceId would make two phones share one identity, and a restored entry could never unseal its key on another phone anyway.
+- **Desktop** persists `{deviceId, name, trustKey, createdAt, lastConnectedAt}` (single entry — the last phone that paired while nothing was trusted) in `trust.json` under `~/Library/Application Support/Caster`, plus its own persistent `desktopId` UUID.
+- **Phone** persists `{desktopId, name, hosts, port, trustKey}` (single entry) in SharedPreferences, the key sealed with an Android Keystore AES-GCM vault (`pairing/TrustVault`) — the app allows OS backups, but **this entry and the install deviceId (`caster_device`) are excluded** from cloud backup and device-to-device transfer (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`; mobile review 2026-11-09, group C). A restored deviceId would make two phones share one identity, and a restored entry could never unseal its key on another phone anyway.
 - Both stores degrade to empty on anything unreadable (logged) — the honest fallback is one QR re-scan, never a session on guessed values.
 
 ### Resume handshake
 
-The phone reconnects to `ws://<host>:<port>/zfc/v1` using its saved hosts/port (no QR):
+The phone reconnects to `ws://<host>:<port>/caster/v1` using its saved hosts/port (no QR):
 
 ```text
 Mobile                                   Desktop
@@ -119,7 +119,7 @@ The phone's reconnects are **not bounded by the QR's expiry** (there is none to 
 
 ## Hotspot pairing mode (no shared Wi-Fi)
 
-Since 2026-11-03 ([ADR-011](../decisions/ADR-011-hotspot-pairing-mode.md)): when there is no shared network — the `connect-unreachable` failure, the one with no other way out — the **phone hosts a local-only hotspot** (`WifiManager.startLocalOnlyHotspot`; a local AP that **shares no internet**, so the LAN-only posture holds) and the desktop joins it as an ordinary Wi-Fi client. **No protocol change**: `v` stays 1, no new fields, no new messages — the phone (as the AP) reaches its own clients, the QR's `h` already enumerates all interfaces, and `auth-ok.hosts` refreshes the phone's entry as usual.
+Since 2026-11-03 ([ADR-011](../decisions/ADR-011-hotspot-pairing-mode.md)): when there is no shared network — the `connect-unreachable` failure, the one with no other way out — the **phone hosts a local-only hotspot** (`WifiManager.startLocalOnlyHotspot`; a local AP that **shares no internet**, so the LAN-only posture holds) and the desktop joins it as an ordinary Wi-Fi client. **No protocol change**: no new fields, no new messages — the phone (as the AP) reaches its own clients, the QR's `h` already enumerates all interfaces, and `auth-ok.hosts` refreshes the phone's entry as usual.
 
 The guided-manual flow: the unreachable-failure card offers *"Not on the same network? Start a hotspot"* → SSID + password on the phone (Home card, plus a quiet line under the scanner so they stay readable during the join) → the human joins on the desktop → scans the desktop's **fresh** QR → pair and cast exactly as on any LAN.
 
@@ -154,7 +154,7 @@ Errors shown to users stay non-technical (spec §11); codes are for logs.
 | Wrong/unknown `s` | `unknown-session` | Same as expired (stale QR). |
 | HMAC rejected | `bad-auth` | "Couldn't pair with this desktop. Scan the QR code shown on the desktop." |
 | Another phone already paired | `busy` | "The desktop is already connected to another device." |
-| QR of wrong app | parse `t`/`v` mismatch | "This isn't a Zero-Friction Cast QR code." |
+| QR of wrong app | parse `t`/`v` mismatch | "This isn't a Caster QR code." |
 | Reconnect, but the desktop Disconnected first | `unknown-device` | "This desktop no longer remembers this phone. Scan the QR code to pair again." — with Scan QR / Terminate escapes; nothing is dropped until the user chooses |
 
 ## Versioning rules

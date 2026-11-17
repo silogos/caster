@@ -13,7 +13,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 **Accept:** structure matches the spec (`apps/`, `docs/`, root files); docs are consistent and cover why/what/constraints/limitations; risks identified with mitigations and validation phases.
 
 ## Phase 1 — Initialize Mobile Application ✅
-**Scope:** `/apps/mobile`: Gradle (Kotlin DSL) project, application id `com.zerofriction.localcast`, minSdk 29, Compose UI with the minimal home screen (title, `[Start Cast]`, status "Not connected"), pinned dependency versions, `development/mobile.md`.
+**Scope:** `/apps/mobile`: Gradle (Kotlin DSL) project, application id `io.github.silogos.caster`, minSdk 29, Compose UI with the minimal home screen (title, `[Start Cast]`, status "Not connected"), pinned dependency versions, `development/mobile.md`.
 **Not in scope:** WebRTC, MediaProjection, any audio, pairing, desktop communication.
 **Accept:** build succeeds; installs and launches on emulator/device; commit `chore: initialize mobile app`. *(Verified 2026-09-19: build + 3 unit tests green; installed and launched on API 36 emulator, home screen renders per spec — [mobile.md](mobile.md).)*
 
@@ -88,7 +88,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ## Feature 2026-10 — Broadcast-console v3: tabbed quality console + live quality control ✅
 *(Not a numbered phase: a design iteration of the #64 broadcast console, shipped off-phase like its predecessor. The HTML prototype — [designs/mobile-app.html](../../designs/mobile-app.html) — remained the source of truth; its header comments are the port contract.)*
-**Shipped 2026-10-29:** the Home hub's "This cast"/"Share screen" split is replaced by **one tabbed quality console (PRESET | CUSTOM) present in both idle and casting states** — idle edits persist as next-cast settings, casting edits apply **live**. The top bar is now the console's nameplate (brand chip + `LOCAL CAST` + annunciator STANDBY/STARTING/ON AIR/FAULT + gear); the hero is name + Disconnect only; a **STATUS zone** (casting only) carries the elapsed timecode (amber mono) and the honest live readout (`1080p60 · 4–6M`, from the new `liveQuality` flow). Settings is **Advanced-only**; "Automatic quality" became On/Off chips there. Live control rides the existing Phase17 `changeQuality` (no protocol change, desktop untouched) via `CastService` `ACTION_SET_LIVE_QUALITY`; a user live pick **rebases** the adaptive controller (ceiling = the new level, adaptation keeps running) — the user's call, implemented as a rebuild. The adaptive policy was relaxed per user request — twice: `NET_HOLD_MS` 30→60→120 s, `THERMAL_HOLD_MS` 120→180 s, `DWELL_MS` 90→180→300 s, `DROPPED_FRACTION_BAD` 0.05→0.08→0.10, `PACKET_LOSS_FRACTION_BAD` 0.05→0.08, `RTT_BAD_MS` 100→150, `ENCODER_UTILIZATION_BAD` 0.85→0.90→0.95 (the second pass after the first real gaming session) — see [features/adaptive-quality.md](../features/adaptive-quality.md). Mobile JVM 196/196 (new: `ReadoutFormatTest`, `AnnunciatorMappingTest`; adaptive tests recalibrated), `assembleDebug` green. **Verified on the real device the same day** (TB321FU/Android 16): scan → pair → cast a live 3D game with game audio **and** mic (receiver line: `Connected to TB321FU — 1920×1200 · 60 fps · custom · game audio · mic`, video sharp in the receiver window); the user's own live dials in CUSTOM (bitrate slider, 1920↔960 chips) moved the STATUS readout (`1080p60 · 4–6M` → `6–12M` → `540p60 · 6–12M`) and the desktop's session-info label — the live path end-to-end. Remaining for user review: the ON AIR bar and Advanced screen as visuals (bar was scrolled off-screen in the captured shots), live PRESET row tap (same code path as the verified dials), long-run thermal staircase on the relaxed constants.
+**Shipped 2026-10-29:** the Home hub's "This cast"/"Share screen" split is replaced by **one tabbed quality console (PRESET | CUSTOM) present in both idle and casting states** — idle edits persist as next-cast settings, casting edits apply **live**. The top bar is now the console's nameplate (brand chip + `CASTER` + annunciator STANDBY/STARTING/ON AIR/FAULT + gear); the hero is name + Disconnect only; a **STATUS zone** (casting only) carries the elapsed timecode (amber mono) and the honest live readout (`1080p60 · 4–6M`, from the new `liveQuality` flow). Settings is **Advanced-only**; "Automatic quality" became On/Off chips there. Live control rides the existing Phase17 `changeQuality` (no protocol change, desktop untouched) via `CastService` `ACTION_SET_LIVE_QUALITY`; a user live pick **rebases** the adaptive controller (ceiling = the new level, adaptation keeps running) — the user's call, implemented as a rebuild. The adaptive policy was relaxed per user request — twice: `NET_HOLD_MS` 30→60→120 s, `THERMAL_HOLD_MS` 120→180 s, `DWELL_MS` 90→180→300 s, `DROPPED_FRACTION_BAD` 0.05→0.08→0.10, `PACKET_LOSS_FRACTION_BAD` 0.05→0.08, `RTT_BAD_MS` 100→150, `ENCODER_UTILIZATION_BAD` 0.85→0.90→0.95 (the second pass after the first real gaming session) — see [features/adaptive-quality.md](../features/adaptive-quality.md). Mobile JVM 196/196 (new: `ReadoutFormatTest`, `AnnunciatorMappingTest`; adaptive tests recalibrated), `assembleDebug` green. **Verified on the real device the same day** (TB321FU/Android 16): scan → pair → cast a live 3D game with game audio **and** mic (receiver line: `Connected to TB321FU — 1920×1200 · 60 fps · custom · game audio · mic`, video sharp in the receiver window); the user's own live dials in CUSTOM (bitrate slider, 1920↔960 chips) moved the STATUS readout (`1080p60 · 4–6M` → `6–12M` → `540p60 · 6–12M`) and the desktop's session-info label — the live path end-to-end. Remaining for user review: the ON AIR bar and Advanced screen as visuals (bar was scrolled off-screen in the captured shots), live PRESET row tap (same code path as the verified dials), long-run thermal staircase on the relaxed constants.
 
 ---
 
@@ -251,7 +251,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ## Tool 2026-11s — Glass-to-glass latency measurement ✅ measured on-device (2026-11-10)
 *(Not a numbered phase: the baseline before low-latency work, after comparing caster with scrcpy, Moonlight, Parsec and Steam Remote Play.)*
-**Scope:** a debug-only test pattern on the phone (flips + clicks), a receiver probe behind `ZFC_LATENCY_PROBE=1`, a phone-side click probe in the ADM samples callback (debug builds), and `tools/latency/measure.py`, which aligns the clocks over adb and pairs the marks — [latency-measurement.md](latency-measurement.md).
+**Scope:** a debug-only test pattern on the phone (flips + clicks), a receiver probe behind `CASTER_LATENCY_PROBE=1`, a phone-side click probe in the ADM samples callback (debug builds), and `tools/latency/measure.py`, which aligns the clocks over adb and pairs the marks — [latency-measurement.md](latency-measurement.md).
 
 **Accept:** desktop `cargo test` 73 (+4 probe), mobile `testDebugUnitTest` 400, debug and release builds. **On-device (three casts):**
 - video phone screen → Mac screen 63 / 67 / 117 ms (median per cast);
@@ -400,7 +400,7 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 ## Chore 2026-11ag — The product is called Caster, with one icon ⏳ shipped in v0.2.0 and running on the tablet and the Mac; the launcher icon and the menu-bar image not confirmed on screen (2026-11-11)
 
-**Why:** three names on screen ("Local Cast", "Zero-Friction Cast", "Zero-Friction Local Cast Native"), a placeholder launcher icon and an empty Mac icon, with the second release next ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)).
+**Why:** three names on screen (an older name on the phone, "Caster" on the Mac), a placeholder launcher icon and an empty Mac icon, with the second release next ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)).
 
 **What:** every name a person reads is "Caster" on both apps; ids, the signing key and the receiver's data folder are unchanged. One icon, the receiver's mark on an orange tile, drawn in `designs/app-icon.figcraft` and used for the Mac app, the menu-bar template and the phone's adaptive icon. Drawn first in the design file ("The name and the icon", with the other candidates in orange and blue).
 
@@ -416,7 +416,7 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 *(Not a numbered phase: the follow-up [ADR-029](../decisions/ADR-029-sound-follows-syphon-and-a-chosen-output.md) names. Decision record: [ADR-030](../decisions/ADR-030-caster-audio-devices-installed-from-plays-on.md).)*
 
-**Scope:** Caster's own HAL plug-in `CasterAudio.driver` (devices "Caster Audio" and "Caster Mic"; source and build in `apps/desktop-native/caster-audio/`), carried in the receiver's bundle and installed from the Caster half of each track's **Plays on** choice with macOS's password dialog (frames 08–09 of `designs/desktop-signal-deck.figcraft`). The install removes the Electron receiver's `ZeroFrictionAudio.driver`; the native receiver no longer falls back to the Zero-Friction devices. An output that stops calling back (a `coreaudiod` restart) reopens by itself. The plug-in's ring no longer replays old audio when a capture starts.
+**Scope:** Caster's own HAL plug-in `CasterAudio.driver` (devices "Caster Audio" and "Caster Mic"; source and build in `apps/desktop-native/caster-audio/`), carried in the receiver's bundle and installed from the Caster half of each track's **Plays on** choice with macOS's password dialog (frames 08–09 of `designs/desktop-signal-deck.figcraft`). The install removes the Electron receiver's the ADR-008 plug-in; the native receiver no longer falls back to the ADR-008 devices. An output that stops calling back (a `coreaudiod` restart) reopens by itself. The plug-in's ring no longer replays old audio when a capture starts.
 
 **Checked:** `cargo test --lib` 103 passed, 2 ignored. On the device: install from scratch from the deck, both devices carrying the live cast, each track digitally silent on the other's device, sound back within ~1.5 s of a `coreaudiod` restart mid-cast, no old audio on a new capture — numbers in ADR-030 *Verified*. **Not checked:** OBS capturing the devices; the failed path; keyboard focus and VoiceOver on the tooltip; an Intel Mac.
 
@@ -468,3 +468,19 @@ A patch release for [#178](https://github.com/silogos/caster/issues/178) ([ADR-0
 The second release, and the first under one product version ([release.md](release.md), ADR-026): tag `v0.2.0` on `main` (the merge of PR #173, CI green), two assets — `Caster-v0.2.0.apk` (signed with the release key) and `Caster_0.2.0_aarch64.dmg` (the native Mac receiver, ad-hoc signed, not notarized). It closes #165, #170, #171 and #172.
 
 **Not in it:** an Intel Mac, Windows or Linux receiver. **Not checked:** the `.dmg` on a second Mac; the APK as an update over v0.1.0; the thermal-emergency rule on a device.
+
+## Feature 2026-11ak — Caster inside: identifiers, protocol tags and the Electron receiver ⏳ implemented and unit-tested (2026-11-18); not yet checked on the device
+
+*(Not a numbered phase. Decision record: [ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md), superseding ADR-027 decision 2.)*
+
+**Why:** the product owner wants no old name left anywhere, machine identifiers included.
+
+**Scope:**
+- Android application id and package `io.github.silogos.caster`; Mac bundle id `io.github.silogos.caster.receiver`; the receiver's data folder `~/Library/Application Support/Caster`.
+- QR payload `v` 2 with `t = "caster"`, signaling path `/caster/v1`, client string `Caster/…`, trust label `caster-trust-v1`; the phone's preferences, Keystore alias, track ids and the developer switches (`CASTER_LOG`, `CASTER_LATENCY_PROBE`, `CASTER_VIDEO_COPY`, `caster_capture_dump`).
+- The Electron receiver (`apps/desktop`) and its CI job removed.
+- The HKDF and HMAC vectors pinned on both sides (the receiver had no copy of them once the Electron tests were gone).
+- Design files and documents.
+
+**Not in scope:** the signing key's certificate name (outside the repository); pairing over the cable (next).
+

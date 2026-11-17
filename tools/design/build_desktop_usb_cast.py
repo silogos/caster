@@ -171,10 +171,10 @@ def main(path):
                                  "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], "width": 544.0, "height": 58.0,
                                  "fills": solid(BANNER_FILL), "corners": {"radii": [12.0] * 4, "smoothing": 0.0}})
             move(banner, 208.0, 552.0)
-            title = add(frame, copy.deepcopy(starting(layers, "Open Local Cast")))
+            title = add(frame, copy.deepcopy(starting(layers, "Open Caster")))
             set_text(title, "A phone on the USB cable isn't paired with this Mac.", FAULT, width=500)
             move(title, 228.0, 562.0)
-            body = add(frame, copy.deepcopy(starting(layers, "Open Local Cast")))
+            body = add(frame, copy.deepcopy(starting(layers, "Open Caster")))
             set_text(body, "Scan this code with Caster once — after that the cable works on its own.", MUTED, width=500)
             move(body, 228.0, 582.0)
             continue

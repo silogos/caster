@@ -22,7 +22,7 @@ cargo test --release --lib     # protocol, pairing, signaling (loopback), audio,
 ./target/release/desktop-native
 ```
 
-Logs go to stderr as `HH:MM:SS.mmm LEVEL [scope] message`; `ZFC_LOG=debug` adds the chatty lines (DataChannel announces, SDP structure). The receiver shares `~/Library/Application Support/Zero-Friction Local Cast/{trust.json,desktop-id}` with the Electron app. Architecture: [architecture/desktop-native.md](../architecture/desktop-native.md).
+Logs go to stderr as `HH:MM:SS.mmm LEVEL [scope] message`; `CASTER_LOG=debug` adds the chatty lines (DataChannel announces, SDP structure). The receiver keeps its pairing in `~/Library/Application Support/Caster/{trust.json,desktop-id}`. Architecture: [architecture/desktop-native.md](../architecture/desktop-native.md).
 
 ## Android device
 

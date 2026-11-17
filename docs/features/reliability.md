@@ -43,7 +43,7 @@ Failure-mode messages come from [pairing.md](../architecture/pairing.md) §Failu
 | D4 | Second pairing attempt while authorized | Second device/scan gets `busy` → "The desktop is already connected to another device." | — |
 | D5 | Expired QR | `expired` → "This QR code has expired. Generate a new one on the desktop." | — |
 | D6 | Reconnect-within-TTL (Wi-Fi blip) | Same session id re-authenticates; media resumes without a re-scan (Phase4 live evidence exists; re-verify end-to-end with media) | — |
-| D7 | Wrong-app / malformed QR | Parse `t`/`v` mismatch → "This isn't a Zero-Friction Cast QR code." | — |
+| D7 | Wrong-app / malformed QR | Parse `t`/`v` mismatch → "This isn't a Caster QR code." | — |
 | D8 | Unreachable host (QR from another desktop/network) | `connect-unreachable` → "Couldn't reach the desktop…" message; no hang | — |
 
 ## A — Audio

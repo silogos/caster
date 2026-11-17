@@ -1,6 +1,6 @@
 # Release Guide
 
-How to cut a release of Caster (called Zero-Friction Local Cast until v0.2.0, [ADR-027](../decisions/ADR-027-the-product-is-called-caster.md)). Rewritten for v0.2.0 (2026-11-11): the desktop app is the native Mac receiver (`apps/desktop-native`, [ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)), and the product has one version number. The v0.1.0 process (Electron installers for macOS and Windows) is in this file's git history.
+How to cut a release of Caster ([ADR-027](../decisions/ADR-027-the-product-is-called-caster.md), identifiers [ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md)). Rewritten for v0.2.0 (2026-11-11): the desktop app is the native Mac receiver (`apps/desktop-native`, [ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)), and the product has one version number. The v0.1.0 process (Electron installers for macOS and Windows) is in this file's git history.
 
 A release is: **an annotated git tag on `main` + a GitHub release carrying two assets** — the Android APK and the Mac receiver's disk image.
 
@@ -96,7 +96,7 @@ $SDK/build-tools/<latest>/apksigner verify --print-certs app/build/outputs/apk/r
 $SDK/build-tools/<latest>/aapt2 dump badging app/build/outputs/apk/release/Caster-v<ver>.apk | head -1
 ```
 
-- `verify --print-certs` must print the `CN=Zero-Friction Local Cast` certificate (the key keeps the product's first name) — same key every release, or Android refuses the update over an installed previous version.
+- `verify --print-certs` must print the release key's certificate — same key every release, or Android refuses the update over an installed previous version. The current key's certificate name still carries the product's first name; the new application id ([ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md)) is the one chance to start a key named Caster, before the next release.
 - `dump badging` must print the release's `versionName` and the `versionCode` derived from it.
 - A phone carrying a **debug** build (a developer's device) cannot update to the release APK: the signatures differ. Uninstall first; the stored profiles go with it.
 

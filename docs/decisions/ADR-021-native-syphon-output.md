@@ -18,7 +18,7 @@ The Electron path does not carry over. It read each frame back from a canvas to 
 4. **Independent of the window.** While a client reads, frames are converted even when the video window is closed or covered.
 5. **Between casts** the server stays up and shows one "No input video" still, not the last frame (ADR-007's live finding).
 6. **A receiver control.** One switch in the receiver's window ("Output to OBS → Syphon"), saved in `native-receiver.json`, off by default. The phone's proto-2 `vc-*` messages stay unanswered: what this computer does with the stream it already has is a receiver/environment matter (ADR-007 reached the same conclusion for the desktop toggle).
-7. **Same server name** as the Electron receiver, "Zero-Friction Local Cast", so an existing OBS scene keeps working.
+7. **Same server name** as the Electron receiver, "Caster", so an existing OBS scene keeps working.
 8. **The framework is vendored** at `apps/desktop-native/vendor/syphon/` (BSD-3, a copy of `apps/desktop/resources/syphon/Syphon.framework`), so the native app no longer depends on the Electron tree (issue #152, step 2).
 
 | Option | Verdict |
