@@ -81,6 +81,13 @@ python3 -I tools/design/build_cast_drop_spec.py /tmp/cast-drop.figcraft --into d
 python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 5
 ```
 
+`build_link_choice_spec.py` writes **"Mobile design v6 · The link is chosen at Connect (ADR-037)"**, drawn ahead of the code. One link per connection, picked on Home's saved-desktop hero (**Wi-Fi | USB cable**, remembered) above Connect. L1 is the choice with Wi-Fi, L2 waits for a cable with Cancel, L3 is connected by cable, and L4 is connected by Wi-Fi with a cable in, which is ignored and named in one line. Render: `designs/preview/mobile-link-choice.png`.
+
+```bash
+python3 -I tools/design/build_link_choice_spec.py /tmp/link-choice.figcraft --into designs/mobile-app.figcraft
+python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 6
+```
+
 ## The desktop receiver's sound and the Caster devices
 
 `designs/desktop-signal-deck.figcraft` holds the native receiver's deck. Two builders add proposals to it as absolute layers copied from the existing frames. They do not use auto layout, so `check_auto_layout.py` does not apply.
