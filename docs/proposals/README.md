@@ -2,13 +2,14 @@
 
 Draft feature directions under discussion. **Nothing here is decided, nothing is a phase.** Each proposal stands alone; when one is accepted, it gets its own ADR (and roadmap phase). Shared context — the competitive snapshot, small cross-feature observations, and the full evidence list — lives here so the feature docs don't repeat it.
 
-## The three drafts
+## The drafts
 
 | Draft | One line |
 |---|---|
 | [web-receiver.md](web-receiver.md) | Zero-install browser receiver on the LAN, served by the phone |
 | [virtual-camera.md](virtual-camera.md) | **Accepted 2026-10-30** → [ADR-007](../decisions/ADR-007-virtual-camera.md), shipped on Windows (issue #69); Linux (PipeWire) and macOS (Syphon) are follow-ups |
 | [camera-source.md](camera-source.md) | *(optional)* Phone camera as an alternative capture source |
+| [usb-cast.md](usb-cast.md) | **Accepted 2026-11-17** → [ADR-034](../decisions/ADR-034-usb-cast-over-aoa.md): cast over a USB cable through Android Open Accessory — no ADB, no Developer Options; first phase video + game audio |
 
 Written 2026-10-28 after a teardown of a shipping competitor product ("the competitor": marketing site, browser-receiver JS, Android APK, and Windows desktop app — see [Sources](#sources)). The single biggest takeaway: **the competitor's desktop app is Electron, same as caster**, so its virtual-camera recipe transfers directly.
 

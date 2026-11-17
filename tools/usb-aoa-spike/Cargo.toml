@@ -1,0 +1,11 @@
+[package]
+name = "usb-aoa-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike for docs/proposals/usb-cast.md §8: AOA switch + framed bulk stream. Not product code."
+
+[dependencies]
+rusb = "0.9"
+
+[workspace]

@@ -2,7 +2,7 @@
 
 (Called Zero-Friction Local Cast until v0.2.0.)
 
-Cast your **Android screen**, **game audio**, and **microphone** to a desktop over the local Wi-Fi network — no USB cable, no ADB, no Developer Options.
+Cast your **Android screen**, **game audio**, and **microphone** to a desktop over the local Wi-Fi network or a USB cable — no ADB, no Developer Options.
 
 Built for mobile gamers and streamers: the phone runs the game and controls the cast; the desktop is a receiver that is trivially easy to capture in OBS.
 
@@ -90,5 +90,5 @@ Prerequisites and environment setup are described in [docs/development/setup.md]
 ## Constraints
 
 - Everything runs on the **same local Wi-Fi network**. No internet relay, no STUN/TURN.
-- The end-user workflow **never requires** USB, ADB, or Developer Options. (Developers may use ADB for *installation during development*; the product itself must not depend on it.)
+- The end-user workflow **never requires** ADB or Developer Options; a USB cable is optional and goes through Android Open Accessory only (ADR-034). (Developers may use ADB for *installation during development*; the product itself must not depend on it.)
 - Android minimum version: **10 (API 29)** — the floor for `AudioPlaybackCapture`. See [ADR-001](docs/decisions/ADR-001-tech-stack.md).
