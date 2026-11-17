@@ -16,6 +16,25 @@ class UsbFrameTest {
     }
 
     @Test
+    fun `a frame filled in place is the same bytes as an encoded one`() {
+        val payload = byteArrayOf(9, 8, 7, 6, 5, 4)
+        val framed = UsbFrame.framed(UsbFrame.KIND_VIDEO, UsbFrame.FLAG_KEYFRAME or UsbFrame.FLAG_CONFIG, 42L, payload.size)
+        System.arraycopy(payload, 0, framed, UsbFrame.HEADER_LEN, payload.size)
+        assertArrayEquals(UsbFrame.encode(UsbFrame.KIND_VIDEO, UsbFrame.FLAG_KEYFRAME or UsbFrame.FLAG_CONFIG, 42L, payload), framed)
+        assertEquals(
+            listOf(UsbFrame.Frame(UsbFrame.KIND_VIDEO, UsbFrame.FLAG_KEYFRAME or UsbFrame.FLAG_CONFIG, 42L, payload)),
+            UsbFrame.Reader().feed(framed),
+        )
+    }
+
+    @Test
+    fun `a frame over the payload cap is refused before it is built`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            UsbFrame.framed(UsbFrame.KIND_VIDEO, 0, 0, UsbFrame.MAX_PAYLOAD + 1)
+        }
+    }
+
+    @Test
     fun `frames come back whole from any split of the stream`() {
         val video = UsbFrame.encode(UsbFrame.KIND_VIDEO, UsbFrame.FLAG_KEYFRAME, 123_456_789L, byteArrayOf(1, 2, 3, 4, 5))
         val control = UsbFrame.encode(UsbFrame.KIND_CONTROL, 0, 0, """{"type":"hello"}""".toByteArray())

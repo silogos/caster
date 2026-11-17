@@ -170,6 +170,9 @@ object UsbLink {
     fun sendMedia(kind: Int, flags: Int, ptsUs: Long, payload: ByteArray, offset: Int = 0, length: Int = payload.size): Boolean =
         link?.send(kind, flags, ptsUs, payload, offset, length) ?: false
 
+    /** A whole frame built with [UsbFrame.framed]; false once the link is gone. */
+    fun sendFramed(frame: ByteArray): Boolean = link?.sendFramed(frame) ?: false
+
     fun bytesSent(): Long = link?.bytesSent ?: 0L
 
     /** Ready and not already casting: the one Share screen goes over the cable. */

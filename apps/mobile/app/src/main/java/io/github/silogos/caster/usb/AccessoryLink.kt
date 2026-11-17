@@ -31,12 +31,18 @@ class AccessoryLink(
     }
 
     /** Writes one frame. False once the link is closed or the write failed (which closes it). */
-    fun send(kind: Int, flags: Int, ptsUs: Long, payload: ByteArray, offset: Int = 0, length: Int = payload.size): Boolean {
+    fun send(kind: Int, flags: Int, ptsUs: Long, payload: ByteArray, offset: Int = 0, length: Int = payload.size): Boolean =
+        sendFramed(UsbFrame.encode(kind, flags, ptsUs, payload, offset, length))
+
+    /** Writes a frame already laid out by [UsbFrame.framed] / [UsbFrame.encode]. Same result as [send]. */
+    fun sendFramed(frame: ByteArray): Boolean {
         if (closed) return false
-        val frame = UsbFrame.encode(kind, flags, ptsUs, payload, offset, length)
         return try {
-            synchronized(writeLock) { output.write(frame) }
-            bytesSent += frame.size
+            synchronized(writeLock) {
+                output.write(frame)
+                // Inside the lock: video, audio and mic threads all count here.
+                bytesSent += frame.size
+            }
             true
         } catch (e: IOException) {
             close("write failed: ${e.message}")

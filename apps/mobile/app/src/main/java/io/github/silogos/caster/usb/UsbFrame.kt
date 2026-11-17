@@ -23,12 +23,20 @@ object UsbFrame {
     const val FLAG_CONFIG = 0x2
 
     /** One frame, header and payload in a single array (one bulk write). */
-    fun encode(kind: Int, flags: Int, ptsUs: Long, payload: ByteArray, offset: Int = 0, length: Int = payload.size): ByteArray {
+    fun encode(kind: Int, flags: Int, ptsUs: Long, payload: ByteArray, offset: Int = 0, length: Int = payload.size): ByteArray =
+        framed(kind, flags, ptsUs, length).also { System.arraycopy(payload, offset, it, HEADER_LEN, length) }
+
+    /**
+     * A frame with its header written and [length] payload bytes left to
+     * fill from [HEADER_LEN] on: a sender that already holds the payload
+     * elsewhere (the encoder's output buffer) copies it once, straight in.
+     */
+    fun framed(kind: Int, flags: Int, ptsUs: Long, length: Int): ByteArray {
         require(length in 0..MAX_PAYLOAD) { "payload of $length bytes over the cap" }
-        val out = ByteBuffer.allocate(HEADER_LEN + length).order(ByteOrder.BIG_ENDIAN)
-        out.put(LINK_VERSION.toByte()).put(kind.toByte()).putShort(flags.toShort()).putLong(ptsUs).putInt(length)
-        out.put(payload, offset, length)
-        return out.array()
+        val out = ByteArray(HEADER_LEN + length)
+        ByteBuffer.wrap(out).order(ByteOrder.BIG_ENDIAN)
+            .put(LINK_VERSION.toByte()).put(kind.toByte()).putShort(flags.toShort()).putLong(ptsUs).putInt(length)
+        return out
     }
 
     data class Frame(val kind: Int, val flags: Int, val ptsUs: Long, val payload: ByteArray) {

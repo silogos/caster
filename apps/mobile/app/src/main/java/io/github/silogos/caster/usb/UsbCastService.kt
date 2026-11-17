@@ -169,7 +169,7 @@ class UsbCastService : Service() {
             software = config.encoderImpl == io.github.silogos.caster.config.EncoderImplementation.SOFTWARE,
             highProfile = config.h264HighProfile,
             densityDpi = resources.displayMetrics.densityDpi,
-            onAccessUnit = { f, pts, data -> UsbLink.sendMedia(UsbFrame.KIND_VIDEO, f, pts, data) },
+            onFrame = UsbLink::sendFramed,
             onStopped = { reason -> main.post { endCast("video encoder stopped: $reason") } },
         )
         micDevice = config.micDevice
