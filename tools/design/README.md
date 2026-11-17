@@ -55,6 +55,25 @@
    - **FigCraft validation.** Open the file in FigCraft, which validates it (`FigCraft --control PORT … FILE`, then `document.inspect` / `node.get`; `ui.screenshot` returns the window as a PNG, to look at a page that has no exported render).
    - **Visual.** Compare the frames with the exported PNGs.
 
+## The USB cast page
+
+`build_usb_cast_spec.py` writes the page **"Mobile design v3 · USB cast (ADR-034)"** into `designs/mobile-app.figcraft`, replacing an earlier copy of it. It is drawn ahead of the code, in the same DSL and auto layout. It has four app screens: cable ready, on air by cable, cable refused, and Scan with a cable but no pairing. It also has Android's own two dialogs (S1 the accessory prompt, S2 the capture consent) and the **flow** table, which shows each step on the phone and on the Mac and names the screen or desktop frame for each. Renders: `designs/preview/mobile-usb-cast.png`, `designs/preview/mobile-usb-flow.png`.
+
+`build_desktop_usb_cast.py` writes the receiver's side into `designs/desktop-signal-deck.figcraft` as frames **10–14**, copied from frames 07 and 01 as absolute layers: connected by cable, on air by cable, cable unplugged, the QR hero when the phone on the cable isn't paired, and (14) the deck opened with a saved phone that isn't connected yet, instead of the QR. Render: `designs/preview/desktop-10-14-usb-cast.png`.
+
+```bash
+python3 -I tools/design/build_usb_cast_spec.py /tmp/usb-cast.figcraft --into designs/mobile-app.figcraft
+python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 3
+python3 -I tools/design/build_desktop_usb_cast.py designs/desktop-signal-deck.figcraft   # 10–14
+```
+
+`build_usb_profiles_spec.py` writes **"Mobile design v4 · Profiles over the cable"** (decided 2026-11-17). It shows one profile list for both links: E1 tags the Wi-Fi-only fields where they stand, and E2 gathers them in one card. H1 is Home with the cable in: **Capture** (1920 px · 120 fps · 20–30 Mbps, BEST OVER USB) is a built-in profile, and the cable picks it by itself (the CABLE tag), while Wi-Fi keeps the user's pick. Product owner, 2026-11-17. H2 shows any profile taking the cable over with "Use when the cable is in". It also has the field map and the open questions. Renders: `designs/preview/mobile-usb-profiles-edit.png`, `designs/preview/mobile-usb-profiles-list.png`.
+
+```bash
+python3 -I tools/design/build_usb_profiles_spec.py /tmp/usb-profiles.figcraft --into designs/mobile-app.figcraft
+python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 4
+```
+
 ## The desktop receiver's sound and the Caster devices
 
 `designs/desktop-signal-deck.figcraft` holds the native receiver's deck. Two builders add proposals to it as absolute layers copied from the existing frames. They do not use auto layout, so `check_auto_layout.py` does not apply.
