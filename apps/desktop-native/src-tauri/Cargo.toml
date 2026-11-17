@@ -34,6 +34,8 @@ anyhow = "1"
 log = { version = "0.4", features = ["std"] }
 libc = "0.2"
 livekit = "0.10"
+# The USB link (ADR-034): libusb built from source and linked in (LGPL; the app source is public), so no Homebrew libusb is needed.
+rusb = { version = "0.9", features = ["vendored"] }
 
 [lib]
 name = "desktop_native_lib"

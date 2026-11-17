@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The USB link (ADR-034, docs/architecture/usb-link.md): the receiver
+     switches the phone into accessory mode with these identity strings, and
+     Android offers to open Caster for them. -->
+<resources>
+    <usb-accessory manufacturer="Caster" model="Caster Receiver" />
+</resources>

@@ -97,6 +97,8 @@ import com.zerofriction.localcast.ui.profiles.AddProfileSheet
 import com.zerofriction.localcast.ui.settings.SettingsViewModel
 import com.zerofriction.localcast.ui.settings.settingsFactory
 import com.zerofriction.localcast.ui.theme.LocalCastTheme
+import com.zerofriction.localcast.usb.UsbCastService
+import com.zerofriction.localcast.usb.UsbLink
 
 /**
  * The Home hub (designs/mobile-app.html — the broadcast-console redesign):
@@ -129,6 +131,10 @@ fun HomeScreen(
     val audioRouting by CastService.audioRouting.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val encoderInUse by CastService.encoderImplementation.collectAsStateWithLifecycle()
+    val usbState by UsbLink.state.collectAsStateWithLifecycle()
+    val usbGameAudio by UsbCastService.gameAudioState.collectAsStateWithLifecycle()
+    val usbMicState by UsbCastService.micState.collectAsStateWithLifecycle()
+    val usbCasting = usbState is UsbLink.State.Casting
 
     // No pairing session → nothing to show here: back to the scan screen.
     LaunchedEffect(connection) {
@@ -176,6 +182,10 @@ fun HomeScreen(
         )
         if (!started) ConnectedDesktop.takeBack(signaling)
     }
+    // A cast over the cable (ADR-034): the same consent ladder, its own service.
+    val shareOverUsb = rememberShareScreenFlow { consentData ->
+        UsbCastService.start(context, consentData)
+    }
     // The mic row follows RECORD_AUDIO itself, casting or not (review group
     // F): once Android stops asking, a repeat request is an instant denial
     // with no dialog — the switch used to do nothing — so the row offers
@@ -221,7 +231,8 @@ fun HomeScreen(
         connection = connection,
         pairingState = pairingState,
         gameAudioState = gameAudioState,
-        micState = micState,
+        // A cable cast's mic has its own state; the row shows whichever cast runs.
+        micState = if (usbCasting) usbMicState else micState,
         micPermission = micPermission,
         onOpenMicSettings = openMicSettings,
         thermalState = thermalState,
@@ -234,9 +245,19 @@ fun HomeScreen(
             if (castState is CastState.Casting && (gameAudioState == GameAudioState.Muted) != !on) {
                 CastService.requestToggleGameAudio(context)
             }
+            if (usbState is UsbLink.State.Casting && usbGameAudio != GameAudioState.Off &&
+                (usbGameAudio == GameAudioState.Muted) != !on
+            ) {
+                UsbCastService.requestToggleGameAudio(context)
+            }
         },
         onSetMic = { on ->
             settingsViewModel.setMic(on)
+            if (usbCasting && on != (usbMicState != MicState.Off && usbMicState != MicState.NeedsPermission) &&
+                !(on && micPermission != MicPermission.Granted)
+            ) {
+                UsbCastService.requestToggleMic(context)
+            }
             val recording = micState != MicState.Off && micState != MicState.NeedsPermission
             when {
                 on && micPermission == MicPermission.Blocked -> openMicSettings()
@@ -268,12 +289,16 @@ fun HomeScreen(
         onDuplicateProfile = { id -> settingsViewModel.duplicateProfile(id) },
         onDeleteProfile = settingsViewModel::deleteProfile,
         onApplyLiveQuality = { level -> CastService.requestSetLiveQuality(context, level) },
+        onUseForCable = settingsViewModel::selectForCable,
         vcState = vcState,
         onToggleVirtualCamera = { CastService.requestToggleVirtualCamera(context) },
         audioRouting = audioRouting,
         onSetAudioRouting = { mode -> CastService.requestSetAudioRouting(context, mode) },
         onShareScreen = shareScreen,
         onStopShareScreen = { CastService.requestStop(context) },
+        usbState = usbState,
+        onShareOverUsb = shareOverUsb,
+        onStopUsb = { UsbCastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
         onTerminate = { CastService.requestTerminate(context) },
         onConnectSaved = { viewModel.connectSaved() },
@@ -318,12 +343,17 @@ fun HomeContent(
     onDuplicateProfile: (Int) -> Unit = {},
     onDeleteProfile: (Int) -> Unit = {},
     onApplyLiveQuality: (QualityLevel) -> Unit = {},
+    onUseForCable: (ProfileSelection) -> Unit = {},
     vcState: VirtualCameraUiState = VirtualCameraUiState(),
     onToggleVirtualCamera: () -> Unit = {},
     audioRouting: AudioRoutingUiState = AudioRoutingUiState(),
     onSetAudioRouting: (String) -> Unit = {},
         onShareScreen: () -> Unit = {},
         onStopShareScreen: () -> Unit = {},
+        /** The cable link (ADR-034); None hides everything USB. */
+        usbState: UsbLink.State = UsbLink.State.None,
+        onShareOverUsb: () -> Unit = {},
+        onStopUsb: () -> Unit = {},
         onDisconnect: () -> Unit = {},
         onTerminate: () -> Unit = {},
         onConnectSaved: () -> Unit = {},
@@ -334,7 +364,10 @@ fun HomeContent(
         onStopHotspot: () -> Unit = {},
     ) {
     val casting = castState is CastState.Casting
-    val annunc = annunciatorFor(castState)
+    val usbCasting = usbState is UsbLink.State.Casting
+    // The cable takes Share screen only while no Wi-Fi cast is starting or running.
+    val usbReady = usbState is UsbLink.State.Ready && !casting && castState !is CastState.Starting
+    val annunc = if (usbCasting) ConsoleAnnunciator.ON_AIR else annunciatorFor(castState)
     val connected = connection is ConnectedDesktop.State.Connected
     val saved = connection as? ConnectedDesktop.State.Saved
     val reconnecting = pairingState is PairingClient.State.Connecting ||
@@ -387,7 +420,7 @@ fun HomeContent(
                 }
                 .padding(bottom = 14.dp),
         ) {
-            BrandMark(onAir = casting)
+            BrandMark(onAir = casting || usbCasting)
             Text(
                 text = stringResource(R.string.app_name),
                 fontSize = 12.sp,
@@ -471,9 +504,24 @@ fun HomeContent(
             HotspotCard(state = hotspotState, onStop = onStopHotspot, onRetry = onStartHotspot)
         }
 
+        // ---- The cable (ADR-034, design v3 U1–U3) ----
+        val cableProfileName = when (val cable = settings.cableSelection) {
+            is ProfileSelection.BuiltIn -> profileName(cable.profile)
+            is ProfileSelection.Custom -> settings.customProfile(cable.id)?.name ?: ""
+        }
+        UsbLinkCard(
+            state = usbState,
+            onScanQr = onScanQr,
+            cableProfileName = cableProfileName,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+
         // ---- The transport control: amber to go, outlined to stop ----
         // (stopping leaves the pairing connected — only the video stops)
-        if (castState is CastState.Starting) {
+        if (usbCasting || usbReady) {
+            // Over the cable: the same two buttons, driving the USB cast.
+            CastTransportButton(go = !usbCasting, onClick = if (usbCasting) onStopUsb else onShareOverUsb)
+        } else if (castState is CastState.Starting) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -538,6 +586,9 @@ fun HomeContent(
             startedAtMillis = (castState as? CastState.Casting)?.startedAtMillis ?: 0L,
             onSelect = onSelectProfile,
             onApplyLive = onApplyLiveQuality,
+            // The cable in and no Wi-Fi cast running: the list is the cable's (ADR-034).
+            cable = (usbState is UsbLink.State.Ready || usbCasting) && !casting,
+            onUseForCable = onUseForCable,
             onAddProfile = { addingProfile = true },
             onEditProfile = onEditProfile,
             onDuplicateProfile = onDuplicateProfile,
@@ -595,10 +646,12 @@ fun HomeContent(
             // as on — the switch lied while nothing recorded), casting or not;
             // the row says why and, once Android stops asking, offers the way
             // to settings.
+            // A cable cast is a cast for the mic row too (ADR-034): its mic state is passed in.
+            val micCasting = casting || usbCasting
             val needsPermission = settings.mic &&
-                (micPermission != MicPermission.Granted || (casting && micState == MicState.NeedsPermission))
+                (micPermission != MicPermission.Granted || (micCasting && micState == MicState.NeedsPermission))
             val micBlocked = needsPermission && micPermission == MicPermission.Blocked
-            val micOn = !needsPermission && if (casting) micState != MicState.Off else settings.mic
+            val micOn = !needsPermission && if (micCasting) micState != MicState.Off else settings.mic
             val effectiveDevice = if (casting) (micRouting?.effective ?: settings.micDevice) else settings.micDevice
             IconListRow(
                 iconRes = R.drawable.ic_mic,
@@ -607,7 +660,7 @@ fun HomeContent(
                     micBlocked -> stringResource(R.string.mic_blocked)
                     needsPermission -> stringResource(R.string.mic_needs_access)
                     !micOn -> stringResource(R.string.home_mic_hint)
-                    casting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
+                    micCasting -> stringResource(R.string.mic_recording_from, micSourceName(effectiveDevice))
                     else -> stringResource(R.string.mic_records_from, micSourceName(effectiveDevice))
                 },
                 fact = when (micState) {
@@ -738,6 +791,42 @@ private fun OnAirHero(
         // session is deliberate, so it sits next to — quieter than — the
         // connection-level action, never replacing it.
         CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminate, quiet = true)
+    }
+}
+
+/** Share screen (amber, [go]) or Stop share screen (outlined) — the transport's two faces. */
+@Composable
+private fun CastTransportButton(go: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    val modifier = Modifier
+        .fillMaxWidth()
+        .padding(top = 16.dp)
+        .heightIn(min = 54.dp)
+    if (go) {
+        Button(
+            onClick = onClick,
+            shape = shape,
+            modifier = modifier,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+        ) {
+            Text(text = stringResource(R.string.share_screen_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            shape = shape,
+            modifier = modifier,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+        ) {
+            Text(text = stringResource(R.string.stop_share_screen), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 

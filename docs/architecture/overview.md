@@ -25,8 +25,8 @@ Mobile:   open app → scan QR → connected → [Start Cast] → play
 
 1. **Mobile controls. Desktop receives.** The Android app owns every cast decision. The desktop is a receiver plus environment controls only.
 2. **Scan → Start → Play.** The normal flow must require the fewest possible actions and no technical understanding (no IP addresses, no codecs, no ICE).
-3. **No USB, no ADB, no Developer Options** in the end-user workflow. Android platform APIs only.
-4. **LAN only.** No internet relay, no STUN/TURN servers, no accounts.
+3. **No ADB, no Developer Options** in the end-user workflow. Android platform APIs only; a USB cable is allowed only through the public accessory API, Android Open Accessory ([ADR-034](../decisions/ADR-034-usb-cast-over-aoa.md), [usb-link.md](usb-link.md)).
+4. **Local only (LAN or cable).** No internet relay, no STUN/TURN servers, no accounts. Wi-Fi is the default link; USB is optional (ADR-034).
 5. **Simple user-facing errors.** Technical detail stays in logs.
 
 ## Component responsibilities

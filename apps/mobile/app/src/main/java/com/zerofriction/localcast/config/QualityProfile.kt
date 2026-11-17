@@ -77,6 +77,21 @@ enum class QualityProfile(
         h264HighProfile = true,
         degradation = DegradationStrategy.MAINTAIN_RESOLUTION,
     ),
+    /**
+     * Capture-card quality over the USB cable (ADR-034; product owner
+     * 2026-11-17): 120 fps and a bitrate a cable carries easily. The cable
+     * picks it by itself ([CastSettings.cableSelection]); over Wi-Fi it can be
+     * picked too, and the cast lowers it when the network can't keep up.
+     */
+    CAPTURE(
+        label = "capture",
+        longEdgePx = 1920,
+        fps = 120,
+        bitrateMinBps = 20_000_000,
+        bitrateMaxBps = 30_000_000,
+        h264HighProfile = true,
+        degradation = DegradationStrategy.MAINTAIN_FRAMERATE,
+    ),
 }
 
 /**
@@ -89,11 +104,15 @@ object CastSettingChoices {
     val LONG_EDGE_CHOICES = listOf(960, 1280, 1920)
 
     /** Encoder frame-rate options. */
-    val FPS_CHOICES = listOf(30, 60)
+    val FPS_CHOICES = listOf(30, 60, 120)
 
     /** The bitrate slider's ends (bps): the lowest "least" and the highest "most" a profile may have. */
     const val BITRATE_SLIDER_MIN_BPS = 1_000_000
-    const val MANUAL_BITRATE_MAX_BPS = 20_000_000
+    const val MANUAL_BITRATE_MAX_BPS = 40_000_000
+
+    /** A profile above either of these is tagged "Best over USB" (ADR-034): Wi-Fi rarely carries it. */
+    const val BEST_OVER_USB_FPS_ABOVE = 60
+    const val BEST_OVER_USB_BITRATE_ABOVE_BPS = 20_000_000
 
     /** The slider's step, and the smallest range it allows between its two thumbs. */
     const val BITRATE_STEP_BPS = 1_000_000

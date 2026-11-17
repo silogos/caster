@@ -1,5 +1,9 @@
 package com.zerofriction.localcast.ui.pairing
 
+import com.zerofriction.localcast.ui.components.CastCard
+import com.zerofriction.localcast.ui.components.IconListRow
+import com.zerofriction.localcast.ui.home.UsbPill
+import com.zerofriction.localcast.usb.UsbLink
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -392,6 +396,24 @@ private fun ScannerOverlay(
                 .align(Alignment.TopCenter)
                 .padding(top = 22.dp),
         )
+
+        // A cable in, but this phone never paired (ADR-034, design v3 U4):
+        // say why the cable alone isn't enough.
+        val usb by UsbLink.state.collectAsStateWithLifecycle()
+        if (usb == UsbLink.State.NotPaired) {
+            CastCard(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp, start = 20.dp, end = 20.dp),
+            ) {
+                IconListRow(
+                    iconRes = R.drawable.ic_usb,
+                    title = stringResource(R.string.usb_not_paired_title),
+                    sub = stringResource(R.string.usb_not_paired_sub),
+                    right = { UsbPill() },
+                )
+            }
+        }
 
         // The stage (cutout) + caption group, centered as one block.
         Column(

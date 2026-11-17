@@ -107,6 +107,8 @@ object CastSettingsCodec {
         val gameAudio: Boolean,
         val mic: Boolean,
         val micDevice: String,
+        /** The cable's profile (ADR-034), written like [selected]. Absent before it existed → Capture. */
+        val cable: String? = null,
     )
 
     /** A v1–v6 document. Fields a version did not have yet take the default shipped with it. */
@@ -133,16 +135,32 @@ object CastSettingsCodec {
     fun encode(settings: CastSettings): String = json.encodeToString(
         Stored(
             v = VERSION,
-            selected = when (val selection = settings.selection) {
-                is ProfileSelection.BuiltIn -> SELECTED_BUILT_IN + selection.profile.label
-                is ProfileSelection.Custom -> SELECTED_CUSTOM + selection.id
-            },
+            selected = settings.selection.toStored(),
             profiles = settings.customProfiles.map { StoredProfile(it.id, it.name, it.values.toStored()) },
             gameAudio = settings.gameAudio,
             mic = settings.mic,
             micDevice = settings.micDevice.label,
+            cable = settings.cableSelection.toStored(),
         ),
     )
+
+    private fun ProfileSelection.toStored(): String = when (this) {
+        is ProfileSelection.BuiltIn -> SELECTED_BUILT_IN + profile.label
+        is ProfileSelection.Custom -> SELECTED_CUSTOM + id
+    }
+
+    /** `builtin:<label>` / `custom:<id>` back to a selection; null when it names no profile. */
+    private fun parseSelection(stored: String, profiles: List<CustomProfile>): ProfileSelection? = when {
+        stored.startsWith(SELECTED_BUILT_IN) -> {
+            val label = stored.removePrefix(SELECTED_BUILT_IN)
+            QualityProfile.entries.firstOrNull { it.label == label }?.let { ProfileSelection.BuiltIn(it) }
+        }
+        stored.startsWith(SELECTED_CUSTOM) -> {
+            val id = stored.removePrefix(SELECTED_CUSTOM).toIntOrNull()
+            if (id != null && profiles.any { it.id == id }) ProfileSelection.Custom(id) else null
+        }
+        else -> null
+    }
 
     /** Null on anything this build can't fully validate — caller falls back to defaults. */
     fun decode(document: String): CastSettings? = try {
@@ -164,24 +182,18 @@ object CastSettingsCodec {
             CustomProfile(profile.id, profile.name, profile.values.toValues() ?: return null)
         }
         if (profiles.map { it.id }.toSet().size != profiles.size) return null
-        val selection = when {
-            stored.selected.startsWith(SELECTED_BUILT_IN) -> {
-                val label = stored.selected.removePrefix(SELECTED_BUILT_IN)
-                ProfileSelection.BuiltIn(QualityProfile.entries.firstOrNull { it.label == label } ?: return null)
-            }
-            stored.selected.startsWith(SELECTED_CUSTOM) -> {
-                val id = stored.selected.removePrefix(SELECTED_CUSTOM).toIntOrNull() ?: return null
-                if (profiles.none { it.id == id }) return null
-                ProfileSelection.Custom(id)
-            }
-            else -> return null
-        }
+        val selection = parseSelection(stored.selected, profiles) ?: return null
+        // A document from before the cable profile reads Capture; one naming a
+        // profile this build doesn't have falls back to Capture too (the cable
+        // choice must never cost the user their whole settings).
+        val cable = stored.cable?.let { parseSelection(it, profiles) } ?: ProfileSelection.BuiltIn(QualityProfile.CAPTURE)
         return CastSettings(
             selection = selection,
             customProfiles = profiles,
             gameAudio = stored.gameAudio,
             mic = stored.mic,
             micDevice = MicDeviceSource.fromLabel(stored.micDevice) ?: return null,
+            cableSelection = cable,
         )
     }
 

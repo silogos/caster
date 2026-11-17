@@ -39,6 +39,11 @@ class SettingsViewModel(
         update { it.withSelection(ProfileSelection.Custom(id)) }
     }
 
+    /** Makes [target] the profile a cast over the USB cable uses (ADR-034); the Wi-Fi pick stays. */
+    fun selectForCable(target: ProfileSelection) {
+        update { it.withCableSelection(target) }
+    }
+
     /** Adds the user's profile [name] holding [values] and selects it; the new id, or null when it was refused. */
     fun addProfile(name: String, values: ProfileValues): Int? {
         val before = _settings.value

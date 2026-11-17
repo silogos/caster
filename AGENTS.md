@@ -13,9 +13,9 @@ This is **Caster** (called Zero-Friction Local Cast until v0.2.0): an Android â†
 
 - **Mobile controls. Desktop receives.** All cast configuration (resolution, FPS, bitrate, codec preferences, audio sources, thermal profile) belongs to the Android app. The desktop may expose only receiver/environment controls (volume, window behavior). Never duplicate a cast setting on the desktop.
 - **Game audio and microphone are separate tracks**, end to end. Never mix them on Android.
-- **The end-user workflow must never require USB, ADB, or Developer Options.** Prefer Android platform APIs (`MediaProjection`, `AudioPlaybackCapture`, foreground services, hardware encoders).
+- **The end-user workflow must never require ADB or Developer Options.** Prefer Android platform APIs (`MediaProjection`, `AudioPlaybackCapture`, foreground services, hardware encoders). A USB cable is an optional link, only through Android Open Accessory ([ADR-034](docs/decisions/ADR-034-usb-cast-over-aoa.md)); Wi-Fi never needs it.
 - **Simple user-facing errors.** Show "Couldn't connect to the desktop. Make sure both devices are on the same Wi-Fi network." â€” not "ICE candidate gathering failed". Technical detail goes to logs.
-- **LAN only.** No STUN/TURN, no internet relay, no accounts, no cloud.
+- **Local only (LAN or cable).** No STUN/TURN, no internet relay, no accounts, no cloud.
 
 ## Architecture rules
 

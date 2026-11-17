@@ -28,7 +28,12 @@ internal class CastNotifications(private val context: Context) {
         )
     }
 
-    fun build(desktopName: String, textOverride: String? = null): Notification {
+    fun build(
+        desktopName: String,
+        textOverride: String? = null,
+        /** What the Stop action sends: the Wi-Fi cast's stop by default, the USB cast's for a cable cast. */
+        stop: Intent = CastService.stopIntent(context),
+    ): Notification {
         val openApp = PendingIntent.getActivity(
             context,
             0,
@@ -38,7 +43,7 @@ internal class CastNotifications(private val context: Context) {
         val stopCast = PendingIntent.getService(
             context,
             1,
-            CastService.stopIntent(context),
+            stop,
             PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(context, CHANNEL_ID)

@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zerofriction.localcast.R
 import com.zerofriction.localcast.adaptive.QualityLevel
+import com.zerofriction.localcast.config.CastSettingChoices
 import com.zerofriction.localcast.config.CastSettings
 import com.zerofriction.localcast.config.CustomProfile
 import com.zerofriction.localcast.config.CustomProfileRules
@@ -91,12 +92,19 @@ fun QualityConsoleCard(
     onDeleteProfile: (Int) -> Unit,
     modifier: Modifier = Modifier,
     statusRows: @Composable () -> Unit = {},
+    /** The USB cable is in (ADR-034): the list shows and picks the cable's profile. */
+    cable: Boolean = false,
+    onUseForCable: (ProfileSelection) -> Unit = {},
 ) {
     val current: QualityLevel = if (casting) liveQuality ?: settings.active.toLevel() else settings.active.toLevel()
-    val lit = litSelection(casting, settings, current)
+    val lit = if (cable && !casting) settings.cableSelection else litSelection(casting, settings, current)
     var deleting by remember { mutableStateOf<CustomProfile?>(null) }
     val pick: (ProfileSelection, ProfileValues) -> Unit = { selection, values ->
-        if (casting) onApplyLive(values.toLevel()) else onSelect(selection)
+        when {
+            casting -> onApplyLive(values.toLevel())
+            cable -> onUseForCable(selection)
+            else -> onSelect(selection)
+        }
     }
 
     CastCard(modifier = modifier) {
@@ -111,6 +119,7 @@ fun QualityConsoleCard(
                 selected = lit == selection,
                 topDivider = preset != QualityProfile.entries.first(),
                 onClick = { pick(selection, preset.toValues()) },
+                usbTags = usbTags(preset.toValues(), settings.cableSelection == selection),
             )
         }
 
@@ -127,10 +136,12 @@ fun QualityConsoleCard(
                 selected = lit == selection,
                 topDivider = index > 0,
                 onClick = { pick(selection, profile.values) },
+                usbTags = usbTags(profile.values, settings.cableSelection == selection),
                 menu = ProfileMenu(
                     onEdit = { onEditProfile(profile.id) },
                     onDuplicate = { onDuplicateProfile(profile.id) }.takeIf { settings.canAddProfile },
                     onDelete = { deleting = profile },
+                    onUseForCable = { onUseForCable(selection) }.takeIf { settings.cableSelection != selection },
                 ),
             )
         }
@@ -142,6 +153,7 @@ fun QualityConsoleCard(
                     stringResource(R.string.profiles_foot_full, CustomProfileRules.MAX_PROFILES)
 
                 casting -> stringResource(R.string.profiles_foot_live)
+                cable -> stringResource(R.string.profiles_foot_cable)
                 else -> stringResource(R.string.profiles_foot_next_cast)
             },
         )
@@ -261,6 +273,17 @@ private class ProfileMenu(
     val onEdit: () -> Unit,
     val onDuplicate: (() -> Unit)?,
     val onDelete: () -> Unit,
+    /** Make this the cable's profile (ADR-034); null when it already is. */
+    val onUseForCable: (() -> Unit)? = null,
+)
+
+/** The link tags of a row (ADR-034): BEST OVER USB for what Wi-Fi rarely carries, CABLE for the cable's profile. */
+private class UsbTags(val bestOverUsb: Boolean, val cable: Boolean)
+
+private fun usbTags(values: ProfileValues, isCable: Boolean) = UsbTags(
+    bestOverUsb = values.fps > CastSettingChoices.BEST_OVER_USB_FPS_ABOVE ||
+        values.bitrateMaxBps > CastSettingChoices.BEST_OVER_USB_BITRATE_ABOVE_BPS,
+    cable = isCable,
 )
 
 /** A profile row: radio + name with its pressure tag + the built-in's intent + the real numbers. */
@@ -274,6 +297,7 @@ private fun ProfileRow(
     topDivider: Boolean,
     onClick: () -> Unit,
     menu: ProfileMenu? = null,
+    usbTags: UsbTags? = null,
 ) {
     val dividerColor = MaterialTheme.colorScheme.outline
     Row(
@@ -330,6 +354,21 @@ private fun ProfileRow(
                     Spacer(Modifier.width(8.dp))
                     PressureTag(text = tag, selected = selected)
                 }
+                if (usbTags != null && (usbTags.bestOverUsb || usbTags.cable)) {
+                    Row(Modifier.padding(top = 4.dp)) {
+                        if (usbTags.bestOverUsb) {
+                            PressureTag(text = stringResource(R.string.profile_tag_best_over_usb), selected = true)
+                        }
+                        if (usbTags.bestOverUsb && usbTags.cable) Spacer(Modifier.width(6.dp))
+                        if (usbTags.cable) {
+                            PressureTag(
+                                text = stringResource(R.string.profile_tag_cable),
+                                selected = false,
+                                ink = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
                 if (intent != null) {
                     Text(
                         text = intent,
@@ -357,8 +396,8 @@ private fun ProfileRow(
 
 /** What the profile gives up first when the network is short, as a quiet tag beside its name. */
 @Composable
-private fun PressureTag(text: String, selected: Boolean) {
-    val ink = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+private fun PressureTag(text: String, selected: Boolean, ink: Color? = null) {
+    val ink = ink ?: if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     Text(
         text = text.uppercase(),
         fontSize = 10.sp,
@@ -410,6 +449,15 @@ private fun ProfileMenuButton(name: String, menu: ProfileMenu, modifier: Modifie
                     onClick = {
                         open = false
                         duplicate()
+                    },
+                )
+            }
+            menu.onUseForCable?.let { useForCable ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.profile_action_use_for_cable)) },
+                    onClick = {
+                        open = false
+                        useForCable()
                     },
                 )
             }
@@ -499,6 +547,7 @@ internal fun profileName(preset: QualityProfile): String = when (preset) {
     QualityProfile.BALANCED -> stringResource(R.string.profile_balanced)
     QualityProfile.PERFORMANCE -> stringResource(R.string.profile_performance)
     QualityProfile.SHARP -> stringResource(R.string.profile_sharp)
+    QualityProfile.CAPTURE -> stringResource(R.string.profile_capture)
 }
 
 /**
@@ -511,6 +560,7 @@ private fun profileIntent(preset: QualityProfile): String = when (preset) {
     QualityProfile.BALANCED -> stringResource(R.string.profile_intent_balanced)
     QualityProfile.PERFORMANCE -> stringResource(R.string.profile_intent_performance)
     QualityProfile.SHARP -> stringResource(R.string.profile_intent_sharp)
+    QualityProfile.CAPTURE -> stringResource(R.string.profile_intent_capture)
 }
 
 /** A profile's real numbers as a tabular spec (the prototype's .pick-spec). */

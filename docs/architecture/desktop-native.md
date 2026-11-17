@@ -112,6 +112,19 @@ UI → server requests travel a `ServerCommand` channel into the signaling threa
 
 **Stay-awake:** while the media pc is connected an IOKit assertion prevents display sleep (Electron's `powerSaveBlocker('prevent-display-sleep')`, Phase 14) — check with `pmset -g assertions` during a cast.
 
+## USB link (ADR-034)
+
+`usb_link.rs` runs on its own thread, alongside signaling:
+- It polls USB, switches Android phones to accessory mode, and claims Caster's accessory.
+- It authenticates the phone with the same trust store (`usb_protocol.rs`, [usb-link.md](usb-link.md)).
+- While a cable cast runs, it decodes inline with VideoToolbox (`h264.rs`, `native/h264_decoder.m`) and hands each NV12 pixel buffer to `Renderer::render_decoded`, zero-copy (ADR-031): the Wi-Fi path's pacer, layer and Syphon.
+- Game audio goes to `audio::feed_dc_pcm16`, and the mic (48 kHz mono on the link) to the mic engine, on both channels.
+- The deck opens on a saved phone offline (`saved_phone`, frame 14) rather than the QR, and the video window's open/closed state is kept in the receiver settings (`videoOpen`).
+- The deck and tray get `pairing:mobile-state` as for a Wi-Fi phone.
+- A new cable stream retires a Wi-Fi frame loop through `video::begin_stream`, and the reverse is also true.
+
+libusb is built into the app (`rusb` with `vendored`). Logs use the `usb` scope. Behavior and measurements: [features/usb-cast.md](../features/usb-cast.md).
+
 ## Logging
 
 Leveled (`logging.rs`), local time, app scopes `signaling` / `webrtc` / `audio` / `video` / `pairing`; dependencies only at WARN+. Never logged: the session secret, trustKey, MACs, audio samples, frames. The webrtc state lines carry `pc=media|mic`.

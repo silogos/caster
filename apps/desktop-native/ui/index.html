@@ -74,6 +74,16 @@
       .pill.live::before { background: var(--tally); }
       .pill.connected::before { background: var(--ok); }
       .pill.reconnecting::before { background: var(--caution); }
+      /* The link a phone is on (ADR-034, frames 10–12): a tag beside SOURCE. */
+      .link-tag {
+        display: inline-block; margin-left: 10px; padding: 2px 9px; border-radius: 999px; vertical-align: 1px;
+        font: 700 10px var(--mono, ui-monospace, monospace); letter-spacing: 0.1em;
+        color: var(--signal); background: #12382f;
+      }
+      .link-tag.dim { color: var(--muted); background: #161b21; }
+      .link-tag.hidden, .hint.hidden { display: none; }
+      .btn:disabled { opacity: 0.45; cursor: default; }
+      .hint .link { font-size: 12px; }
       .link {
         background: none; border: none; padding: 4px 0; margin-top: 8px; cursor: pointer;
         font: 600 15px var(--body); color: var(--signal); white-space: nowrap;
@@ -216,7 +226,7 @@
 
         <div class="source">
           <div style="flex: 1; min-width: 0">
-            <div class="label">Source</div>
+            <div class="label">Source<span id="link-tag" class="link-tag hidden">USB</span></div>
             <div id="phone-name" class="source-name">Android device</div>
             <div id="status-pill" class="pill connected">Connected — start casting from your phone</div>
           </div>
@@ -224,7 +234,8 @@
         </div>
 
         <button id="video-toggle" class="btn btn-primary">Open video</button>
-        <div class="hint">Video plays while the video window is open.</div>
+        <div id="video-hint" class="hint">Video plays while the video window is open.</div>
+        <div id="show-qr-hint" class="hint hidden"><button id="show-qr" class="link">Pair a different phone? Show QR code</button></div>
 
         <div class="card">
           <div class="card-head"><span class="label">Status</span></div>

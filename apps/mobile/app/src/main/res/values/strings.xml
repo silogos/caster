@@ -120,10 +120,24 @@
     <string name="profile_balanced">Balanced</string>
     <string name="profile_performance">Performance</string>
     <string name="profile_sharp">Sharp</string>
+    <string name="profile_capture">Capture</string>
     <string name="profile_intent_cool">Lowest heat — best for long sessions and warm devices.</string>
     <string name="profile_intent_balanced">The default — good for most games.</string>
     <string name="profile_intent_performance">Smoother motion for fast games; more heat.</string>
     <string name="profile_intent_sharp">Highest detail; the most heat.</string>
+    <string name="profile_intent_capture">Capture-card quality over the USB cable. Picked by itself when the cable is in.</string>
+    <!-- USB cast profiles (ADR-034, design v4) -->
+    <string name="profile_tag_best_over_usb">Best over USB</string>
+    <string name="profile_tag_cable">Cable</string>
+    <string name="profile_action_use_for_cable">Use when the cable is in</string>
+    <string name="profiles_foot_cable">For the next cast over the cable. The profile you tap here is the cable\'s; Wi-Fi keeps its own pick.</string>
+    <string name="usb_ready_profile">Using %1$s while the cable is in.</string>
+    <string name="profile_wifi_only">Wi-Fi only</string>
+    <string name="profile_hint_fps_120">120 fps is smoothest over the USB cable. Over Wi-Fi the cast lowers it when the network can\'t keep up.</string>
+    <string name="profile_hint_codec_cable">Over the cable the video is always H.264.</string>
+    <string name="profile_hint_audio_cable">Over the cable the audio is always raw sound — the lowest delay, whatever this says.</string>
+    <string name="profile_hint_pressure_cable">The cable never slows down, so this only matters over Wi-Fi.</string>
+    <string name="profile_hint_bitrate_cable">Over the cable the cast runs at the most (%1$d Mbps). Over Wi-Fi it moves inside the range by itself; the least is Wi-Fi\'s floor.</string>
     <string name="settings_resolution">Resolution (long edge)</string>
     <string name="settings_px">%1$d px</string>
     <string name="settings_fps">Frame rate</string>
@@ -261,4 +275,17 @@
     <string name="hotspot_error_incompatible_mode">A phone setting is blocking the hotspot. Check tethering settings and try again.</string>
     <string name="hotspot_error_os_revoked">The system turned the hotspot off.</string>
     <string name="hotspot_error_unknown">Couldn\'t start the hotspot. Try again.</string>
+    <!-- USB cast (ADR-034, designs/mobile-app.figcraft "Mobile design v3 · USB cast") -->
+    <string name="usb_pill">USB</string>
+    <string name="usb_checking_title">Cable connected</string>
+    <string name="usb_checking_sub">Checking the desktop…</string>
+    <string name="usb_ready_title">Connected by cable</string>
+    <string name="usb_ready_sub">Sharing goes over the USB cable. Wi-Fi isn\'t needed while it\'s plugged in.</string>
+    <string name="usb_casting_title">Sharing by cable</string>
+    <string name="usb_casting_sub">Unplugging the cable stops the cast.</string>
+    <string name="usb_casting_quality">Over the cable the picture stays at the profile for the whole cast: automatic quality and live changes work over Wi-Fi only for now.</string>
+    <string name="usb_refused_title">This desktop doesn\'t know this phone</string>
+    <string name="usb_refused_sub">Scan the desktop\'s QR code over Wi-Fi once, then plug the cable in again.</string>
+    <string name="usb_not_paired_title">Cable connected</string>
+    <string name="usb_not_paired_sub">Pair once over Wi-Fi by scanning the QR code. After that, casting works by cable too.</string>
 </resources>

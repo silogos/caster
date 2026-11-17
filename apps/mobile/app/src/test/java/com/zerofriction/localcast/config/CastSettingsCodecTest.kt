@@ -239,7 +239,7 @@ class CastSettingsCodecTest {
         assertNull(CastSettingsCodec.decode(flat(6, "longEdgePx" to "1000")))
         assertNull(CastSettingsCodec.decode(flat(6, "fps" to "24")))
         assertNull(CastSettingsCodec.decode(flat(6, "bitrateMinBps" to "7000000")))
-        assertNull(CastSettingsCodec.decode(flat(6, "bitrateMaxBps" to "25000000")))
+        assertNull(CastSettingsCodec.decode(flat(6, "bitrateMaxBps" to "45000000")))
         assertNull(CastSettingsCodec.decode(flat(6, "encoderFpsLimit" to "45")))
         assertNull(CastSettingsCodec.decode(flat(6, "degradationStrategy" to "\"vibes\"")))
         assertNull(CastSettingsCodec.decode(flat(6, "micDevice" to "\"telepathy\"")))

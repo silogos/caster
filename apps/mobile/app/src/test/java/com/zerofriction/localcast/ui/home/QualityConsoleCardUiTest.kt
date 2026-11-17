@@ -69,13 +69,16 @@ class QualityConsoleCardUiTest {
     @Test
     fun `the built-in profiles are listed first, then the user's own, each with what it gives up`() {
         show(withMine)
-        for (name in listOf("Cool", "Balanced", "Performance", "Sharp", "Stream 60")) {
+        for (name in listOf("Cool", "Balanced", "Performance", "Sharp", "Capture", "Stream 60")) {
             compose.onNodeWithText(name).assertExists()
         }
         compose.onNodeWithText("Your profiles", ignoreCase = true).assertExists()
-        // Sharp and the copy made from it both keep resolution; Performance keeps frame rate.
+        // Sharp and the copy made from it both keep resolution; Performance and Capture keep frame rate.
         assertEquals(2, compose.onAllNodes(hasText("KEEP RESOLUTION")).fetchSemanticsNodes().size)
-        assertEquals(1, compose.onAllNodes(hasText("KEEP FRAME RATE")).fetchSemanticsNodes().size)
+        assertEquals(2, compose.onAllNodes(hasText("KEEP FRAME RATE")).fetchSemanticsNodes().size)
+        // Capture is the cable's profile (ADR-034) and more than Wi-Fi usually carries.
+        assertEquals(1, compose.onAllNodes(hasText("BEST OVER USB")).fetchSemanticsNodes().size)
+        assertEquals(1, compose.onAllNodes(hasText("CABLE")).fetchSemanticsNodes().size)
         compose.onNodeWithText("1920 px · 60 fps · 8–12 Mbps").assertExists()
     }
 

@@ -43,6 +43,10 @@ pub struct ReceiverSettings {
     pub mic_plays_on: PlaysOn,
     /// The Syphon output for OBS (ADR-021). Off until the user turns it on.
     pub syphon_output: bool,
+    /// Whether the video window was open when the receiver last ran: it opens
+    /// again at launch, so a cast shows without a click (product owner,
+    /// 2026-11-17: "manual, following the last state").
+    pub video_open: bool,
 }
 
 impl Default for ReceiverSettings {
@@ -55,6 +59,7 @@ impl Default for ReceiverSettings {
             mic_muted: true,
             mic_plays_on: PlaysOn::Speaker,
             syphon_output: false,
+            video_open: false,
         }
     }
 }
@@ -123,6 +128,7 @@ mod tests {
             mic_muted: false,
             mic_plays_on: PlaysOn::Caster,
             syphon_output: true,
+            video_open: true,
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -130,6 +136,16 @@ mod tests {
         assert_eq!(s.effective_mic_gain(), 0.7, "the mic's level is its own");
         assert_eq!(ReceiverSettings { game_muted: false, ..s }.effective_game_gain(), 0.4);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_video_windows_last_state_is_kept_and_an_older_file_reads_closed() {
+        let path = settings_path(&scratch("video-open"));
+        let open = ReceiverSettings { video_open: true, ..ReceiverSettings::default() };
+        save(&path, &open).unwrap();
+        assert!(load(&path).video_open);
+        std::fs::write(&path, r#"{"gameVolume":0.5}"#).unwrap();
+        assert!(!load(&path).video_open, "a file from before the field opens closed");
     }
 
     #[test]

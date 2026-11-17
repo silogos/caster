@@ -420,6 +420,41 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **Checked:** `cargo test --lib` 103 passed, 2 ignored. On the device: install from scratch from the deck, both devices carrying the live cast, each track digitally silent on the other's device, sound back within ~1.5 s of a `coreaudiod` restart mid-cast, no old audio on a new capture — numbers in ADR-030 *Verified*. **Not checked:** OBS capturing the devices; the failed path; keyboard focus and VoiceOver on the tooltip; an Intel Mac.
 
+## Feature 2026-11aj — USB cast: video, game audio and the mic over the cable ✅ implemented, verified on the device with a real game, and walked by the product owner on the tablet (2026-11-17)
+
+*(Not a numbered phase. Decision record: [ADR-034](../decisions/ADR-034-usb-cast-over-aoa.md), which changes product principles 3 and 4. Protocol: [usb-link.md](../architecture/usb-link.md). Evidence and spike: [proposals/usb-cast.md](../proposals/usb-cast.md).)*
+
+**Scope:**
+- An optional USB link over Android Open Accessory. The receiver switches the phone and checks it with the Wi-Fi pairing's trust key, both ways.
+- Video: MediaCodec H.264 on the phone, VideoToolbox on the Mac, into the existing pacer, layer and Syphon.
+- Game audio: PCM16 into the existing engine.
+- The mic: its own track (ADR-003/004).
+- Home and Scan show the cable's state ("Mobile design v3 · USB cast").
+- The deck: connected or casting by cable, Cable unplugged, and offline with a saved phone instead of the QR (desktop frames 10–14).
+- The video window remembers its last state across restarts.
+- Profiles (design v4): Capture built in as the cable's default, 120 fps, 40 Mbps, WI-FI ONLY tags, and encoder, H.264 profile and fps limit honored over the cable.
+- The `ready` restart of the handshake.
+
+Windows/Linux receivers, a cable-specific pacer, and automatic quality and live profile changes over the cable are later.
+
+**Checked:**
+- `cargo test --lib` 111 passed, including HMAC vectors pinned in both apps.
+- Mobile suite 452/452, including `UsbFrameTest`, `UsbHandshakeTest`, `UsbAudioFormatTest` and `CableProfileTest`.
+- On the TB321FU:
+  - switch, mutual auth, cast, and a real game at a median 60 fps and 5.4 Mbit/s with no errors (the product owner's "stable");
+  - a receiver restart recovered without unplugging;
+  - a 13-minute cast with 0 dropped frames;
+  - the mic switched on mid-cast and reached the Mac.
+
+  Numbers in [features/usb-cast.md](../features/usb-cast.md).
+
+**Not checked:**
+- glass-to-glass latency on this path;
+- sessions longer than ~15 minutes;
+- OBS;
+- other phones;
+- the unplug and offline-launch states in a log (the product owner confirmed the flow).
+
 ## Release v0.2.1 — a covered video window keeps rendering ✅ published (2026-11-11)
 
 A patch release for [#178](https://github.com/silogos/caster/issues/178) ([ADR-028](../decisions/ADR-028-a-covered-window-keeps-rendering.md)): tag `v0.2.1` on `main` (the merge of PR #181, CI green), `Caster-v0.2.1.apk` (versionCode 201, same release key and certificate as v0.1.0 and v0.2.0) and `Caster_0.2.1_aarch64.dmg`. The phone has no code change; its APK is rebuilt so both apps carry one number.
