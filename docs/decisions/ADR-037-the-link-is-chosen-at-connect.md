@@ -1,6 +1,6 @@
-# ADR-037: The link is chosen at Connect: cable or Wi-Fi, never both
+# ADR-037: One link per connection — the one you connect with, cable or Wi-Fi
 
-- **Status:** proposed (2026-11-18, revised the same day). The product owner's decisions of 2026-11-18: "awal connect harus milih pakai cable atau wifi", "agar tidak terjadi bug status"; the QR code is for Wi-Fi only; the cable needs no QR and no Wi-Fi pairing, only a one-time Allow on the Mac. Amends [ADR-034](ADR-034-usb-cast-over-aoa.md) §5 (the cable no longer borrows the Wi-Fi trust key) and §"Consequences" (the cable is no longer used by itself whenever it is in). Protocol: [usb-link.md](../architecture/usb-link.md) v2.
+- **Status:** proposed (2026-11-18, revised twice the same day). The product owner's decisions of 2026-11-18: one link at a time, "agar tidak terjadi bug status"; the QR code is for Wi-Fi only; the cable needs no QR and no Wi-Fi pairing, only a one-time Allow on the Mac. Second revision, after reviewing the first draft: no link choice on Home — "halaman awal itu scan qr, tapi ketika cable dicolokan dia akan redirect ke auth cable … webrtc tetap pakai auth sebelumnya … di halaman home tidak ada perubahan, paling cuman tag atau label". Amends [ADR-034](ADR-034-usb-cast-over-aoa.md) §5 (the cable no longer borrows the Wi-Fi trust key) and §"Consequences" (the cable connects by itself only while no Wi-Fi connection is up). Protocol: [usb-link.md](../architecture/usb-link.md) v2.
 
 ## Context
 
@@ -14,11 +14,12 @@ So both links can be up at once, and the phone and the Mac disagree about which 
 
 ## Decision
 
-1. **One link per connection, chosen at Connect and remembered.** Home's saved-desktop hero gets a two-way choice, **CONNECT OVER Wi-Fi | USB cable**, above Connect. The phone stores it (`CastLinkChoice`; the last choice wins). While one link is chosen, the other is **ignored** on the phone, not merely hidden:
-   - **Wi-Fi chosen:** `UsbLink` never opens the accessory, so the receiver never hears from this phone on the cable and its deck stays on Wi-Fi. A cable plugged in meanwhile shows one quiet line on Home ("A cable is in. To cast over it, disconnect and choose USB cable.").
-   - **USB cable chosen:** no Wi-Fi socket is opened, no resume, no reconnect ladder. With no cable in, Home waits for one ("Plug the cable into the Mac") with Cancel. While the cable stays the choice, plugging it in connects by itself, as today.
-2. **The first screen offers both links.** With nothing saved, Home's empty state offers **Scan QR code (Wi-Fi)** or **Plug the cable into the Mac**. Scanning a QR chooses Wi-Fi; a cable that opens the app while nothing is chosen (Android's accessory dialog) chooses the cable. After that, the choice above holds.
-3. **The QR code is for Wi-Fi only.** It carries LAN addresses and a Wi-Fi pairing secret, and nothing else. The cable never asks for it, and the Scan screen loses its "cable but no pairing" state (design v3, U4).
+1. **The link is the one the phone connected with; nothing is chosen up front.** There is no link picker. Scanning the QR (or Home's Connect for a saved desktop) connects over Wi-Fi; plugging the cable in connects over the cable. Whichever connects first owns the connection until it ends, and the other link is **ignored** on the phone, not merely hidden:
+   - **Connected (or connecting) over Wi-Fi:** `UsbLink` does not open the accessory, so the receiver never hears from this phone on the cable and its deck stays on Wi-Fi. Home shows nothing about the cable.
+   - **Connected (or connecting) over the cable:** no Wi-Fi socket is opened, no resume, no reconnect ladder.
+   - **Not connected:** plugging the cable in takes over at once, wherever the user is (Scan or Home).
+2. **The first screen stays Scan QR code**, as today (scan-first launch). Plugging the cable in **redirects to a cable auth screen** (from Scan, or from Home while not connected): "Connecting by cable", the Mac's name from the cable, and its states — checking, waiting for the Mac's Allow, not allowed. Once the cable is trusted, the screen hands over to Home. A phone the Mac already allowed passes through it in a moment.
+3. **Wi-Fi keeps its authentication unchanged**: the QR pairing and the trusted resume of ADR-002/ADR-006. The QR code is for Wi-Fi only; the cable never asks for it.
 4. **The cable authenticates itself, with a one-time Allow on the Mac** (usb-link.md v2):
    - The first time a phone and a Mac meet on the cable, they make a **cable trust key** by a key exchange over the cable (ECDH P-256, ephemeral keys from both sides). The key never crosses the cable.
    - The Mac asks once: **"Allow <phone> to cast over the cable?"** with Allow and Don't Allow. Only Allow stores the key; it is stored on both sides only after both prove they derived it.
@@ -27,10 +28,10 @@ So both links can be up at once, and the phone and the Mac disagree about which 
 5. **Cable trust and Wi-Fi trust are two separate entries on each side.** Different keys, made by different ceremonies, revoked separately:
    - The Mac keeps its single Wi-Fi entry (`trust.json`, ADR-006) and a separate list of allowed phones for the cable (`cable-trust.json`).
    - The phone keeps its saved Wi-Fi desktop and, separately, the Macs that allowed it on the cable.
-   - The Mac's Disconnect on a cable connection forgets that phone's cable entry (and tells the phone, `bye forget`); its Wi-Fi Disconnect forgets only the Wi-Fi entry. A phone paired over Wi-Fi meets the Allow prompt once on its first plug-in.
-6. **Switching** is Disconnect, choose the other, Connect. A running cast is stopped first; nothing moves a cast from one link to the other (ADR-036 already resumes a cast only on its own link).
-7. **The receiver serves one link at a time.** While a phone is connected on one link, the receiver refuses the other (`busy` on Wi-Fi as today; `busy` on the cable). Its deck and tray show only the link that is connected.
-8. **Status follows the chosen link only:** the annunciator, the link card ("Connected by Wi-Fi" / "Connected by cable") and the waiting card of ADR-036.
+   - Ending one never ends the other. A phone paired over Wi-Fi meets the Allow prompt once on its first plug-in.
+6. **Home is unchanged except for one tag.** In the app bar, beside the status (STANDBY / ON AIR), a tag says how this connection runs: **WI-FI** or **CABLE**. The cable's own Home card (design v3, "Connected by cable") goes away: the cable auth screen carries its states, and Home is the same screen for both links. Disconnect and Terminate act on the connected link.
+7. **Switching** is Disconnect on Home (or unplug, for the cable), then connect the other way. A running cast is stopped first; nothing moves a cast from one link to the other (ADR-036 already resumes a cast only on its own link).
+8. **The receiver serves one link at a time.** While a phone is connected on one link, the receiver refuses the other (`busy` on Wi-Fi as today; `busy` on the cable). Its deck and tray show only the link that is connected.
 
 ## Risks
 
@@ -42,17 +43,18 @@ So both links can be up at once, and the phone and the Mac disagree about which 
 ## Consequences
 
 - **Positive:** one link carries the whole session, so no state can belong to the other one. ADR-036's wait is unambiguous. The cable works with no Wi-Fi at all, which is when it is needed most.
-- **A cable plugged in by mistake does nothing** while Wi-Fi is chosen. Android may still ask once to open Caster for the accessory (its dialog, with "use by default"); the app opens and ignores it.
-- **One more tap to change links.** Accepted: the user asked for an explicit choice.
+- **A cable plugged in by mistake does nothing** during a Wi-Fi connection. Android may still ask once to open Caster for the accessory (its dialog, with "use by default"); the app opens and ignores it.
+- **A cable plugged in during a Wi-Fi connection is ignored silently** (the product owner wants Home unchanged). To cast over it, the user disconnects first; the cable then takes over by itself.
 - **Existing users of the cable** meet the Allow prompt once after updating both apps, because v1 cable trust was the Wi-Fi key and v2 does not read it.
 - **Both apps must update together for the cable** (v1 and v2 refuse each other). Wi-Fi is unaffected.
-- **Android's accessory permission** is asked when the cable is chosen (or on the first screen) and plugged in, not at every plug-in while Wi-Fi is chosen.
+- **Android's accessory permission** is asked on a plug-in while not connected over Wi-Fi.
 
 ## Rejected alternatives
 
 | Option | Verdict |
 |---|---|
 | Ask the link at Share (a dialog per cast) | Rejected by the product owner: the link is a property of the connection, not of each cast |
+| A link picker on Home ("CONNECT OVER Wi-Fi \| USB cable", the first draft of this ADR) and a first screen offering both | Rejected by the product owner on review: the first screen stays Scan, the cable redirects by itself, and Home changes by one tag only |
 | Keep the automatic cable and only fix the status bugs | Rejected: the bugs come from two live links; fixing each mixed state one by one leaves the next one |
 | Keep cable auth on the Wi-Fi trust key (v1) | Rejected by the product owner: the cable must work for a phone that never paired over Wi-Fi |
 | A QR for the cable too (scan, then plug in) | Rejected by the product owner: the QR is Wi-Fi's; the cable is already a physical, deliberate pairing act |
@@ -63,6 +65,6 @@ So both links can be up at once, and the phone and the Mac disagree about which 
 
 ## Verification (to do)
 
-- JVM: the choice is stored and restored; `UsbLink` refuses to open the accessory while Wi-Fi is chosen; the Wi-Fi connect is not started while the cable is chosen; the v2 handshake (enrol, auth, refusals) against the vectors shared with the receiver.
+- JVM: `UsbLink` refuses to open the accessory while connected or connecting over Wi-Fi; the Wi-Fi connect and resume are not started while the cable is connected; a plug-in while not connected leads to the cable auth screen; the v2 handshake (enrol, auth, refusals) against the vectors shared with the receiver.
 - `cargo test --lib`: the receiver's half of the same vectors; the cable trust list stores, finds and forgets; a v1 frame is refused.
-- Device (Lenovo TB321FU, the receiver on the Mac): first plug-in → Allow on the Mac → connected by cable; unplug and plug in again → connected, no prompt; Don't Allow → the phone says so and does not ask again until replugged; Wi-Fi chosen, plug the cable → nothing changes on either side; Disconnect → choose the other link → Connect, both ways.
+- Device (Lenovo TB321FU, the receiver on the Mac): on Scan, plug in → cable auth → Allow on the Mac → Home tagged CABLE; unplug and plug in again → Home, no prompt; Don't Allow → the phone says so and does not ask again until replugged; connected over Wi-Fi, plug the cable → nothing changes on either side; Disconnect → plug in → cable, and unplug → Connect → Wi-Fi.

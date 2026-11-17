@@ -31,7 +31,7 @@ AOA gives one bulk IN and one bulk OUT endpoint, which is ordered and lossless (
    | 4 | URI | `https://github.com/silogos/caster` (Android shows it when no app matches) |
    | 5 | serial | the desktop's persistent id (`desktopId`) |
 2. **The phone** re-enumerates as `18D1:2D00`–`2D05`. The desktop claims interface 0 and its two bulk endpoints.
-3. **Android** asks the user whether to open Caster for the accessory, matched by manufacturer + model in `accessory_filter.xml`. The app calls `openAccessory()` **only when the cable is its chosen link, or no link is chosen yet** (ADR-037). With Wi-Fi chosen it never opens the accessory: the desktop's `hello` writes time out unanswered, and the desktop shows nothing for this phone. Before opening, the app reads the accessory's version string (index 3) and refuses anything but `2` (§Version mismatch).
+3. **Android** asks the user whether to open Caster for the accessory, matched by manufacturer + model in `accessory_filter.xml`. The app calls `openAccessory()` **only while it is not connected or connecting over Wi-Fi** (ADR-037: one link per connection, the first one wins). During a Wi-Fi connection it never opens the accessory: the desktop's `hello` writes time out unanswered, and the desktop shows nothing for this phone. Before opening, the app reads the accessory's version string (index 3) and refuses anything but `2` (§Version mismatch).
 
 ## Frame
 
@@ -93,7 +93,7 @@ Desktop                                         Phone
 - **hello** (desktop → phone):
   - fields: `link` (the version), `desktopId`, `name` (the Mac's display name), `n` (a fresh 16-byte nonce, base64url);
   - repeated once a second until `auth` or `enrol` arrives, because the app may open the accessory late (after the user taps Android's dialog), and writes to an accessory nobody has opened time out.
-  - The phone shows `name` on Home from here on (the "Connected by cable to <name>" card, and the waiting card during enrolment), so the user sees which Mac is on the cable before Share (ADR-037 §Risks).
+  - The phone shows `name` from here on (on the cable auth screen during enrolment, then as the desktop's name on Home, tagged CABLE), so the user sees which Mac is on the cable before Share (ADR-037 §Risks).
 - **auth** (phone → desktop):
   - `deviceId` (the phone's id, ADR-005) and `n` (the phone's own fresh nonce; during enrolment, the same `n` as its `enrol`);
   - `mac` = base64url(HMAC-SHA256(cableKey, ASCII(deviceId) ‖ ASCII(desktop n))): the construction of the Wi-Fi resume handshake ([pairing.md](pairing.md)), with the cable key and the desktop's nonce.
@@ -149,7 +149,7 @@ Cable trust is **its own entry on each side**, apart from the Wi-Fi trust of ADR
 | Ends | The deck's Disconnect while that phone is connected by cable (sends `bye {reason: "forget"}`); `bye forget` from the phone; `unknown-device` never deletes on the desktop | The phone's Terminate on a cable connection (sends `bye forget`); `bye forget` from the desktop; `unknown-device` for a stored key |
 
 - **Both stores degrade to empty** on anything unreadable (logged), as the Wi-Fi stores do: the honest fallback is one more Allow, never a link on a guessed key.
-- **The phone's Disconnect** (not Terminate) sends a plain `bye`; both entries stay, and the next plug-in with the cable chosen connects by itself.
+- **The phone's Disconnect** (not Terminate) sends a plain `bye`; both entries stay, and the next plug-in (while not connected over Wi-Fi) connects by itself.
 - **The Wi-Fi Disconnect/Terminate** (`bye forget` on the WebSocket) never touches cable trust, and the cable's never touches Wi-Fi trust.
 - **v1's cable trust is not migrated.** v1 had no cable entry of its own (it read the Wi-Fi key); a v1 user meets the Allow prompt once.
 
