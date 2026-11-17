@@ -284,7 +284,8 @@ audio = card(p2, "card · audio")
 aud = vstack(audio, "audio", gap=16, pad=(14, 16, 16, 16), h="fill")
 mono(aud, "AUDIO", 11, VARIANT, "Medium", spacing=1.1, line=14)
 field(aud, "Low-latency audio", [("Low latency", False), ("Standard", True)],
-      hint="Low latency sends raw sound: the smallest delay for headphones, at a higher Wi-Fi bitrate.")
+      hint="Low latency sends raw sound: the smallest delay for headphones, at a higher Wi-Fi bitrate. "
+           "Standard sends compressed stereo: less Wi-Fi, a little more delay.")
 actions = hstack(p2, "actions", main="spaceBetween", cross="center", h="fill")
 text_button(actions, "Duplicate")
 text_button(actions, "Delete profile", BAD)

@@ -138,7 +138,7 @@
     <string name="settings_low_latency_game_audio">Low-latency audio</string>
     <string name="low_latency_audio_on">Low latency</string>
     <string name="low_latency_audio_off">Standard</string>
-    <string name="settings_low_latency_game_audio_hint">Sends the audio as raw sound data — the smallest possible delay for headphones, at a higher Wi-Fi bitrate. Standard keeps the usual compressed audio (smaller on the wire, a little more delay).</string>
+    <string name="settings_low_latency_game_audio_hint">Low latency sends raw sound: the smallest delay for headphones, at a higher Wi-Fi bitrate. Standard sends compressed stereo: less Wi-Fi, a little more delay.</string>
 
     <!-- Microphone device (Home's Audio card, designs/mobile-app.html) — which
          mic the cast records from. The picker is realtime while casting

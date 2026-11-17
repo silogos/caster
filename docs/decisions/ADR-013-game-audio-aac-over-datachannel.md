@@ -1,6 +1,6 @@
 # ADR-013: Game audio as AAC-LC over the DataChannel (importing TikTok's proven audio stack)
 
-- **Status:** accepted (2026-11-04) — amends the payload of the `game-audio` DataChannel from [ADR-012](ADR-012-game-audio-pcm-over-datachannel.md); the channel itself, the two-PC architecture, and the mic's transport are unchanged
+- **Status:** superseded by [ADR-033](ADR-033-low-latency-chooses-pcm-or-opus.md) (2026-11-17): AAC and its announce/ack handshake are removed from the phone; Standard now means the stereo Opus track. Was: accepted (2026-11-04) — amends the payload of the `game-audio` DataChannel from [ADR-012](ADR-012-game-audio-pcm-over-datachannel.md); the channel itself, the two-PC architecture, and the mic's transport are unchanged
 
 ## Context
 

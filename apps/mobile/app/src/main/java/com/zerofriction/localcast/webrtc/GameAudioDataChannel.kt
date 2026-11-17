@@ -11,31 +11,26 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * The game-audio DataChannel (ADR-012), the desktop's primary game-audio
- * path for its latency (ADR-014/020). ADR-012 chose it believing the Opus
- * track could not carry stereo; it can — the mono was the receiver's
- * decoder (ADR-032). Payload per ADR-013: ADTS-framed
- * AAC-LC by default — negotiated in-band through [negotiator]'s
- * announce/ack — with ADR-012's raw PCM as the fallback format, so an old
- * desktop (it ignores text messages) degrades exactly as it always did.
+ * The game-audio DataChannel (ADR-012): raw PCM16 stereo, opened only when
+ * the profile's Low-latency audio is "Low latency" (ADR-033) — the
+ * receiver plays it through its own low-latency playout (ADR-014/020).
+ * With "Standard" there is no channel and the stereo Opus track is the
+ * game audio (ADR-032).
  *
- * Semantics tuned for positional audio on a LAN (unchanged by ADR-013):
+ * Semantics tuned for positional audio on a LAN:
  * - **unordered, unacknowledged** (`ordered=false`, `maxRetransmits=0`) — a
  *   lost sliver is inaudible, a stalled stream is not;
  * - **bounded queue, drop policy, no blocking** — the producer runs on the
- *   ADM's or the AAC encoder's thread; it may never wait. The queue keeps
+ *   ADM's recording thread; it may never wait. The queue keeps
  *   the newest audio (drop-oldest), and a `bufferedAmount` past
  *   [MAX_BUFFERED_BYTES] skips sending outright until the pipe drains;
  * - a **muted cast keeps sending** (the ADM's mute already zeroes the
- *   frames — AAC-encoding silence is still a valid stream) — identical flow
- *   for the desktop's fallback timer.
+ *   frames) — identical flow for the desktop's fallback timer.
  *
- * While the channel is open it also drives the handshake: the first OPEN
- * tick starts the negotiator's announce window, each tick polls for a due
- * announce (text message), and inbound text messages are acks. Numbers only
- * in the logs — never the samples (logging rules).
+ * Binary messages only: ADR-013's text handshake (announce/ack) is retired
+ * (ADR-033). Numbers only in the logs — never the samples (logging rules).
  */
-class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = null) {
+class GameAudioDataChannel {
     private val closed = AtomicBoolean(false)
     private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_CAPACITY)
     private val droppedByOverflow = AtomicLong()
@@ -43,8 +38,6 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
     private val sentChunks = AtomicLong()
     private var channel: DataChannel? = null
     private var sender: Thread? = null
-    /** Fired once, in the drain loop, when the SCTP handshake completes. */
-    private var openAnnounced = false
 
     /** Opens the channel on the media pc (before createOffer — in-band negotiation). */
     fun attach(pc: PeerConnection): Boolean {
@@ -67,21 +60,6 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
             return false
         }
         channel = newChannel
-        if (negotiator !== null) {
-            newChannel.registerObserver(
-                object : DataChannel.Observer {
-                    override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                    override fun onStateChange() {
-                        Log.d(TAG, "game audio channel state: ${newChannel.state()}")
-                    }
-
-                    override fun onMessage(buffer: DataChannel.Buffer) {
-                        if (buffer.binary) return
-                        handleControlMessage(buffer)
-                    }
-                },
-            )
-        }
         sender = Thread { drain() }.apply {
             name = "game-audio-send"
             start()
@@ -91,8 +69,7 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
     }
 
     /**
-     * One wire-format chunk (PCM16 stereo while in PCM mode, one ADTS packet
-     * in AAC mode — the sender decides). Called on the producer's thread —
+     * One PCM16 stereo chunk from the ADM. Called on the producer's thread —
      * enqueue only, never block; the queue keeps the freshest audio.
      */
     fun onEncoderInputSamples(samples: ByteArray) {
@@ -102,21 +79,6 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
             queue.poll()
             if (!queue.offer(chunk)) return
             droppedByOverflow.incrementAndGet()
-        }
-    }
-
-    private fun handleControlMessage(buffer: DataChannel.Buffer) {
-        val negotiator = negotiator ?: return
-        try {
-            val bytes = ByteArray(buffer.data.remaining())
-            buffer.data.get(bytes)
-            val parsed = HandshakeMessage.parse(String(bytes))
-            if (parsed is HandshakeMessage.Ack) {
-                negotiator.onAck(parsed.format)
-                Log.i(TAG, "game audio format ack: ${parsed.format} — wire mode ${negotiator.mode}")
-            }
-        } catch (t: Throwable) {
-            Log.d(TAG, "ignoring malformed control message: ${t.message}")
         }
     }
 
@@ -152,14 +114,6 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
             val current = channel ?: continue
             try {
                 if (current.state() != DataChannel.State.OPEN) continue
-                if (!openAnnounced) {
-                    // First OPEN tick: start the announce window (ADR-013).
-                    openAnnounced = true
-                    negotiator?.onChannelOpen()
-                }
-                negotiator?.pollAnnounce()?.let { text ->
-                    current.send(DataChannel.Buffer(ByteBuffer.wrap(text.toByteArray()), false))
-                }
                 if (BuildConfig.DEBUG) noteBuffered(current.bufferedAmount())
                 if (current.bufferedAmount() > MAX_BUFFERED_BYTES) {
                     droppedByBackpressure.incrementAndGet()
@@ -196,7 +150,7 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
         channel = null
         Log.i(
             TAG,
-            "game audio channel closed — mode ${negotiator?.mode ?: GameAudioFormatNegotiator.Mode.PCM}, " +
+            "game audio channel closed — " +
                 "sent ${sentChunks.get()}, dropped ${droppedByOverflow.get()} (overflow) / " +
                 "${droppedByBackpressure.get()} (backpressure)",
         )
@@ -212,16 +166,16 @@ class GameAudioDataChannel(private val negotiator: GameAudioFormatNegotiator? = 
         const val CHANNEL_LABEL = "game-audio"
 
         /**
-         * ~0.5 s of AAC access units (~21.3 ms each), ~0.24 s of PCM fallback
-         * chunks (~10 ms each) — long enough to absorb a scheduler hiccup,
-         * short enough that overflow means the pipe is truly gone.
+         * ~0.24 s of PCM chunks (~10 ms each) — long enough to absorb a
+         * scheduler hiccup, short enough that overflow means the pipe is
+         * truly gone.
          */
         const val QUEUE_CAPACITY = 24
 
         /**
-         * Skip sending above this buffered bytes downstream — ~0.5 s of AAC
-         * (24 frames × ~500 B), ~60 ms of PCM; both far inside the queue's
-         * own bound, so hitting this means the SCTP pipe itself is jammed.
+         * Skip sending above this buffered bytes downstream — ~60 ms of PCM,
+         * far inside the queue's own bound, so hitting this means the SCTP
+         * pipe itself is jammed.
          */
         const val MAX_BUFFERED_BYTES = 12_000L
     }

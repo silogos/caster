@@ -11,7 +11,6 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
-import com.zerofriction.localcast.audio.GameAacEncoder
 import com.zerofriction.localcast.audio.GameAudioState
 import com.zerofriction.localcast.audio.PlaybackCaptureAudioSource
 import com.zerofriction.localcast.config.CastConfig
@@ -127,12 +126,10 @@ class MediaCastSession(
     private var videoTrack: VideoTrack? = null
     private var pc: PeerConnection? = null
     /**
-     * ADR-012: stereo game audio rides this bypass (the track's encoder is
-     * mono-hard). ADR-013: its default payload is AAC — the sender pipeline
-     * ([gameAacSender]) encodes while the channel negotiates the format.
+     * The raw-PCM game-audio channel, only for a Low latency profile
+     * (ADR-012, ADR-033); null with Standard, where the Opus track carries it.
      */
     private var gameAudioChannel: GameAudioDataChannel? = null
-    private var gameAacSender: GameAudioSender? = null
 
     /** Game audio (Phase7) — null means game audio is off for this cast. */
     private var audio: PlaybackCaptureAudioSource? = null
@@ -524,33 +521,19 @@ class MediaCastSession(
         val currentAudioTrack = audioTrack
         if (currentAudioTrack !== null) {
             newPc.addTrack(currentAudioTrack, listOf(STREAM_ID))
-            // ADR-012/013: the track's encoder is mono-hard in the pinned
-            // prebuilt (audio.md) — true stereo rides the DataChannel instead,
-            // AAC by default; the track stays as the desktop's fallback when
-            // the channel is quiet (the previous pipeline was released above).
-            // Feature 2026-11d: the low-latency toggle forces raw PCM —
-            // selfSupportsAac=false makes the negotiator announce `pcm16` and
-            // never switch (the wire shape is unchanged, the same path an
-            // old desktop already takes).
-            val negotiator = GameAudioFormatNegotiator(
-                nowMs = System::currentTimeMillis,
-                selfSupportsAac = !config.lowLatencyGameAudio,
-            )
-            val channel = GameAudioDataChannel(negotiator)
-            if (channel.attach(newPc)) {
-                val sender = GameAudioSender(
-                    negotiator = negotiator,
-                    channel = channel,
-                    sampleRateHz = GameAacEncoder.CAPTURE_SAMPLE_RATE_HZ,
-                    channels = GameAacEncoder.CAPTURE_CHANNELS,
-                )
-                gameAudioChannel = channel
-                gameAacSender = sender
-                // Forced PCM never encodes — skipping start() leaves the
-                // encoder unbuilt; onSamples stays null-safe on it and keeps
-                // feeding raw PCM (the toggle is a next-cast setting).
-                if (!config.lowLatencyGameAudio) sender.start()
-                audio?.onEncoderInputSamples = sender::onSamples
+            // ADR-033: the profile's Low-latency audio picks the game-audio
+            // path, once per cast. Low latency: raw PCM on the DataChannel,
+            // played by the receiver's own playout (ADR-012/014/020), the
+            // stereo Opus track as its fallback. Standard: no channel — the
+            // receiver plays the stereo Opus track (ADR-032) from the start.
+            if (config.lowLatencyGameAudio) {
+                val channel = GameAudioDataChannel()
+                if (channel.attach(newPc)) {
+                    gameAudioChannel = channel
+                    audio?.onEncoderInputSamples = channel::onEncoderInputSamples
+                }
+            } else {
+                Log.i(TAG, "game audio: standard — Opus track only, no DataChannel (ADR-033)")
             }
         }
         onState(State.NEGOTIATING)
@@ -913,8 +896,6 @@ class MediaCastSession(
     /** Stop feeding, then release the AAC sender and the DataChannel (it frees its native object). */
     private fun releaseGameAudioPipeline() {
         audio?.onEncoderInputSamples = null
-        gameAacSender?.release()
-        gameAacSender = null
         gameAudioChannel?.close()
         gameAudioChannel = null
     }
