@@ -1,6 +1,6 @@
 # ADR-009: Cast resilience — survive transient mid-game UDP outages (ICE restart + WifiLock)
 
-- **Status:** accepted (2026-11-01) — implements the resilience half of the live-debugged mid-game cast death (issue #86); the honesty half (failures park the session instead of `bye`-ing the desktop) shipped earlier in PR #85.
+- **Status:** accepted (2026-11-01) — implements the resilience half of the live-debugged mid-game cast death (issue #86); the honesty half (failures park the session instead of `bye`-ing the desktop) shipped earlier in PR #85. **Amended by [ADR-036](ADR-036-a-cast-survives-a-five-minute-drop.md) (2026-11-18):** the ladder is bounded by the cast's five-minute drop window instead of 3 restarts / 60 s.
 
 ## Context
 

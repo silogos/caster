@@ -24,7 +24,7 @@ class UsbHandshake(
         /** Send this control message and wait. */
         data class Send(val message: JSONObject) : Outcome
         /** Both proofs checked: media may flow. */
-        data class Trusted(val desktopName: String) : Outcome
+        data class Trusted(val desktopName: String, val desktopId: String) : Outcome
         /** This phone has no pairing with the desktop on the cable. */
         data object NotPaired : Outcome
         /** The desktop refused us, or failed to prove itself. */
@@ -79,7 +79,7 @@ class UsbHandshake(
             return Outcome.Refused("desktop failed to prove the trust key")
         }
         trusted = true
-        return Outcome.Trusted(desktopName)
+        return Outcome.Trusted(desktopName, id)
     }
 
     companion object {

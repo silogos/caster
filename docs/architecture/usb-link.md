@@ -87,6 +87,7 @@ Desktop                                         Phone
 - **cast-start** (phone → desktop):
   - `w`, `h`, `fps` (the encoder's actual configuration), `audio` (`"pcm16-48k-stereo"` or `null` when game audio is off), and `mic` (whether the mic starts on);
   - display-only on the desktop, like `session-info`.
+  - Sent again on a **new link** when a cable cast outlives its link ([ADR-036](../decisions/ADR-036-a-cast-survives-a-five-minute-drop.md)): unplugged and back within five minutes, the phone authenticates as usual and starts the same cast with a fresh `cast-start`, codec config and keyframe. No field changes; the receiver builds its decoder per `cast-start` as for any cast.
 - **mic** (phone → desktop): `on`. The mic was switched on or off mid-cast, so the desktop starts the mic track fresh and updates its MIC chip.
 - **cast-stop** (phone → desktop): the picture ends and the desktop shows NO INPUT. The link and its authentication stay, so the next Share needs no handshake.
 - **bye** (either way): the sender is closing the link (app exit, receiver quit).

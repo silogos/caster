@@ -74,6 +74,13 @@ python3 -I tools/design/build_usb_profiles_spec.py /tmp/usb-profiles.figcraft --
 python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 4
 ```
 
+`build_cast_drop_spec.py` writes **"Mobile design v5 · Cast survives a drop (ADR-036)"**, drawn ahead of the code. A cast waits up to five minutes for its link, over Wi-Fi and over the cable. D1 is Home with Wi-Fi lost and D2 with the cable unplugged, both under a `RECONNECTING` annunciator with a STOPS IN countdown and Stop. D3 is the notification's wording for both links, D4 is Home once the five minutes ran out, and D5 is U2 with the new unplug sentence. The notes carry the open question about the receiver's "Cable unplugged" wording. Render: `designs/preview/mobile-cast-drop.png`.
+
+```bash
+python3 -I tools/design/build_cast_drop_spec.py /tmp/cast-drop.figcraft --into designs/mobile-app.figcraft
+python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 5
+```
+
 ## The desktop receiver's sound and the Caster devices
 
 `designs/desktop-signal-deck.figcraft` holds the native receiver's deck. Two builders add proposals to it as absolute layers copied from the existing frames. They do not use auto layout, so `check_auto_layout.py` does not apply.

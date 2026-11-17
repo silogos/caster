@@ -71,7 +71,7 @@ The reconnect ladder is 1→2→5→10→30 s (Phase4, unit-pinned); ICE rules p
 | ID | Case | Expected | Result |
 |---|---|---|---|
 | N1 | Weak Wi-Fi (device far from the AP / degraded signal) | Stream survives with visible degradation; adaptive quality steps down (announced, no oscillation) and recovers when signal returns | — |
-| N2 | Sustained network loss (> ladder + TTL) | ICE-restart ladder exhausts (~≤60 s, ADR-009) → clean `Failed(ConnectionLost)` stop with the friendly message; rescan works immediately | — |
+| N2 | Sustained network loss (> ladder + TTL) | The cast waits up to 5 min (ADR-036, was ~≤60 s with ADR-009), shown as RECONNECTING with a countdown → clean `Failed(ConnectionLost)` stop with the friendly message; rescan works immediately | — |
 | N3 | Phone Wi-Fi toggled off→on mid-cast | Within the reconnect window: cast resumes without rescan (D6); past it: clean stop (N2) | — |
 | N4 | Phone switches networks (different Wi-Fi) | Old session unreachable → clean failure path; fresh scan pairs on the new network | — |
 | N5 | Desktop IP change mid-cast (DHCP renew / interface change) | Document actual behavior: established P2P may survive or drop; either way no hang, and the next QR advertises the new `hosts[]` | — |

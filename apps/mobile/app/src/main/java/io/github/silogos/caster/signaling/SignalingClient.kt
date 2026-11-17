@@ -1,6 +1,7 @@
 package io.github.silogos.caster.signaling
 
 import android.util.Log
+import io.github.silogos.caster.config.CastDropWindow
 import io.github.silogos.caster.signaling.SignalingClient.State
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,8 +25,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 class SignalingClient(
     private val hosts: List<String>,
     private val port: Int,
-    private val sessionId: String,
-    private val secret: ByteArray,
+    sessionId: String,
+    secret: ByteArray,
     private val userAgent: String,
     /**
      * hello's optional `deviceId` (pairing.md, ADR-005): the persistent
@@ -40,7 +41,7 @@ class SignalingClient(
      * (webrtc.md). Null on the resume path (ADR-006): a trusted session has
      * no expiry, so reconnects run a bounded ladder instead and then stop.
      */
-    private val expiresAtUnixSeconds: Long?,
+    expiresAtUnixSeconds: Long?,
     private val transport: SignalingTransport,
     private val scheduler: SignalingScheduler,
     /** Injected clock (epoch ms) — drives heartbeat silence and expiry checks. */
@@ -53,8 +54,25 @@ class SignalingClient(
      * hello carries `resume: true`, the envelope `sid` is the phone's
      * deviceId and [secret] is the stored trustKey — no QR session involved.
      */
-    private val resume: Boolean = false,
+    resume: Boolean = false,
 ) {
+    // The credentials of the next handshake. A QR session switches them to the
+    // persistent session's once the desktop grants one (see [pendingResumeKey]).
+    private var sessionId: String = sessionId
+    private var secret: ByteArray = secret
+    private var expiresAtUnixSeconds: Long? = expiresAtUnixSeconds
+    private var resume: Boolean = resume
+
+    /**
+     * ADR-036, found live 2026-11-18: a cast started right after a QR pairing
+     * died on its first drop once the QR session's ten minutes had passed
+     * ("session expired"), although the desktop had granted a persistent
+     * session at that pairing. The trustKey of that grant: reconnects from the
+     * next one on resume it (hello `resume`, sid = deviceId, no expiry),
+     * exactly as a later one-tap Connect would.
+     */
+    private var pendingResumeKey: ByteArray? = null
+
     enum class State {
         CONNECTING,
         AUTHENTICATING,
@@ -144,6 +162,18 @@ class SignalingClient(
     private var hasAuthorizedOnce = false
     /** Index into [RECONNECT_BACKOFF_MS] for the pending reconnect attempt. */
     private var reconnectAttempt = 0
+
+    /**
+     * ADR-036: true while a cast runs over this connection (set by the cast
+     * service). A trusted session's reconnects then last the cast's drop
+     * window instead of [TRUSTED_RECONNECT_MAX_ATTEMPTS], and back off at
+     * most [CAST_RECONNECT_BACKOFF_MS]'s last rung, so a returning network is
+     * noticed within ~2 s.
+     */
+    @Volatile var castActive: Boolean = false
+
+    /** When the authorized connection dropped — the drop window runs from here. Null while authorized. */
+    private var droppedAtMs: Long? = null
     private var heartbeatHandle: (() -> Unit)? = null
     private var reconnectHandle: (() -> Unit)? = null
 
@@ -158,7 +188,7 @@ class SignalingClient(
             Log.i(TAG, "connected, sending hello")
             armHandshakeTimeout()
             emit(Event.Authenticating)
-            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX, resume))
+            sendEnvelope(Envelope.TYPE_HELLO, Payloads.hello(userAgent, deviceId, Handshake.PROTOCOL_MIN, Handshake.PROTOCOL_MAX, this@SignalingClient.resume))
         }
 
         override fun onTransportText(message: String) {
@@ -311,23 +341,33 @@ class SignalingClient(
     private fun initiateReconnect() {
         if (_state.value == State.CLOSED || _state.value == State.FAILED) return
         cancelTimers()
-        if (expiresAtUnixSeconds == null) {
+        switchToPersistentSession()
+        val expiresAt = expiresAtUnixSeconds
+        if (expiresAt == null) {
             // Trusted session (ADR-006): no expiry — reconnects run a bounded
             // ladder instead, then stop with an unreachable failure (the
-            // desktop may simply be off; the saved entry stays).
-            if (reconnectAttempt >= TRUSTED_RECONNECT_MAX_ATTEMPTS) {
-                Log.i(TAG, "trusted reconnect ladder exhausted — no auto-retry")
+            // desktop may simply be off; the saved entry stays). During a
+            // cast the bound is the drop window (ADR-036), not a count.
+            val droppedAt = droppedAtMs ?: nowMs().also { droppedAtMs = it }
+            val exhausted = if (castActive) {
+                nowMs() - droppedAt >= CastDropWindow.MS
+            } else {
+                reconnectAttempt >= TRUSTED_RECONNECT_MAX_ATTEMPTS
+            }
+            if (exhausted) {
+                Log.i(TAG, "trusted reconnect ladder exhausted (cast: $castActive) — no auto-retry")
                 fail(SignalingError.CONNECT_UNREACHABLE)
                 return
             }
-        } else if (nowMs() / 1000 >= expiresAtUnixSeconds) {
+        } else if (nowMs() / 1000 >= expiresAt) {
             Log.i(TAG, "session expired — no auto-retry, user must re-scan")
             fail(SignalingError.EXPIRED)
             return
         }
-        val attempt = reconnectAttempt.coerceAtMost(RECONNECT_BACKOFF_MS.lastIndex)
+        val rungs = if (castActive) CAST_RECONNECT_BACKOFF_MS else RECONNECT_BACKOFF_MS
+        val attempt = reconnectAttempt.coerceAtMost(rungs.lastIndex)
         reconnectAttempt += 1
-        val delayMs = RECONNECT_BACKOFF_MS[attempt]
+        val delayMs = rungs[attempt]
         _state.value = State.RECONNECTING
         Log.i(TAG, "reconnecting in ${delayMs} ms (attempt ${reconnectAttempt})")
         emit(Event.Reconnecting(delayMs))
@@ -337,6 +377,18 @@ class SignalingClient(
                 connectHost(authorizedHostIndex)
             }
         }
+    }
+
+    /** From the QR session to the persistent one the desktop granted, between connections only. */
+    private fun switchToPersistentSession() {
+        val key = pendingResumeKey ?: return
+        val id = deviceId ?: return
+        pendingResumeKey = null
+        sessionId = id
+        secret = key
+        resume = true
+        expiresAtUnixSeconds = null
+        Log.i(TAG, "reconnects resume the persistent session (the QR session would expire)")
     }
 
     private fun handleEnvelope(envelope: Envelope) {
@@ -368,11 +420,13 @@ class SignalingClient(
                     null
                 } else {
                     val key = if (!resume && desktopId != null) Handshake.deriveTrustKey(secret, sessionId) else null
+                    if (key != null && deviceId != null) pendingResumeKey = key
                     Event.TrustGrant(desktopId, hosts, port, key)
                 }
                 Log.i(TAG, if (resume) "authorized by desktop (resumed session)" else "authorized by desktop")
                 hasAuthorizedOnce = true
                 reconnectAttempt = 0
+                droppedAtMs = null
                 authorizedHostIndex = hostIndex
                 cancelHandshakeTimeout()
                 _state.value = State.AUTHORIZED
@@ -562,6 +616,13 @@ class SignalingClient(
 
         /** webrtc.md: 1 s → 2 s → 5 s → 10 s → 30 s cap. */
         val RECONNECT_BACKOFF_MS = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
+
+        /**
+         * ADR-036: during a cast the ladder stops at 2 s — a cast is waiting
+         * on it, and an attempt with no network fails at once. Found live
+         * 2026-11-18: with a 10 s rung the picture came back ~8 s after Wi-Fi.
+         */
+        val CAST_RECONNECT_BACKOFF_MS = listOf(1_000L, 2_000L)
 
         /**
          * Trusted reconnects (no expiry, ADR-006) stop after this many ladder

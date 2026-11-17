@@ -32,7 +32,7 @@ class UsbHandshakeTest {
         assertEquals("VIO7LRtb_4ZGrSSviktpCWrQe2mS2ssQvKvfjCLdGGo", auth.message.getString("mac"))
 
         val ok = JSONObject().put("type", "auth-ok").put("mac", "bCa575Km4Dj4Q8UcJQwpyM1dkQHy4uaHI2Di-LX4CDI")
-        assertEquals(UsbHandshake.Outcome.Trusted("Gaming PC"), handshake.onControl(ok))
+        assertEquals(UsbHandshake.Outcome.Trusted("Gaming PC", "desk-1"), handshake.onControl(ok))
         assertTrue(handshake.trusted)
     }
 

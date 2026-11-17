@@ -13,6 +13,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import io.github.silogos.caster.service.CastState
+import io.github.silogos.caster.service.isLive
+import io.github.silogos.caster.usb.UsbCastService
 import io.github.silogos.caster.service.CastService
 import io.github.silogos.caster.service.ConnectedDesktop
 import io.github.silogos.caster.ui.home.HomeScreen
@@ -93,7 +95,8 @@ class MainActivity : ComponentActivity() {
     private fun initialScreen(): String {
         val connected = ConnectedDesktop.state.value is ConnectedDesktop.State.Connected
         val saved = ConnectedDesktop.state.value is ConnectedDesktop.State.Saved
-        val casting = CastService.state.value is CastState.Starting || CastService.state.value is CastState.Casting
+        val casting = CastService.state.value is CastState.Starting || CastService.state.value.isLive() ||
+            UsbCastService.castState.value.isLive()
         return if (connected || saved || casting) SCREEN_HOME else SCREEN_SCAN
     }
 

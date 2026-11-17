@@ -12,7 +12,7 @@ import org.junit.Test
  * state machine with the event/tick cadence the session produces.
  *
  * Timeline constants under test: grace 10 s, deadline 15 s, backoff 2 s → 5 s
- * (rung 3 unused before exhaustion), max 3 restarts, sustained give-up 60 s.
+ * → 10 s (then 10 s on), give-up at the cast's drop window (5 min, ADR-036).
  */
 class IceRestartControllerTest {
 
@@ -20,9 +20,11 @@ class IceRestartControllerTest {
     private class Harness {
         val restarts = mutableListOf<Int>()
         val giveUps = mutableListOf<String>()
+        val interruptions = mutableListOf<Long?>()
         val controller = IceRestartController(
             onRestart = { restarts.add(it) },
             onGiveUp = { giveUps.add(it) },
+            onInterruption = { interruptions.add(it) },
         )
 
         /** One watchdog tick — the policy's clock. */
@@ -89,10 +91,12 @@ class IceRestartControllerTest {
         assertEquals(listOf(1, 2), h.restarts)
         h.tick(9_501)
         assertEquals(listOf(1, 2, 3), h.restarts)
-        // The third failure exhausts the budget — honest give-up.
+        // ADR-036: a third failure no longer ends the cast — the 10 s rung follows.
         h.controller.onFailed(10_000)
-        assertEquals(1, h.giveUps.size)
-        assertFalse(h.controller.busy)
+        assertTrue(h.giveUps.isEmpty())
+        assertTrue(h.controller.busy)
+        h.tick(20_000)
+        assertEquals(listOf(1, 2, 3, 4), h.restarts)
     }
 
     @Test
@@ -111,22 +115,42 @@ class IceRestartControllerTest {
     }
 
     @Test
-    fun `a dead network with fast failures exhausts the restart ladder - bounded and honest`() {
+    fun `a dead network with fast failures keeps restarting until the drop window, then gives up`() {
         val h = Harness()
         h.controller.onFailed(0)
         // Every restart fails shortly after its offer goes out (fast FAILED
         // events, like a radio that is up enough to answer checks with
-        // nothing). The ladder runs dry long before the sustained window.
+        // nothing). ADR-036: three restarts no longer end the cast; only the
+        // five-minute window does.
         var now = 0L
         while (h.giveUps.isEmpty() && now < IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS + 5_000) {
             now += 500
             h.tick(now)
             if (now % 3_000 == 0L) h.controller.onFailed(now)
         }
-        assertEquals(listOf("3 ice restarts exhausted"), h.giveUps)
-        assertEquals(3, h.restarts.size) // never more than the budget
-        assertTrue(now < IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS) // honest, in time
+        assertEquals(1, h.giveUps.size)
+        assertTrue(h.giveUps[0].contains("sustained failure"))
+        assertTrue(h.restarts.size > 3)
+        assertEquals(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS, now)
         assertFalse(h.controller.busy)
+    }
+
+    @Test
+    fun `past the last backoff rung, restarts come at that rung's pace`() {
+        val h = Harness()
+        h.controller.onFailed(0) // #1
+        h.controller.onFailed(1_000) // dies → 2 s
+        h.tick(3_000) // #2
+        h.controller.onFailed(3_500) // → 5 s
+        h.tick(8_500) // #3
+        h.controller.onFailed(9_000) // → 10 s
+        h.tick(19_000) // #4
+        h.controller.onFailed(19_500) // → 10 s again
+        h.tick(29_499)
+        assertEquals(listOf(1, 2, 3, 4), h.restarts)
+        h.tick(29_500) // #5
+        assertEquals(listOf(1, 2, 3, 4, 5), h.restarts)
+        assertTrue(h.giveUps.isEmpty())
     }
 
     @Test
@@ -135,7 +159,7 @@ class IceRestartControllerTest {
         // Only `disconnected`, then nothing: the offers go out over the
         // healthy TCP and nothing ever comes back (grace → #1 → deadline →
         // backoff → #2 → … ). The ladder would need 62 s; the sustained
-        // window closes it honestly first.
+        // window closes it.
         h.controller.onDisconnected(0)
         var now = 0L
         while (h.giveUps.isEmpty() && now < IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS + 5_000) {
@@ -144,8 +168,8 @@ class IceRestartControllerTest {
         }
         assertEquals(1, h.giveUps.size)
         assertTrue(h.giveUps[0].contains("sustained failure"))
-        assertTrue(h.restarts.size <= IceRestartController.MAX_RESTARTS)
-        assertTrue(now <= IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS)
+        assertTrue(h.restarts.size > 3)
+        assertEquals(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS, now)
         assertFalse(h.controller.busy)
     }
 
@@ -217,28 +241,62 @@ class IceRestartControllerTest {
         h.tick(4_000) // #2
         h.controller.onFailed(5_000)
         h.tick(10_000) // #3
-        h.controller.onFailed(11_000) // budget exhausted → give up
+        h.controller.onFailed(11_000)
+        h.tick(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS) // the window closes
         assertEquals(1, h.giveUps.size)
         val gaveUps = h.giveUps.size
-        h.controller.onFailed(12_000)
-        h.tick(13_000)
-        h.controller.onDisconnected(14_000)
+        val restarts = h.restarts.size
+        h.controller.onFailed(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS + 1_000)
+        h.tick(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS + 2_000)
+        h.controller.onDisconnected(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS + 3_000)
         assertEquals(gaveUps, h.giveUps.size)
-        assertEquals(3, h.restarts.size)
+        assertEquals(restarts, h.restarts.size)
         assertFalse(h.controller.busy)
     }
 
     @Test
-    fun `give-up messages say which bound fired`() {
+    fun `the give-up message says how long the stretch lasted`() {
         val h = Harness()
         h.controller.onFailed(0)
-        h.controller.onFailed(1_000)
-        h.controller.onFailed(2_000)
-        h.tick(4_000) // #2
-        h.controller.onFailed(5_000)
-        h.tick(10_000) // #3
-        h.controller.onFailed(11_000) // exhausted
-        assertEquals(listOf("3 ice restarts exhausted"), h.giveUps)
+        h.tick(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS)
+        assertEquals(listOf("sustained failure 300s without recovery"), h.giveUps)
+    }
+
+    // ADR-036: the phone stops claiming ON AIR while media can't reach the desktop.
+    @Test
+    fun `an interruption starts with the stretch's first restart and ends at the next connected`() {
+        val h = Harness()
+        h.controller.onDisconnected(1_000)
+        h.tick(5_000) // inside the grace: a blip, not an interruption
+        assertTrue(h.interruptions.isEmpty())
+        h.tick(11_000) // the grace is over: restart #1
+        assertEquals(listOf<Long?>(1_000), h.interruptions) // since the stretch began
+        h.controller.onFailed(12_000)
+        h.tick(14_000) // restart #2: still the same interruption
+        assertEquals(listOf<Long?>(1_000), h.interruptions)
+        h.controller.onConnected(15_000)
+        assertEquals(listOf<Long?>(1_000, null), h.interruptions)
+    }
+
+    @Test
+    fun `a cast start that connects is never an interruption`() {
+        val h = Harness()
+        h.controller.onNegotiating(0)
+        h.controller.onConnected(1_200)
+        assertTrue(h.interruptions.isEmpty())
+    }
+
+    @Test
+    fun `giving up ends the interruption before the failure is reported`() {
+        val order = mutableListOf<String>()
+        val controller = IceRestartController(
+            onRestart = {},
+            onGiveUp = { order += "give-up" },
+            onInterruption = { order += if (it == null) "ended" else "started" },
+        )
+        controller.onFailed(0)
+        controller.onTick(IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS)
+        assertEquals(listOf("started", "ended", "give-up"), order)
     }
 
     // Mobile review, group A: an answer that never arrives (or a failed
@@ -254,7 +312,7 @@ class IceRestartControllerTest {
             t += 500
             h.tick(t)
         }
-        assertEquals(listOf(1, 2, 3), h.restarts) // recovery attempts first
+        assertTrue(h.restarts.size > 3) // recovery attempts for the whole window
         assertEquals(1, h.giveUps.size) // then an honest, bounded failure
         assertTrue(t <= IceRestartController.SUSTAINED_FAILURE_GIVE_UP_MS)
     }

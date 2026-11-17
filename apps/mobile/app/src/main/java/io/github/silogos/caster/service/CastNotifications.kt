@@ -33,6 +33,10 @@ internal class CastNotifications(private val context: Context) {
         textOverride: String? = null,
         /** What the Stop action sends: the Wi-Fi cast's stop by default, the USB cast's for a cable cast. */
         stop: Intent = CastService.stopIntent(context),
+        /** The title instead of "Casting to …" (ADR-036: the cast is waiting for its link). */
+        titleOverride: String? = null,
+        /** Wall-clock end of the drop window: the notification counts down to it (ADR-036). */
+        countdownTo: Long? = null,
     ): Notification {
         val openApp = PendingIntent.getActivity(
             context,
@@ -46,14 +50,22 @@ internal class CastNotifications(private val context: Context) {
             stop,
             PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_cast)
-            .setContentTitle(context.getString(R.string.casting_to, desktopName))
+            .setContentTitle(titleOverride ?: context.getString(R.string.casting_to, desktopName))
             .setContentText(textOverride ?: context.getString(R.string.cast_notification_text))
             .setOngoing(true)
             .setContentIntent(openApp)
             .addAction(0, context.getString(R.string.cast_notification_stop), stopCast)
-            .build()
+        if (countdownTo != null) {
+            builder.setWhen(countdownTo).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+        }
+        return builder.build()
+    }
+
+    /** Replaces the running cast's ongoing notification (same id as the foreground one). */
+    fun notify(notification: Notification) {
+        context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
 
     /** The ongoing notification's text follows an auto-quality transition. */
