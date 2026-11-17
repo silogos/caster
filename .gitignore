@@ -7,11 +7,6 @@ build-release/
 *.log
 npm-debug.log*
 
-# --- Electron builder output ---
-apps/desktop/dist/
-apps/desktop/out/
-apps/desktop/release/
-
 # --- Android / Gradle ---
 .gradle/
 build/
