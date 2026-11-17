@@ -1,13 +1,24 @@
 """Builds the "Mobile design v6 · The link is chosen at Connect (ADR-037)"
-page: one link per connection, Wi-Fi or the USB cable, picked on Home's
-saved-desktop hero and remembered.
+page: one link per connection, Wi-Fi or the USB cable, picked at Connect and
+remembered. The QR code is Wi-Fi's; the cable needs no QR and no Wi-Fi
+pairing, only a one-time Allow on the Mac (usb-link.md v2).
 
 A design ahead of the code, in the shipped amber tokens (spec_dsl.py), all
-auto layout placed by autolayout.solve(). Screens:
+auto layout placed by autolayout.solve(). Two rows of screens:
+
+Row 1, the first run (nothing saved) and the cable-first flow:
+  F1 First screen · choose a link     Scan QR code (Wi-Fi) or Plug the cable into the Mac
+  F2 Cable picked, no cable yet       waiting for the cable, Back
+  F3 Cable in, the Mac asks           the Mac's one-time Allow; the hero names the Mac from the cable
+  F4 The Mac didn't allow             ask again by replugging, or Wi-Fi instead
+
+Row 2, a saved desktop:
   L1 Home · saved, Wi-Fi chosen       the choice above Connect
   L2 Home · cable chosen, no cable    waiting for the cable, Cancel
   L3 Home · connected by cable        Share casts over the cable
   L4 Home · connected by Wi-Fi        a cable plugged in is ignored, one line says so
+
+The Mac's side (the Allow prompt) is drawn by build_desktop_cable_allow.py.
 
 Usage:
   python3 -I tools/design/build_link_choice_spec.py OUT.figcraft
@@ -166,6 +177,24 @@ def link_choice(parent, chosen, enabled=True):
     return z
 
 
+def option_card(parent, glyph, title, sub):
+    """A first-screen choice: the whole card is the button (48dp+ tall), chevron at the end."""
+    c = card(parent, f"option · {title}")
+    row = hstack(c, "row", gap=14, pad=(16, 16, 16, 16), cross="center", h="fill")
+    glyph(row, PRIMARY)
+    texts = vstack(row, "texts", gap=2, h="fill")
+    text(texts, title, 15, ON, "Medium", line=20)
+    text(texts, sub, 13, VARIANT, width=CARD_INNER_W - 38 - 14 - 14 - 12, line=19)
+    text(row, "›", 22, VARIANT, line=24)
+    return c
+
+
+def link_row(parent, labels):
+    r = hstack(parent, "links", gap=6, cross="center", h="fill")
+    for label in labels:
+        text_button(r, label, PRIMARY)
+
+
 def hint_line(parent, chars):
     h = hstack(parent, "hint", gap=10, pad=(0, 4, 0, 4), cross="min", h="fill")
     rect(h, "dot", 6, 6, VARIANT, radius=3)
@@ -176,72 +205,162 @@ PAGE = nid()
 nodes[PAGE] = {"id": PAGE, "name": PAGE_NAME, "type": "page", "background": hexc(PAGE_BG), "flows": [],
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
-page_caption(PAGE, "ADR-037 · THE LINK IS CHOSEN AT CONNECT — WI-FI OR THE USB CABLE, NEVER BOTH · REMEMBERED", 40, 30, 13,
-             "Bold", ON)
+page_caption(PAGE, "ADR-037 · THE LINK IS CHOSEN AT CONNECT — WI-FI OR THE USB CABLE, NEVER BOTH · "
+                   "THE QR IS WI-FI'S · THE CABLE ASKS THE MAC ONCE", 40, 30, 13, "Bold", ON)
 COLUMN = PHONE_W + PHONE_GAP
 X = [40 + i * COLUMN for i in range(4)]
-for x, label in zip(X, ("L1 · HOME — SAVED, WI-FI CHOSEN", "L2 · HOME — CABLE CHOSEN, NO CABLE YET",
-                        "L3 · HOME — CONNECTED BY CABLE", "L4 · HOME — CONNECTED BY WI-FI, CABLE IN")):
-    page_caption(PAGE, label, x, 78)
+ROW_GAP = 96
+MAC = "MacBook Pro"
 
-# L1: the saved desktop, offline; the remembered choice is Wi-Fi.
-l1 = phone(PAGE, "L1 Home · saved, Wi-Fi chosen", X[0], TOP, grow=True)
-bar(l1, "STANDBY")
-hero_plate(l1, "Gaming PC", [("Terminate", "muted")])
-link_choice(l1, "Wi-Fi")
-go_button(l1, "Connect")
-profile_strip(l1, "1920 px · 120 fps · 20–30 Mbps", casting=False)
-audio(l1)
 
-# L2: the cable is the choice, but none is in yet.
-l2 = phone(PAGE, "L2 Home · cable chosen, waiting for a cable", X[1], TOP, grow=True)
-bar(l2, "STANDBY")
-hero_plate(l2, "Gaming PC", [("Terminate", "muted")])
-link_choice(l2, "USB cable", enabled=False)
-status_card(l2, usb_glyph, "Plug the cable into the Mac",
-            "Caster connects as soon as it's in. Android may ask once to open Caster for the cable.",
-            pill_label="USB", pill_tone="muted")
-stop_button(l2, "Cancel")
-profile_strip(l2, "1920 px · 120 fps · 30 Mbps · USB", casting=False)
+def lay_out_row(top, captions, screens, row_notes):
+    """Captions, phones and notes for one row; returns the y below its lowest note."""
+    for x, label in zip(X, captions):
+        page_caption(PAGE, label, x, top - 34)
+    frames = []
+    for x, (name, draw) in zip(X, screens):
+        f = phone(PAGE, name, x, top, grow=True)
+        draw(f)
+        autolayout.solve(nodes, f, text_height)
+        frames.append(f)
+    bottom = top
+    for f, (title, lines) in zip(frames, row_notes):
+        n = notes(PAGE, title, lines, nodes[f]["transform"][4], top + nodes[f]["height"] + NOTES_GAP)
+        autolayout.solve(nodes, n, text_height)
+        bottom = max(bottom, nodes[n]["transform"][5] + nodes[n]["height"])
+    return bottom
 
-# L3: connected over the cable; Wi-Fi is not used.
-l3 = phone(PAGE, "L3 Home · connected by cable", X[2], TOP, grow=True)
-bar(l3, "STANDBY")
-hero_plate(l3, "Gaming PC", [("Disconnect", "muted"), ("Terminate", "muted")])
-status_card(l3, usb_glyph, "Connected by cable",
-            "Share screen casts over the USB cable. Wi-Fi isn't used until you disconnect and choose it.",
-            pill_label="USB")
-go_button(l3, "Share screen")
-profile_strip(l3, "1920 px · 120 fps · 30 Mbps · USB", casting=False)
-audio(l3)
 
-# L4: connected over Wi-Fi; a cable plugged in changes nothing.
-l4 = phone(PAGE, "L4 Home · connected by Wi-Fi, cable in", X[3], TOP, grow=True)
-bar(l4, "STANDBY")
-hero_plate(l4, "Gaming PC", [("Disconnect", "muted"), ("Terminate", "muted")])
-status_card(l4, wifi_glyph, "Connected by Wi-Fi",
-            "Share screen casts over Wi-Fi.", pill_label="WI-FI", pill_tone="muted")
-hint_line(l4, "A cable is in. To cast over it, disconnect and choose USB cable.")
-go_button(l4, "Share screen")
-profile_strip(l4, "1920 px · 120 fps · 20–30 Mbps", casting=False)
-audio(l4)
+# ---- Row 1: the first run and the cable-first flow --------------------------
 
-for f in (l1, l2, l3, l4):
-    autolayout.solve(nodes, f, text_height)
-for f, title, lines in (
-    (l1, "L1", ["The choice sits above Connect only while not connected; the last one is remembered "
-                "(Wi-Fi until the user picks the cable).",
-                "Wi-Fi + Connect: today's one-tap resume (ADR-006). Pairing (the QR) is always over Wi-Fi."]),
-    (l2, "L2", ["USB cable + Connect with no cable in. The choice is locked while it waits; Cancel goes back to L1.",
-                "While the cable is the choice, plugging it in later connects by itself, as today (ADR-034)."]),
-    (l3, "L3", ["Today's U1, with Disconnect in the hero: the connection is the cable's.",
-                "The Wi-Fi socket is not opened, so nothing about Wi-Fi shows or changes the state."]),
-    (l4, "L4", ["The phone doesn't open the accessory: the Mac never authenticates the cable and its deck "
-                "stays on Wi-Fi.",
-                "OPEN: offer a one-tap “Switch to cable” here instead of the hint? (It would stop a running cast.)"]),
-):
-    n = notes(PAGE, title, lines, nodes[f]["transform"][4], TOP + nodes[f]["height"] + NOTES_GAP)
-    autolayout.solve(nodes, n, text_height)
+def f1(f):  # nothing saved: the first screen offers both links
+    bar(f, "STANDBY")
+    hero_plate(f, "Not connected", [])
+    mono(f, "CONNECT OVER", 11, VARIANT, "Medium", spacing=1.1, line=14)
+    option_card(f, wifi_glyph, "Scan QR code (Wi-Fi)",
+                "Open Caster on the Mac and scan the code it shows. Both on the same Wi-Fi.")
+    option_card(f, usb_glyph, "Plug the cable into the Mac",
+                "No QR code and no Wi-Fi. The Mac asks once to allow this phone.")
+    hint_line(f, "Caster remembers your choice. To change it later, disconnect and choose the other.")
+
+
+def f2(f):  # the cable was picked; none is in yet
+    bar(f, "STANDBY")
+    hero_plate(f, "Not connected", [])
+    status_card(f, usb_glyph, "Plug the cable into the Mac",
+                "Caster connects as soon as it's in. Android asks once to open Caster for the cable.",
+                pill_label="USB", pill_tone="muted")
+    hint_line(f, "No QR code needed. The first time, the Mac asks you to allow this phone.")
+    stop_button(f, "Back")
+
+
+def f3(f):  # the cable is in and the Mac is asking
+    bar(f, "WAITING", tone="amber")
+    hero_plate(f, MAC, [])
+    status_card(f, usb_glyph, "Allow this phone on the Mac",
+                f"{MAC} asks “Allow Lenovo TB321FU to cast over the cable?” Click Allow there. "
+                "It asks only this once.", color=PRIMARY, pill_label="USB")
+    hint_line(f, "Not your Mac? Unplug the cable. Nothing is shared until you tap Share screen.")
+    stop_button(f, "Cancel")
+
+
+def f4(f):  # the Mac's user said no (or let the prompt run out)
+    bar(f, "STANDBY")
+    hero_plate(f, MAC, [])
+    c = status_card(f, usb_glyph, "The Mac didn't allow this phone",
+                    "Unplug the cable and plug it in again to ask again.", color=BAD)
+    link_row(c, ["Scan QR code (Wi-Fi) instead"])
+
+
+row1_bottom = lay_out_row(
+    TOP,
+    ("F1 · FIRST SCREEN — CHOOSE A LINK", "F2 · CABLE PICKED, NO CABLE YET", "F3 · CABLE IN — THE MAC ASKS ONCE",
+     "F4 · THE MAC DIDN'T ALLOW"),
+    (("F1 First screen · choose a link", f1), ("F2 Cable picked, no cable yet", f2),
+     ("F3 Cable in, waiting for the Mac's Allow", f3), ("F4 The Mac didn't allow", f4)),
+    (("F1", ["Replaces today's scan-first launch when nothing is saved. Scan QR → Wi-Fi is chosen; "
+             "the cable option → F2 and the cable is chosen.",
+             "A cable plugged in on this screen (Android opens Caster for it) chooses the cable without a tap.",
+             "The QR is only ever for Wi-Fi: no screen asks for it on the cable."]),
+     ("F2", ["Back returns to F1. Nothing is stored until the Mac allows the phone.",
+             "The same card as L2; here there is no saved desktop yet, so the hero says Not connected."]),
+     ("F3", ["The hero names the Mac from the cable's hello, so the user sees where the screen would go "
+             "before anything is shared (ADR-037 §Risks).",
+             "The phone has made its half of the cable key; the Mac's Allow stores it on both sides "
+             "(usb-link.md v2). No answer in 60 s reads as Don't Allow → F4.",
+             "Cancel sends bye and closes the accessory; the choice stays the cable."]),
+     ("F4", ["error not-allowed: Don't Allow, a closed prompt, or 60 s. The phone asks again only on a new "
+             "plug-in (one prompt per plug-in on the Mac).",
+             "Other cable errors use this card: “Update Caster on the Mac to cast over the cable.” (a v1 "
+             "receiver) and “The desktop is already connected to another device.” (busy).",
+             "Scan QR code (Wi-Fi) instead → the Scan screen; pairing there chooses Wi-Fi."])),
+)
+
+# ---- Row 2: a saved desktop -------------------------------------------------
+
+def l1(f):  # the saved desktop, offline; the remembered choice is Wi-Fi
+    bar(f, "STANDBY")
+    hero_plate(f, MAC, [("Terminate", "muted")])
+    link_choice(f, "Wi-Fi")
+    go_button(f, "Connect")
+    profile_strip(f, "1920 px · 120 fps · 20–30 Mbps", casting=False)
+    audio(f)
+
+
+def l2(f):  # the cable is the choice, but none is in yet
+    bar(f, "STANDBY")
+    hero_plate(f, MAC, [("Terminate", "muted")])
+    link_choice(f, "USB cable", enabled=False)
+    status_card(f, usb_glyph, "Plug the cable into the Mac",
+                "Caster connects as soon as it's in. Android may ask once to open Caster for the cable.",
+                pill_label="USB", pill_tone="muted")
+    stop_button(f, "Cancel")
+    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB", casting=False)
+
+
+def l3(f):  # connected over the cable; Wi-Fi is not used
+    bar(f, "STANDBY")
+    hero_plate(f, MAC, [("Disconnect", "muted"), ("Terminate", "muted")])
+    status_card(f, usb_glyph, "Connected by cable",
+                "Share screen casts over the USB cable. Wi-Fi isn't used until you disconnect and choose it.",
+                pill_label="USB")
+    go_button(f, "Share screen")
+    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB", casting=False)
+    audio(f)
+
+
+def l4(f):  # connected over Wi-Fi; a cable plugged in changes nothing
+    bar(f, "STANDBY")
+    hero_plate(f, MAC, [("Disconnect", "muted"), ("Terminate", "muted")])
+    status_card(f, wifi_glyph, "Connected by Wi-Fi",
+                "Share screen casts over Wi-Fi.", pill_label="WI-FI", pill_tone="muted")
+    hint_line(f, "A cable is in. To cast over it, disconnect and choose USB cable.")
+    go_button(f, "Share screen")
+    profile_strip(f, "1920 px · 120 fps · 20–30 Mbps", casting=False)
+    audio(f)
+
+
+lay_out_row(
+    row1_bottom + ROW_GAP + 34,
+    ("L1 · HOME — SAVED, WI-FI CHOSEN", "L2 · HOME — CABLE CHOSEN, NO CABLE YET", "L3 · HOME — CONNECTED BY CABLE",
+     "L4 · HOME — CONNECTED BY WI-FI, CABLE IN"),
+    (("L1 Home · saved, Wi-Fi chosen", l1), ("L2 Home · cable chosen, waiting for a cable", l2),
+     ("L3 Home · connected by cable", l3), ("L4 Home · connected by Wi-Fi, cable in", l4)),
+    (("L1", ["The choice sits above Connect only while not connected; the last one is remembered.",
+             "Wi-Fi + Connect: today's one-tap resume (ADR-006). USB cable + Connect: L2, or L3 at once "
+             "when the cable is in.",
+             "A desktop known on only one link still offers both: the other link pairs on first use "
+             "(the QR for Wi-Fi, F3's Allow for the cable)."]),
+     ("L2", ["The choice is locked while it waits; Cancel goes back to L1.",
+             "While the cable is the choice, plugging it in later connects by itself (ADR-034)."]),
+     ("L3", ["Disconnect sends a plain bye: both keep the cable trust, the next plug-in connects by itself. "
+             "Terminate sends bye forget: the Mac forgets this phone's cable trust, and the next plug-in "
+             "asks again (F3).",
+             "The Wi-Fi socket is not opened, so nothing about Wi-Fi shows or changes the state."]),
+     ("L4", ["The phone doesn't open the accessory: the Mac never hears from it on the cable, and its deck "
+             "stays on Wi-Fi.",
+             "OPEN: offer a one-tap “Switch to cable” here instead of the hint? (It would stop a running cast.)"])),
+)
 
 
 def write(path, doc_nodes, pages, name):

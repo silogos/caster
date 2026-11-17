@@ -6,7 +6,8 @@ like the other desktop builders.
   10  Deck · connected by cable, standby    the phone proved the pairing over the cable
   11  Deck · on air by cable                 the cast runs over USB
   12  Deck · cable unplugged                 the link is gone; nothing to reconnect to
-  13  QR hero · a phone on the cable isn't paired with this Mac
+  13  QR hero · a phone on the cable isn't paired with this Mac (superseded by
+      frame 15, ADR-037: the cable needs no QR; kept to show what changed)
   14  Deck · opened with a saved phone that isn't connected yet (not the QR)
 
 Re-running replaces frames 10–14; the others are untouched.
@@ -38,7 +39,7 @@ FRAMES = [
     ("10 Deck · Connected by cable, standby", "DESKTOP — 10 · DECK / CONNECTED BY CABLE, STANDBY (USB CAST, ADR-034)"),
     ("11 Deck · On air by cable", "DESKTOP — 11 · DECK / ON AIR BY CABLE (USB CAST)"),
     ("12 Deck · Cable unplugged", "DESKTOP — 12 · DECK / CABLE UNPLUGGED — NOTHING TO RECONNECT TO (USB CAST)"),
-    ("13 QR hero · Cable phone not paired", "DESKTOP — 13 · QR HERO / A PHONE ON THE CABLE ISN'T PAIRED WITH THIS MAC (USB CAST)"),
+    ("13 QR hero · Cable phone not paired", "DESKTOP — 13 · SUPERSEDED BY 15 (ADR-037: THE CABLE NEEDS NO QR) — WAS: A CABLE PHONE ISN'T PAIRED"),
     ("14 Deck · Saved phone, not connected", "DESKTOP — 14 · DECK / OPENED WITH A SAVED PHONE THAT ISN'T CONNECTED YET — NOT THE QR"),
 ]
 
@@ -190,7 +191,7 @@ def main(path):
             usb_tag(frame, layers, live=True)
             # Game audio and the mic both arrive over the cable: both chips lit, as in frame 07.
         elif i == 2:
-            standby(layers, "Cable unplugged — plug it in again, or tap Connect on the phone for Wi-Fi")
+            standby(layers, "Cable unplugged — plug it in again to carry on")
             layers["dot"][1]["fills"] = solid(MUTED)
             usb_tag(frame, layers, live=False)
         else:

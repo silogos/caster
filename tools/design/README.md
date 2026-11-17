@@ -81,11 +81,15 @@ python3 -I tools/design/build_cast_drop_spec.py /tmp/cast-drop.figcraft --into d
 python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 5
 ```
 
-`build_link_choice_spec.py` writes **"Mobile design v6 · The link is chosen at Connect (ADR-037)"**, drawn ahead of the code. One link per connection, picked on Home's saved-desktop hero (**Wi-Fi | USB cable**, remembered) above Connect. L1 is the choice with Wi-Fi, L2 waits for a cable with Cancel, L3 is connected by cable, and L4 is connected by Wi-Fi with a cable in, which is ignored and named in one line. Render: `designs/preview/mobile-link-choice.png`.
+`build_link_choice_spec.py` writes **"Mobile design v6 · The link is chosen at Connect (ADR-037)"**, drawn ahead of the code. One link per connection, picked at Connect and remembered; the QR is Wi-Fi's, and the cable asks the Mac once (usb-link.md v2). Row 1 is the first run and the cable-first flow: F1 the first screen (Scan QR code (Wi-Fi) or Plug the cable into the Mac), F2 waiting for the cable, F3 waiting for the Mac's Allow (the hero names the Mac from the cable), F4 the Mac didn't allow. Row 2 is a saved desktop: L1 the **Wi-Fi | USB cable** choice above Connect, L2 waiting for a cable with Cancel, L3 connected by cable, L4 connected by Wi-Fi with a cable in, which is ignored and named in one line. Render: `designs/preview/mobile-link-choice.png`.
+
+`build_desktop_cable_allow.py` writes the Mac's side as frames **15–17** of `designs/desktop-signal-deck.figcraft` (run it after `build_desktop_usb_cast.py`, whose frame 14 it copies): 15 the one-time **"Allow <phone> to cast over the cable?"** sheet over the QR hero, 16 the same sheet on a Mac that already knows the phone over Wi-Fi (cable trust is its own entry), 17 the QR hero when the phone on the cable runs an older Caster. Frame 13 (pair over Wi-Fi first) is kept, captioned as superseded by 15. Render: `designs/preview/desktop-15-17-cable-allow.png`.
 
 ```bash
 python3 -I tools/design/build_link_choice_spec.py /tmp/link-choice.figcraft --into designs/mobile-app.figcraft
 python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 6
+python3 -I tools/design/build_desktop_usb_cast.py designs/desktop-signal-deck.figcraft     # 10–14
+python3 -I tools/design/build_desktop_cable_allow.py designs/desktop-signal-deck.figcraft  # 15–17
 ```
 
 ## The desktop receiver's sound and the Caster devices
