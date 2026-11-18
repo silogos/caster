@@ -81,7 +81,13 @@ pub enum ServerCommand {
     /// The app is quitting: a plain `bye desktop-quit` to the connected
     /// phone — the persistent trust survives a quit (ADR-006).
     SayGoodbye,
+    /// The receiver leaves Wireless mode (ADR-037: Back to the choice, or
+    /// Terminate): the port closes, the peers close, the server thread ends.
+    Shutdown,
 }
+
+/// How long a Shutdown waits for a `bye` already queued (Terminate's `bye forget`) to go out.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(300);
 
 /// The `bye` reason a quitting desktop sends (any non-`forget` reason
 /// keeps the persistent session).
@@ -195,7 +201,15 @@ pub async fn serve<H: SignalingHost + 'static>(
                 }
                 Err(e) => log::warn!(target: "signaling", "accept failed: {e}"),
             },
-            Some(command) = commands.recv() => on_command(command, &shared, &config, &*host),
+            Some(command) = commands.recv() => {
+                if matches!(command, ServerCommand::Shutdown) {
+                    tokio::time::sleep(SHUTDOWN_GRACE).await;
+                    host.close_peers();
+                    log::info!(target: "signaling", "stopped — port {SIGNALING_PORT} closed (left Wireless mode)");
+                    return;
+                }
+                on_command(command, &shared, &config, &*host);
+            }
             _ = sweep.tick() => {
                 let hosts = (config.hosts)();
                 let stale = shared.borrow().store.needs_regeneration(pairing::unix_now(), &hosts);
@@ -245,6 +259,7 @@ fn on_command<H: SignalingHost + ?Sized>(command: ServerCommand, shared: &RefCel
             shared.borrow_mut().store.invalidate();
             regenerate(shared, host, (config.hosts)(), true);
         }
+        ServerCommand::Shutdown => unreachable!("handled by serve"),
     }
 }
 
@@ -655,7 +670,7 @@ async fn on_auth<H: SignalingHost>(
                     key: pairing::derive_trust_key(&secret, &conn.sid),
                 };
                 let id = protocol::short_id(device_id);
-                match pairing::write_trust(&config.paths.trust, &entry) {
+                match pairing::store_pairing(&config.paths, pairing::Link::Wireless, &entry) {
                     Ok(()) => log::info!(target: "signaling", "mobile authorized — persistent session saved (deviceId={id}…)"),
                     Err(e) => log::warn!(target: "signaling", "mobile authorized — trust NOT saved (deviceId={id}…): {e}"),
                 }

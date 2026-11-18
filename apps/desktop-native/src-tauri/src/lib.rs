@@ -1,6 +1,7 @@
 mod audio;
 mod h264;
 mod latency_probe;
+mod link_mode;
 mod logging;
 mod opus_fmtp;
 mod pacing;
@@ -18,6 +19,7 @@ mod virtual_audio;
 mod webrtc;
 
 use futures_util::future::LocalBoxFuture;
+use link_mode::LinkOwner;
 use protocol::{Candidate, PcId};
 use serde_json::Value;
 use signaling::{IceSender, SignalingHost};
@@ -30,35 +32,68 @@ use tauri::{Emitter, Manager};
 #[derive(Default)]
 struct PairingView(Mutex<Option<Value>>);
 
-/// The UI → signaling-server channel (Forget phone, New QR).
-#[derive(Default)]
-struct ServerControl(Mutex<Option<signaling::CommandSender>>);
-
 /// The receiver's persisted controls and where they live.
 struct ReceiverControls {
     path: std::path::PathBuf,
     current: Mutex<settings::ReceiverSettings>,
 }
 
-fn send_command(control: &ServerControl, command: signaling::ServerCommand) -> Result<(), String> {
-    let sender = control.0.lock().map_err(|_| "server control unavailable")?;
-    sender
-        .as_ref()
-        .ok_or("signaling server not running")?
-        .send(command)
-        .map_err(|_| "signaling server stopped".to_string())
+/// The receiver's mode and paired phone (ADR-037): `{mode: "choice"|"wireless"|"cable", name}`.
+#[tauri::command]
+fn link_state(owner: tauri::State<'_, LinkOwner>) -> Value {
+    owner.view()
 }
 
-/// Desktop Disconnect: forget the phone (revokes the persistent pairing).
+/// The choice screen's Wireless / Cable (frame 15): only that link starts.
 #[tauri::command]
-fn forget_phone(control: tauri::State<'_, ServerControl>) -> Result<(), String> {
-    send_command(&control, signaling::ServerCommand::ForgetPhone)
+fn choose_link(app: tauri::AppHandle, owner: tauri::State<'_, LinkOwner>, link: pairing::Link) -> Result<Value, String> {
+    owner.start(&app, link)?;
+    Ok(owner.view())
 }
 
-/// A fresh QR (only while no phone is connected).
+/// Back from the QR or the cable guide (frames 16–18), while nothing is paired: everything stops.
 #[tauri::command]
-fn regenerate_pairing(control: tauri::State<'_, ServerControl>) -> Result<(), String> {
-    send_command(&control, signaling::ServerCommand::RegeneratePairing)
+fn back_to_choice(app: tauri::AppHandle, owner: tauri::State<'_, LinkOwner>) -> Result<Value, String> {
+    if pairing::saved_pairing(owner.paths()).is_some() {
+        return Err("paired: switching link needs Terminate".into());
+    }
+    owner.stop(&app);
+    Ok(owner.view())
+}
+
+/// Terminate on the deck (frames 19–24): `bye forget` on the running link, the pairing ends, back to the choice.
+#[tauri::command]
+fn terminate(app: tauri::AppHandle, owner: tauri::State<'_, LinkOwner>) -> Result<Value, String> {
+    owner.terminate(&app)?;
+    Ok(owner.view())
+}
+
+/// Allow / Don't Allow in the cable guide's step 3 (frame 17).
+#[tauri::command]
+fn cable_answer(owner: tauri::State<'_, LinkOwner>, allow: bool) -> Result<(), String> {
+    owner.answer(allow)
+}
+
+/// A fresh QR (Wireless mode, only while no phone is connected).
+#[tauri::command]
+fn regenerate_pairing(owner: tauri::State<'_, LinkOwner>) -> Result<(), String> {
+    owner.regenerate_pairing()
+}
+
+/// A phone's state for the deck and the tray, from either link. A pairing
+/// that ended (the phone's Terminate, or the deck's) sends the receiver back
+/// to the choice, and its link stops (ADR-037 §4).
+pub(crate) fn on_mobile_state(app: &tauri::AppHandle, state: Value) {
+    if let Some(tray) = app.try_state::<tray::Tray>() {
+        tray.on_mobile_state(&state);
+    }
+    let forgotten = state["state"] == "forgotten";
+    let _ = app.emit("pairing:mobile-state", state);
+    if forgotten {
+        if let Some(owner) = app.try_state::<LinkOwner>() {
+            owner.stop(app);
+        }
+    }
 }
 
 /// Saves the video window's state, so the next launch opens it again (or not).
@@ -72,14 +107,6 @@ pub(crate) fn remember_video_open(app: &tauri::AppHandle, open: bool) {
     if let Err(e) = settings::save(&controls.path, &current) {
         log::warn!(target: "settings", "not saved: {e}");
     }
-}
-
-/// The phone this receiver trusts, by name — the deck opens on it, offline,
-/// instead of the QR (ADR-006; frame 14). Null when none is paired.
-#[tauri::command]
-fn saved_phone() -> Option<String> {
-    let paths = pairing::StorePaths::from_home()?;
-    pairing::read_trust(&paths.trust).map(|t| t.name)
 }
 
 /// "Open video": the native video window, and the sound with it.
@@ -303,16 +330,13 @@ impl SignalingHost for TauriHost {
     }
 
     fn mobile_state(&self, state: Value) {
-        if let Some(tray) = self.app.try_state::<tray::Tray>() {
-            tray.on_mobile_state(&state);
-        }
         // A phone connecting brings a hidden window back (ADR-010): the
         // phone's Connect flow needs zero desktop interaction.
         if state["state"] == "connected" {
             let app = self.app.clone();
             let _ = self.app.run_on_main_thread(move || tray::show_main_window(&app));
         }
-        let _ = self.app.emit("pairing:mobile-state", state);
+        on_mobile_state(&self.app, state);
     }
 }
 
@@ -321,16 +345,10 @@ pub fn run() {
     logging::init();
     tauri::Builder::default()
         .manage(PairingView::default())
-        .manage(ServerControl::default())
         .setup(|app| {
-            // Create the libwebrtc factory on the main thread — the video
-            // encoder enumeration needs NSApplication context (found live:
-            // NSException crash on background threads).
-            webrtc::init_factory();
-
             let paths = pairing::StorePaths::from_home().ok_or("HOME is not set")?;
             let desktop_id = pairing::desktop_id(&paths.desktop_id)?;
-            let trusted_at_launch = pairing::read_trust(&paths.trust).is_some();
+            let saved_link = pairing::saved_pairing(&paths).map(|(link, _)| link);
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
             audio::set_gain(audio::Track::Game, saved.effective_game_gain());
@@ -351,41 +369,26 @@ pub fn run() {
                     let _ = handle.emit("video:window", serde_json::json!({ "open": true }));
                 });
             }
-            // The first session exists before the window can ask for it.
-            let mut store = pairing::SessionStore::new(pairing::SESSION_TTL_SECONDS);
-            let first = store.create(pairing::unix_now(), pairing::lan_ipv4_hosts())?.view();
-            *app.state::<PairingView>().0.lock().map_err(|_| "pairing view lock")? = Some(first);
+            // ADR-037: the saved pairing's link runs, and only it; with no
+            // pairing nothing runs until the choice screen picks one.
+            let owner = LinkOwner::new(desktop_id, paths);
+            if let Some(link) = saved_link {
+                owner.start(app.handle(), link)?;
+            } else {
+                log::info!(target: "link", "nothing paired — the choice screen; no link runs");
+            }
+            app.manage(owner);
 
-            // The USB link (ADR-034): its own thread, the same trust store.
-            usb_link::start(usb_link::Config {
-                app: app.handle().clone(),
-                desktop_id: desktop_id.clone(),
-                desktop_name: pairing::desktop_name(),
-                trust_path: paths.trust.clone(),
-            });
-
-            let handle = app.handle().clone();
-            let host = TauriHost {
-                media: Arc::new(webrtc::MediaAnswerer::new(PcId::Media, handle.clone())),
-                mic: Arc::new(webrtc::MediaAnswerer::new(PcId::Mic, handle.clone())),
-                app: handle,
-            };
-            let config = signaling::ServerConfig {
-                timings: signaling::Timings::default(),
-                paths,
-                desktop_id,
-                desktop_name: pairing::desktop_name(),
-                hosts: Box::new(pairing::lan_ipv4_hosts),
-            };
-            let commands = signaling::start(host, store, config);
-            *app.state::<ServerControl>().0.lock().map_err(|_| "server control lock")? = Some(commands.clone());
-
-            let (forget_tx, goodbye_tx) = (commands.clone(), commands);
+            let (forget_app, goodbye_app) = (app.handle().clone(), app.handle().clone());
             let tray = tray::install(
                 app.handle(),
-                trusted_at_launch,
-                move || { let _ = forget_tx.send(signaling::ServerCommand::ForgetPhone); },
-                move || { let _ = goodbye_tx.send(signaling::ServerCommand::SayGoodbye); },
+                saved_link.is_some(),
+                move || {
+                    if let Err(e) = forget_app.state::<LinkOwner>().terminate(&forget_app) {
+                        log::warn!(target: "tray", "forget: {e}");
+                    }
+                },
+                move || goodbye_app.state::<LinkOwner>().say_goodbye(),
             )?;
             app.manage(tray);
             Ok(())
@@ -401,8 +404,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pairing_payload,
-            saved_phone,
-            forget_phone,
+            link_state,
+            choose_link,
+            back_to_choice,
+            terminate,
+            cable_answer,
             regenerate_pairing,
             receiver_settings,
             set_game_audio,
@@ -420,8 +426,7 @@ pub fn run() {
             // Cmd+Q / the app menu's Quit walk the same goodbye as the tray.
             tauri::RunEvent::ExitRequested { api, .. } if !tray::quitting() => {
                 api.prevent_exit();
-                let control = app.state::<ServerControl>();
-                tray::quit(app, &|| { let _ = send_command(&control, signaling::ServerCommand::SayGoodbye); });
+                tray::quit(app, &|| app.state::<LinkOwner>().say_goodbye());
             }
             // Dock icon click: the video window while it is open, else the
             // main window (back from the tray).

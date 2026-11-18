@@ -1,20 +1,25 @@
-//! The USB link (ADR-034, docs/architecture/usb-link.md): the receiver is the
-//! USB host. It switches a plugged-in Android phone into accessory mode,
+//! The USB link (ADR-034, docs/architecture/usb-link.md v2): the receiver is
+//! the USB host. It switches a plugged-in Android phone into accessory mode,
 //! claims the accessory's bulk endpoints, authenticates the phone with the
-//! Wi-Fi pairing's trust key, and hands the cast's frames to the same
-//! display path (pacer, layer, Syphon) and game-audio engine as Wi-Fi.
+//! cable pairing's key (enrolling it, with the user's Allow, on its first
+//! plug-in — ADR-037), and hands the cast's frames to the same display path
+//! (pacer, layer, Syphon) and game-audio engine as Wi-Fi.
 //!
-//! One thread owns everything here: it polls for devices, and while a link
-//! is up it reads, decodes and renders inline (one link at a time; a
-//! lossless ordered stream needs no queue between read and decode).
+//! It runs only in Cable mode (ADR-037): `start` spawns it when the receiver
+//! enters Cable mode, and the `stop` flag ends it when it leaves. One thread
+//! owns everything here: it polls for devices, and while a link is up it
+//! reads, decodes and renders inline (one link at a time; a lossless ordered
+//! stream needs no queue between read and decode).
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rusb::{Context, Device, DeviceHandle, Direction, TransferType, UsbContext};
 use serde_json::{json, Value};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 use crate::usb_protocol::{self as proto, Frame};
 
@@ -52,12 +57,26 @@ const READ_TIMEOUT: Duration = Duration::from_millis(100);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
 const BULK_READ_BYTES: usize = 256 * 1024;
 const STATS_EVERY: Duration = Duration::from_secs(5);
+/// The Allow prompt's life (usb-link.md §Limits): no answer reads as Don't Allow.
+const ALLOW_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What the receiver's UI asks of the cable thread.
+#[derive(Debug)]
+pub enum Command {
+    /// The user's answer in the cable guide (step 3).
+    Answer(bool),
+    /// Terminate on the deck: `bye forget` to the phone; the pairing is already removed.
+    Forget,
+}
 
 pub struct Config {
     pub app: tauri::AppHandle,
     pub desktop_id: String,
     pub desktop_name: String,
-    pub trust_path: PathBuf,
+    pub paths: crate::pairing::StorePaths,
+    pub commands: Receiver<Command>,
+    /// Set by the link owner when the receiver leaves Cable mode.
+    pub stop: Arc<AtomicBool>,
 }
 
 pub fn start(config: Config) {
@@ -67,16 +86,24 @@ pub fn start(config: Config) {
     }
 }
 
+/// `cable:state` for the cable guide and the deck (ADR-037; design frames 17, 19–24).
+fn announce_cable(app: &tauri::AppHandle, state: &str, name: Option<&str>) {
+    let _ = app.emit("cable:state", json!({ "state": state, "name": name }));
+}
+
 fn run(config: Config) {
     let context = match Context::new() {
         Ok(c) => c,
         Err(e) => return log::error!(target: "usb", "libusb unavailable — no USB cast: {e}"),
     };
-    log::info!(target: "usb", "watching for Android devices on USB");
+    log::info!(target: "usb", "Cable mode — watching for Android devices on USB");
+    announce_cable(&config.app, "waiting", None);
     // Devices already sent the switch (bus, address): a phone that never
     // opens the accessory is left alone until it is replugged.
     let mut switched: HashSet<(u8, u8)> = HashSet::new();
-    loop {
+    while !config.stop.load(Ordering::Relaxed) {
+        // Commands while no link is up: nothing to answer, nobody to say bye to.
+        while config.commands.try_recv().is_ok() {}
         let Ok(devices) = context.devices() else {
             std::thread::sleep(POLL_INTERVAL);
             continue;
@@ -92,39 +119,71 @@ fn run(config: Config) {
                     Err(e) => log::warn!(target: "usb", "accessory {:04x}:{:04x} did not open: {e}", desc.vendor_id(), desc.product_id()),
                 }
             } else if ANDROID_VIDS.contains(&desc.vendor_id()) && switched.insert(key) {
-                switch_to_accessory(&device, &config.desktop_id);
+                if let Some(name) = switch_to_accessory(&device, &config.desktop_id) {
+                    announce_cable(&config.app, "found", Some(&name));
+                }
             }
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+    log::info!(target: "usb", "stopped (left Cable mode)");
 }
 
 /// GET_PROTOCOL → identity strings → START. Never AOA audio (request 58).
-fn switch_to_accessory(device: &Device<Context>, desktop_id: &str) {
-    let Ok(desc) = device.device_descriptor() else { return };
+/// The phone's USB name ("Lenovo TB321FU") once it was switched, for the guide's step 1.
+fn switch_to_accessory(device: &Device<Context>, desktop_id: &str) -> Option<String> {
+    let desc = device.device_descriptor().ok()?;
     let id = format!("{:04x}:{:04x}", desc.vendor_id(), desc.product_id());
     let handle = match device.open() {
         Ok(h) => h,
-        Err(e) => return log::debug!(target: "usb", "{id}: not opened for the switch: {e}"),
+        Err(e) => {
+            log::debug!(target: "usb", "{id}: not opened for the switch: {e}");
+            return None;
+        }
     };
     let mut version = [0u8; 2];
     match handle.read_control(REQUEST_VENDOR_IN, AOA_GET_PROTOCOL, 0, 0, &mut version, CONTROL_TIMEOUT) {
         Ok(2) if u16::from_le_bytes(version) >= 1 => {}
-        Ok(_) => return log::info!(target: "usb", "{id}: no accessory support"),
-        Err(e) => return log::info!(target: "usb", "{id}: no accessory support ({e})"),
+        Ok(_) => {
+            log::info!(target: "usb", "{id}: no accessory support");
+            return None;
+        }
+        Err(e) => {
+            log::info!(target: "usb", "{id}: no accessory support ({e})");
+            return None;
+        }
     }
+    let name = usb_name(&handle, &desc);
     let link_version = proto::LINK_VERSION.to_string();
     let strings = [MANUFACTURER, MODEL, DESCRIPTION, link_version.as_str(), DOWNLOAD_URI, desktop_id];
     for (index, value) in strings.iter().enumerate() {
         let mut bytes = value.as_bytes().to_vec();
         bytes.push(0);
         if let Err(e) = handle.write_control(REQUEST_VENDOR_OUT, AOA_SEND_STRING, 0, index as u16, &bytes, CONTROL_TIMEOUT) {
-            return log::warn!(target: "usb", "{id}: identity string {index} refused: {e}");
+            log::warn!(target: "usb", "{id}: identity string {index} refused: {e}");
+            return None;
         }
     }
     match handle.write_control(REQUEST_VENDOR_OUT, AOA_START, 0, 0, &[], CONTROL_TIMEOUT) {
-        Ok(_) => log::info!(target: "usb", "{id}: AOA v{} — switched to accessory mode", u16::from_le_bytes(version)),
-        Err(e) => log::warn!(target: "usb", "{id}: accessory start refused: {e}"),
+        Ok(_) => {
+            log::info!(target: "usb", "{id}: AOA v{} — switched to accessory mode", u16::from_le_bytes(version));
+            Some(name)
+        }
+        Err(e) => {
+            log::warn!(target: "usb", "{id}: accessory start refused: {e}");
+            None
+        }
+    }
+}
+
+/// "Lenovo" + "TB321FU" → "Lenovo TB321FU"; a product string that already names the maker stays as is.
+fn usb_name(handle: &DeviceHandle<Context>, desc: &rusb::DeviceDescriptor) -> String {
+    let maker = handle.read_manufacturer_string_ascii(desc).unwrap_or_default();
+    let product = handle.read_product_string_ascii(desc).unwrap_or_default();
+    match (maker.trim(), product.trim()) {
+        (_, "") => "Android phone".into(),
+        (m, p) if m.is_empty() || p.to_lowercase().starts_with(&m.to_lowercase()) => p.into(),
+        (m, p) => format!("{m} {p}"),
     }
 }
 
@@ -151,7 +210,7 @@ fn endpoints(handle: &DeviceHandle<Context>) -> Option<Endpoints> {
     Some(Endpoints { interface: alt.interface_number(), bulk_in: bulk_in?, bulk_out: bulk_out? })
 }
 
-/// One link, from claim to the cable going (or a broken stream / `bye`).
+/// One link, from claim to the cable going (or a broken stream / `bye` / leaving Cable mode).
 fn session(config: &Config, handle: DeviceHandle<Context>) {
     let Some(ep) = endpoints(&handle) else {
         return log::warn!(target: "usb", "accessory without bulk endpoints");
@@ -163,16 +222,37 @@ fn session(config: &Config, handle: DeviceHandle<Context>) {
     }
     log::info!(target: "usb", "accessory claimed (bulk in {:#04x}, out {:#04x}) — waiting for the app", ep.bulk_in, ep.bulk_out);
     let link = Link { handle: &handle, out: ep.bulk_out };
-    let mut desktop_nonce = crate::pairing::new_nonce();
-    let mut hello = proto::control(&proto::hello(&config.desktop_id, &config.desktop_name, &desktop_nonce));
+    let mut s = Session {
+        handshake: proto::Handshake::new(&config.desktop_id, crate::pairing::new_nonce()),
+        trusted: false,
+        asked_at: None,
+        phone_name: None,
+        media: UsbMedia::new(config.app.clone()),
+    };
+    let mut hello = s.hello(config);
     let mut last_hello: Option<Instant> = None;
-    let mut trusted = false;
     let mut reader = proto::Reader::default();
-    let mut media = UsbMedia::new(config.app.clone());
     let mut buf = vec![0u8; BULK_READ_BYTES];
     let (mut bytes_window, mut window_start) = (0usize, Instant::now());
     let end = loop {
-        if !trusted && last_hello.map_or(true, |t| t.elapsed() >= HELLO_EVERY) {
+        // Commands first: Terminate queues Forget and then stops the thread, and its `bye forget` must win.
+        match config.commands.try_recv() {
+            Ok(Command::Answer(allow)) => s.answer(config, &link, allow),
+            Ok(Command::Forget) => {
+                link.send(&proto::bye(Some(proto::BYE_FORGET)));
+                break "Terminate on the deck".to_string();
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {}
+        }
+        if config.stop.load(Ordering::Relaxed) {
+            link.send(&proto::bye(None));
+            break "the receiver left Cable mode".to_string();
+        }
+        if s.asked_at.is_some_and(|t| t.elapsed() >= ALLOW_TIMEOUT) {
+            log::info!(target: "usb", "no answer in {} s — read as Don't Allow", ALLOW_TIMEOUT.as_secs());
+            s.answer(config, &link, false);
+        }
+        if !s.trusted && s.asked_at.is_none() && last_hello.map_or(true, |t| t.elapsed() >= HELLO_EVERY) {
             last_hello = Some(Instant::now());
             // Times out until the app has opened the accessory: expected.
             let _ = handle.write_bulk(ep.bulk_out, &hello, HELLO_WRITE_TIMEOUT);
@@ -184,7 +264,7 @@ fn session(config: &Config, handle: DeviceHandle<Context>) {
         };
         bytes_window += n;
         if window_start.elapsed() >= STATS_EVERY {
-            if media.casting {
+            if s.media.casting {
                 log::info!(target: "usb", "link: {:.1} Mbit/s", bytes_window as f64 * 8.0 / window_start.elapsed().as_secs_f64() / 1e6);
             }
             bytes_window = 0;
@@ -195,57 +275,67 @@ fn session(config: &Config, handle: DeviceHandle<Context>) {
         }
         let frames = match reader.feed(&buf[..n]) {
             Ok(f) => f,
-            Err(proto::Broken(why)) => break format!("broken stream: {why}"),
+            Err(broken) => {
+                if broken.peer_version.is_some_and(|v| v < proto::LINK_VERSION) {
+                    announce_cable(&config.app, "old-phone", None);
+                }
+                break format!("broken stream: {}", broken.why);
+            }
         };
-        let mut bye = false;
+        let mut close = None;
         for frame in frames {
             match frame.kind {
-                proto::KIND_CONTROL => match on_control(config, &link, &frame, &desktop_nonce, &mut trusted, &mut media) {
+                proto::KIND_CONTROL => match s.on_control(config, &link, &frame) {
                     Control::Continue => {}
-                    Control::Bye => bye = true,
+                    Control::Close(why) => close = Some(why),
                     Control::Restart => {
                         // A new app instance on the same cable. Mid-handshake, the
                         // hello already sent stays valid (the app may be answering
                         // it right now: a new nonce here refused that answer, found
                         // live 2026-11-18); only a session that was trusted starts
-                        // over with a fresh nonce, and its media ends.
-                        if trusted {
+                        // over with a fresh nonce, and its media ends. An open
+                        // prompt closes: the enrolment starts over.
+                        if s.trusted {
                             log::info!(target: "usb", "the app reopened the accessory — the old session ends, handshake starts over");
-                            media.stop();
-                            trusted = false;
-                            desktop_nonce = crate::pairing::new_nonce();
-                            hello = proto::control(&proto::hello(&config.desktop_id, &config.desktop_name, &desktop_nonce));
+                            s.media.stop();
+                            s.trusted = false;
+                            s.handshake.restart(crate::pairing::new_nonce());
+                            hello = s.hello(config);
                         } else {
                             log::info!(target: "usb", "the app opened the accessory — hello sent again");
+                            if s.asked_at.take().is_some() {
+                                announce_cable(&config.app, "found", s.phone_name.as_deref());
+                            }
+                            s.handshake.drop_enrolment();
                         }
                         last_hello = None;
                     }
                 },
-                _ if !trusted => log::warn!(target: "usb", "media before authentication dropped"),
-                proto::KIND_VIDEO => media.video(&frame),
-                proto::KIND_GAME_AUDIO => media.game_audio(&frame.payload),
-                proto::KIND_MIC_AUDIO => media.mic_audio(&frame.payload),
+                _ if !s.trusted => log::warn!(target: "usb", "media before authentication dropped"),
+                proto::KIND_VIDEO => s.media.video(&frame),
+                proto::KIND_GAME_AUDIO => s.media.game_audio(&frame.payload),
+                proto::KIND_MIC_AUDIO => s.media.mic_audio(&frame.payload),
                 other => log::debug!(target: "usb", "frame kind {other} ignored"),
             }
         }
-        if bye {
-            break "the phone said bye".to_string();
+        if let Some(why) = close {
+            break why;
         }
     };
     log::info!(target: "usb", "link ended: {end}");
-    media.stop();
-    if trusted {
+    s.media.stop();
+    if s.trusted {
         announce_mobile(&config.app, json!({ "state": "disconnected", "link": "usb" }));
+    }
+    if !config.stop.load(Ordering::Relaxed) {
+        announce_cable(&config.app, "waiting", None);
     }
     let _ = handle.release_interface(ep.interface);
 }
 
 /// `pairing:mobile-state` for the deck and the tray — what signaling sends for a Wi-Fi phone.
 fn announce_mobile(app: &tauri::AppHandle, state: Value) {
-    if let Some(tray) = app.try_state::<crate::tray::Tray>() {
-        tray.on_mobile_state(&state);
-    }
-    let _ = app.emit("pairing:mobile-state", state);
+    crate::on_mobile_state(app, state);
 }
 
 struct Link<'a> {
@@ -263,68 +353,144 @@ impl Link<'_> {
 
 enum Control {
     Continue,
-    Bye,
+    Close(String),
     /// The phone's `ready`: start the handshake over.
     Restart,
 }
 
-fn on_control(config: &Config, link: &Link, frame: &Frame, desktop_nonce: &str, trusted: &mut bool, media: &mut UsbMedia) -> Control {
-    let Ok(message) = serde_json::from_slice::<Value>(&frame.payload) else {
-        log::warn!(target: "usb", "unreadable control message dropped");
-        return Control::Continue;
-    };
-    match message["type"].as_str().unwrap_or_default() {
-        "auth" => {
-            let entry = crate::pairing::read_trust(&config.trust_path);
-            let trust = entry.as_ref().map(|e| proto::Trust { device_id: &e.device_id, key: &e.key });
-            match proto::answer_auth(&message, trust.as_ref(), &config.desktop_id, desktop_nonce) {
-                Ok(ok) => {
-                    *trusted = true;
-                    link.send(&ok);
-                    log::info!(target: "usb", "phone authenticated over USB");
-                    // The deck and the tray leave the QR stage, as on a Wi-Fi connect.
-                    let name = entry.as_ref().map_or("Android device", |e| e.name.as_str());
-                    announce_mobile(&config.app, json!({ "state": "connected", "name": name, "link": "usb" }));
+/// One attach's state: the handshake, the open prompt, and the cast's media.
+struct Session {
+    handshake: proto::Handshake,
+    trusted: bool,
+    /// When the Allow prompt opened (None: no prompt).
+    asked_at: Option<Instant>,
+    phone_name: Option<String>,
+    media: UsbMedia,
+}
+
+impl Session {
+    fn hello(&self, config: &Config) -> Vec<u8> {
+        proto::control(&proto::hello(&config.desktop_id, &config.desktop_name, self.handshake.desktop_nonce()))
+    }
+
+    /// The deck and the tray leave the guide, as on a Wi-Fi connect; a hidden window comes back.
+    fn connected(&mut self, config: &Config, name: &str) {
+        self.trusted = true;
+        announce_cable(&config.app, "connected", Some(name));
+        announce_mobile(&config.app, json!({ "state": "connected", "name": name, "link": "usb" }));
+        let app = config.app.clone();
+        let _ = config.app.run_on_main_thread(move || crate::tray::show_main_window(&app));
+    }
+
+    /// The user's Allow / Don't Allow (or the prompt's timeout).
+    fn answer(&mut self, config: &Config, link: &Link, allow: bool) {
+        if self.asked_at.take().is_none() {
+            return; // nothing open: a late click
+        }
+        if allow {
+            let Some((reply, enrolled)) = self.handshake.allow() else { return };
+            let entry = crate::pairing::TrustEntry { device_id: enrolled.device_id, name: enrolled.name, key: enrolled.key };
+            if let Err(e) = crate::pairing::store_pairing(&config.paths, crate::pairing::Link::Cable, &entry) {
+                // Not stored: the phone must not keep a key this side forgot.
+                log::error!(target: "usb", "cable pairing not saved: {e}");
+                link.send(&proto::error(proto::ERROR_UNKNOWN_DEVICE));
+                return;
+            }
+            link.send(&reply);
+            log::info!(target: "usb", "phone allowed over the cable — cable pairing saved (deviceId={}…)", crate::protocol::short_id(&entry.device_id));
+            self.connected(config, &entry.name);
+        } else if let Some(refusal) = self.handshake.deny() {
+            link.send(&refusal);
+            log::info!(target: "usb", "phone not allowed over the cable");
+            announce_cable(&config.app, "denied", self.phone_name.as_deref());
+        }
+    }
+
+    fn on_control(&mut self, config: &Config, link: &Link, frame: &Frame) -> Control {
+        let Ok(message) = serde_json::from_slice::<Value>(&frame.payload) else {
+            log::warn!(target: "usb", "unreadable control message dropped");
+            return Control::Continue;
+        };
+        let paired = crate::pairing::read_trust(&config.paths.cable_trust);
+        let trust = paired.as_ref().map(|e| proto::Trust { device_id: &e.device_id, key: &e.key });
+        match message["type"].as_str().unwrap_or_default() {
+            "enrol" if !self.trusted => {
+                log::info!(target: "usb", "a phone without a cable key for this Mac — enrolling");
+                match self.handshake.on_enrol(&message, trust.as_ref(), &proto::Ephemeral::random()) {
+                    proto::Outcome::Reply(reply) => {
+                        if reply["code"] == proto::ERROR_BUSY {
+                            log::info!(target: "usb", "refused: this Mac is paired with another phone");
+                            announce_cable(&config.app, "busy", None);
+                        }
+                        link.send(&reply);
+                    }
+                    proto::Outcome::Close(why) => return Control::Close(why),
+                    other => log::warn!(target: "usb", "enrol: unexpected {other:?}"),
+                }
+            }
+            "auth" if !self.trusted => match self.handshake.on_auth(&message, trust.as_ref()) {
+                proto::Outcome::Trusted { reply } => {
+                    link.send(&reply);
+                    log::info!(target: "usb", "phone authenticated over USB with its cable key");
+                    let name = paired.as_ref().map_or("Android device".to_string(), |e| e.name.clone());
+                    self.connected(config, &name);
+                }
+                proto::Outcome::Ask { name } => {
+                    log::info!(target: "usb", "asking the user to allow the phone");
+                    self.asked_at = Some(Instant::now());
+                    announce_cable(&config.app, "asking", Some(&name));
+                    self.phone_name = Some(name);
                     let app = config.app.clone();
                     let _ = config.app.run_on_main_thread(move || crate::tray::show_main_window(&app));
                 }
-                Err(error) => {
-                    link.send(&error);
-                    log::warn!(target: "usb", "phone refused: no trust for it, or a wrong proof");
+                proto::Outcome::Reply(refusal) => {
+                    link.send(&refusal);
+                    log::warn!(target: "usb", "phone refused: no cable pairing for it, or a wrong proof");
                 }
+                proto::Outcome::Close(why) => return Control::Close(why),
+            },
+            "cast-start" if self.trusted => {
+                log::info!(
+                    target: "usb", "cast starts over USB: {}x{} @{} fps, audio {}",
+                    message["w"], message["h"], message["fps"], message["audio"]
+                );
+                self.media.start();
+                // The deck's chips and settings line: the same shape as Wi-Fi's session-info.
+                self.media.info = json!({
+                    "profile": "usb", "width": message["w"], "height": message["h"], "fps": message["fps"],
+                    "gameAudio": !message["audio"].is_null(), "mic": message["mic"].as_bool().unwrap_or(false),
+                });
+                announce_mobile(&config.app, json!({ "state": "session-info", "info": self.media.info }));
             }
-        }
-        "cast-start" if *trusted => {
-            log::info!(
-                target: "usb", "cast starts over USB: {}x{} @{} fps, audio {}",
-                message["w"], message["h"], message["fps"], message["audio"]
-            );
-            media.start();
-            // The deck's chips and settings line: the same shape as Wi-Fi's session-info.
-            media.info = json!({
-                "profile": "usb", "width": message["w"], "height": message["h"], "fps": message["fps"],
-                "gameAudio": !message["audio"].is_null(), "mic": message["mic"].as_bool().unwrap_or(false),
-            });
-            announce_mobile(&config.app, json!({ "state": "session-info", "info": media.info }));
-        }
-        "mic" if *trusted => {
-            let on = message["on"].as_bool().unwrap_or(false);
-            log::info!(target: "usb", "mic {} over USB", if on { "on" } else { "off" });
-            if on {
-                crate::audio::reset_session(crate::audio::Track::Mic);
+            "mic" if self.trusted => {
+                let on = message["on"].as_bool().unwrap_or(false);
+                log::info!(target: "usb", "mic {} over USB", if on { "on" } else { "off" });
+                if on {
+                    crate::audio::reset_session(crate::audio::Track::Mic);
+                }
+                self.media.info["mic"] = json!(on);
+                announce_mobile(&config.app, json!({ "state": "session-info", "info": self.media.info }));
             }
-            media.info["mic"] = json!(on);
-            announce_mobile(&config.app, json!({ "state": "session-info", "info": media.info }));
+            "cast-stop" if self.trusted => {
+                log::info!(target: "usb", "cast stopped by the phone");
+                self.media.stop();
+            }
+            "bye" => {
+                if message["reason"] == proto::BYE_FORGET {
+                    // Terminate on the phone (usb-link.md §Cable trust): back to the choice.
+                    if let Err(e) = crate::pairing::forget_pairing(&config.paths, crate::pairing::Link::Cable) {
+                        log::warn!(target: "usb", "bye forget: {e}");
+                    }
+                    log::info!(target: "usb", "the phone ended the cable pairing (bye forget)");
+                    announce_mobile(&config.app, json!({ "state": "forgotten", "link": "usb" }));
+                }
+                return Control::Close("the phone said bye".into());
+            }
+            "ready" => return Control::Restart,
+            other => log::debug!(target: "usb", "control {other:?} ignored"),
         }
-        "cast-stop" if *trusted => {
-            log::info!(target: "usb", "cast stopped by the phone");
-            media.stop();
-        }
-        "bye" => return Control::Bye,
-        "ready" => return Control::Restart,
-        other => log::debug!(target: "usb", "control {other:?} ignored"),
+        Control::Continue
     }
-    Control::Continue
 }
 
 /// One cast's media on this link: decoder, renderer, audio. Rebuilt per cast.
@@ -340,7 +506,7 @@ struct UsbMedia {
     last_visibility_poll: Option<Instant>,
     last_log: Instant,
     frames_at_last_log: u64,
-    last_picture: Option<crate::webrtc::ReceivedPicture>,
+    last_picture: Option<crate::video::ReceivedPicture>,
     marker: crate::latency_probe::LumaMarker,
     audio_chunks: u64,
     mic_chunks: u64,
@@ -396,8 +562,8 @@ impl UsbMedia {
         self.config = None;
         log::info!(target: "usb", "video ended after {} frames", self.frames);
         if crate::video::is_current_stream(self.generation) {
-            crate::webrtc::announce_input(&self.app, false);
-            crate::webrtc::announce_picture(&self.app, None);
+            crate::video::announce_input(&self.app, false);
+            crate::video::announce_picture(&self.app, None);
         }
     }
 
@@ -442,9 +608,9 @@ impl UsbMedia {
             }
         }
         if !crate::video::is_live() {
-            crate::webrtc::announce_input(&self.app, true);
+            crate::video::announce_input(&self.app, true);
         }
-        crate::webrtc::poll_window_visibility(&self.app, &mut self.last_visibility_poll);
+        crate::video::poll_window_visibility(&self.app, &mut self.last_visibility_poll);
         let Some(renderer) = self.renderer.as_mut() else { return };
         let followup = match renderer.drop_if_hidden() {
             Some(f) => f,
@@ -465,10 +631,10 @@ impl UsbMedia {
         self.frames += 1;
         if self.last_log.elapsed() >= Duration::from_secs(1) {
             let fps = (self.frames - self.frames_at_last_log) as f64 / self.last_log.elapsed().as_secs_f64();
-            let picture = crate::webrtc::ReceivedPicture { width: w, height: h, fps: fps.round() as u32 };
+            let picture = crate::video::ReceivedPicture { width: w, height: h, fps: fps.round() as u32 };
             if self.last_picture != Some(picture) {
                 self.last_picture = Some(picture);
-                crate::webrtc::announce_picture(&self.app, self.last_picture);
+                crate::video::announce_picture(&self.app, self.last_picture);
             }
             let pacing = renderer.take_pacing_window();
             if pacing.frames > 0 {
