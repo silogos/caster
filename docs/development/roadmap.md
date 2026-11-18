@@ -4,6 +4,8 @@ Development is incremental: each phase = **plan → implement → test → docum
 
 Current status: **Phase 14 implemented — awaiting review (the acceptance — a clean, correctly-proportioned, smooth OBS Window Capture over a 30+ min session — needs OBS, a real device, and the phone in hand; see [features/obs-streaming.md](../features/obs-streaming.md)).** Fix branch off phase-14 (`fix/mic-coexistence`): the cast mic no longer breaks the casted game's voice chat and stays clean while the game's voice chat captures concurrently ([ADR-004](../decisions/ADR-004-mic-capture-coexistence.md), [microphone.md](../features/microphone.md)) — **verified on device 2026-09-23**; review together with Phase 14.
 
+> **Update 2026-11-19:** the line above is the September state. Development has since run as off-phase features, fixes and releases (v0.2.0, v0.2.1), listed below in order. The Electron receiver is gone ([ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md)); the receiver is `apps/desktop-native`. Phase 14's acceptance was written for OBS **Window Capture** of the Electron window; on the native receiver OBS takes the picture through **Syphon** (Feature 2026-11x below, checked in OBS), so what Phase 14 still owes is a 30+ min OBS session over Syphon with Caster Audio and Caster Mic. Phase 15 (reliability matrices, thermal T1–T4) is still open.
+
 > **Phase tracking on GitHub:** each phase has a corresponding issue (labeled `phase`) at `silogos/caster` — issue #1 = Phase 0 through #17 = Phase 16, #44 = Phase 17, #46 = Phase 18. Open issues are remaining work; a phase's issue is closed with a completion comment (commit hash + verification summary) when it passes review. This file remains the source of truth; the issues mirror it.
 
 ---
@@ -106,7 +108,8 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 
 ---
 
-## Feature 2026-11b — Desktop tray lifecycle (close-to-tray) ✅ implemented — awaiting manual matrix
+## Feature 2026-11b — Desktop tray lifecycle (close-to-tray) ✅ implemented — superseded (Electron receiver removed, ADR-035)
+*(2026-11-19: this manual matrix will not run; the Electron receiver is gone. The tray's on-device check now belongs to the native receiver's port, Feature 2026-11h below.)*
 *(Not a numbered phase: user-requested via issue #94, shipped off-phase like its siblings; decides [ADR-010](../decisions/ADR-010-desktop-tray-lifecycle.md). Also corrects the ADR-007 addendum that still claimed the reverted 2026-10-31 tray attempt had shipped.)*
 **Scope:** the tray, not the window, owns the desktop app's lifetime — closing the receiver **hides** it (signaling server + trust store alive, so the saved phone's one-tap Connect always lands — ADR-006's promise finished); a cast starting against a tray-only desktop **auto-opens** the window; **close-mid-cast keeps the cast** (decode, mixer, vcam — the vcam workflow made explicit); tray menu = status line (session-info vocabulary) + Open window + Forget phone (`bye forget`, one path with the no-input Disconnect) + Virtual camera checkbox + Launch at login (off by default, macOS/Windows) + Quit; **every quit path walks the clean `bye desktop-quit`** (trust survives plain quits, ADR-006) then the normal teardown. The lifecycle rules live in one pure, unit-tested state machine (`tray/trayLifecycle.ts`, the `heroView` precedent) — visibility is an explicit intent, never inferred from `isVisible()` (the bug that killed the first attempt). macOS hides the Dock icon while windowless; relaunch attempt/Dock/cast-start are the ways back.
 **Accept:** desktop vitest green (21 new tray tests, 279/279) + typecheck + build + smoke run; manual matrix (close-mid-cast aliveness, one-tap Connect against tray-only desktop, every quit path's bye, App Nap on macOS, frameless-toggle-while-hidden regression) — [features/tray.md](../features/tray.md), pending the phone in hand. *(Implemented 2026-11-03.)*
@@ -118,7 +121,7 @@ Current status: **Phase 14 implemented — awaiting review (the acceptance — a
 ## Feature 2026-11c — Hotspot pairing mode (cast with no shared Wi-Fi) ✅ implemented — awaiting on-device matrix
 *(Not a numbered phase: user-requested via issue #96, shipped off-phase like its siblings; decides [ADR-011](../decisions/ADR-011-hotspot-pairing-mode.md) — the LAN-only interpretation gate: a phone-hosted `LocalOnlyHotspot` shares no internet, so peers stay direct and local; the invariant's intent holds. The "c" leaves room for the parallel tray-lifecycle feature (#94, ADR-010) landing as 2026-11b.)*
 **Scope:** the #1 user-facing error (*"Couldn't reach the desktop…"*) gains a way out — **the phone hosts a local-only hotspot, the desktop joins, the guided-manual flow pairs them over the hotspot subnet** (failure-card hint → SSID/password on Home + under the scanner → join on the desktop → scan its fresh QR). **Zero protocol change** (`v` stays 1). Mobile: pure `hotspot/HotspotMachine` (JVM-tested) + the `HotspotControl` platform wrapper (version-split permission NEARBY_WIFI_DEVICES/ACCESS_FINE_LOCATION; the awkwardly-versioned `startLocalOnlyHotspot` — direct call 33+, reflection to the API-26 method below; honest OS-revoked); the hint gate shows the escape **exactly** for `connect-unreachable`. Desktop: QR freshness — `ensureFreshSession` regenerates a *pending* session when the machine's IPv4 set changes (authorized sessions never regenerate for this reason); the payload carries the session's creation-time snapshot. The hotspot is explicit (the cast runs over it; Stop is the only normal exit); OEM variance joins R11's watch list. Rejected alternatives (Wi-Fi Direct, desktop-hosted AP, USB/ADB) recorded in the ADR.
-**Accept:** mobile JVM 249/249 (12 new) + `assembleDebug`; desktop vitest 262/262 (4 new) + typecheck + build; on-device matrix (permission path → join → QR pair over the hotspot → full cast incl. both audio tracks → clean teardown; OS-revoked mid-cast degradation; **no mobile data used**) — [features/pairing.md](../features/pairing.md) §Hotspot pairing mode, pending both devices in hand. *(Implemented 2026-11-03.)*
+**Accept:** mobile JVM 249/249 (12 new) + `assembleDebug`; desktop vitest 262/262 (4 new) + typecheck + build; on-device matrix (permission path → join → QR pair over the hotspot → full cast incl. both audio tracks → clean teardown; OS-revoked mid-cast degradation; **no mobile data used**) — [features/pairing.md](../features/pairing.md) §Hotspot pairing mode, pending both devices in hand. *(Implemented 2026-11-03.)* *(2026-11-19: the desktop half now lives in the native receiver — a pending session whose IPv4 set changed is regenerated, `SessionStore::needs_regeneration` in `apps/desktop-native/src-tauri/src/pairing.rs`, unit-tested; the on-device matrix is still owed, now against the native receiver and QR `v` 2.)*
 
 ## Feature 2026-11d — Low-latency game audio toggle + audio-latency telemetry ✅ implemented — awaiting on-device measurement
 *(Not a numbered phase: user-requested — the streamer's ear-path latency; shipped off-phase like its siblings. No ADR: the toggle selects an already-decided format (ADR-012's PCM16, ADR-013's AAC stays the default); the dual-playout/stream-sync work item (candidate ADR-014) is deliberately deferred until the OBS setup actually needs it — see [obs-streaming.md](../features/obs-streaming.md) §Audio routing recipes.)*
@@ -412,7 +415,7 @@ Implementation + Tests + Documentation + Manual verification (where appropriate)
 
 **Checked:** `cargo test` 94 passed, 1 ignored. On the device: ~7.5 minutes with the window covered (21 600 frames shown in the run), 0 hidden drops, receiver memory flat at ~150 MB. **Not checked:** a capture of the covered window, minimize and restore, runs over ~8 minutes.
 
-## Feature 2026-11ai — Caster Audio and Caster Mic, installed from "Plays on" ⏳ implemented and verified on the Mac (2026-11-14); not committed
+## Feature 2026-11ai — Caster Audio and Caster Mic, installed from "Plays on" ✅ implemented and verified on the Mac (2026-11-14); merged (PR #186)
 
 *(Not a numbered phase: the follow-up [ADR-029](../decisions/ADR-029-sound-follows-syphon-and-a-chosen-output.md) names. Decision record: [ADR-030](../decisions/ADR-030-caster-audio-devices-installed-from-plays-on.md).)*
 
@@ -469,7 +472,7 @@ The second release, and the first under one product version ([release.md](releas
 
 **Not in it:** an Intel Mac, Windows or Linux receiver. **Not checked:** the `.dmg` on a second Mac; the APK as an update over v0.1.0; the thermal-emergency rule on a device.
 
-## Feature 2026-11ak — Caster inside: identifiers, protocol tags and the Electron receiver ⏳ implemented and unit-tested (2026-11-18); not yet checked on the device
+## Feature 2026-11ak — Caster inside: identifiers, protocol tags and the Electron receiver ✅ implemented, unit-tested, and running on the device (2026-11-18)
 
 *(Not a numbered phase. Decision record: [ADR-035](../decisions/ADR-035-machine-identifiers-carry-caster.md), superseding ADR-027 decision 2.)*
 
@@ -483,4 +486,14 @@ The second release, and the first under one product version ([release.md](releas
 - Design files and documents.
 
 **Not in scope:** the signing key's certificate name (outside the repository); pairing over the cable (next).
+
+**Checked on the device:** not as a walk of its own, but the renamed builds ran every on-device check after it. The rename (PR #201) is in the build that ADR-036 was verified with on the TB321FU → M1 Pro (2026-11-18): a fresh QR pairing (QR `v` 2, `/caster/v1`) cast over Wi-Fi and resumed its persistent session, and a cable cast. The receiver's data folder `~/Library/Application Support/Caster` exists on that Mac. **Not checked:** a phone carrying the old application id moving to the new one (it cannot update in place: the id differs, so it is a fresh install and a fresh pairing).
+
+## Feature 2026-11al — A cast survives a five-minute drop, over the cable and Wi-Fi ✅ verified on the device (2026-11-18), merged (PR #205)
+
+*(Not a numbered phase. Decision record: [ADR-036](../decisions/ADR-036-a-cast-survives-a-five-minute-drop.md), amending ADR-009 and ADR-034.)*
+
+**Scope:** a dropped link (cable out, Wi-Fi gone) no longer ends the cast. For up to five minutes the foreground service and the projection stay, the phone shows RECONNECTING with a countdown and Stop, and a link that comes back resumes the cast with no new Share and no consent dialog. Wi-Fi: the ICE ladder lasts the window instead of 3 restarts / 60 s. Cable: the service owns the one VirtualDisplay and resumes only to the same desktop.
+
+**Checked:** 438 mobile unit tests. On the TB321FU → M1 Pro: cable out 6 s and back with no consent; Stop while waiting; Wi-Fi off ~44 s on a fresh QR pairing, picture back 1 s after the network. **Not checked:** a full five-minute wait ending in the timeout on the device; recovery while the app is in the background (R12).
 
