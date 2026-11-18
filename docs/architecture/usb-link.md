@@ -145,7 +145,7 @@ Each side holds **one pairing at a time, tagged with its link** (ADR-037 §3): a
 | Store | `cable-trust.json` beside `trust.json` in `~/Library/Application Support/Caster`, mode 0600 | SharedPreferences `caster_cable_trust`, the key sealed by the Keystore vault (`TrustVault`); excluded from backup and device transfer like the Wi-Fi entry |
 | Entry | `{deviceId, name, key, createdAt, lastConnectedAt}` | `{desktopId, name, key, createdAt}` |
 | Written | On Allow, once the phone's `auth` has checked; removes `trust.json` | When the enrolment's `auth-ok` mac checks; removes the saved Wi-Fi desktop |
-| Ends | The deck's Disconnect (sends `bye {reason: "forget"}` when the phone is on the cable); `bye forget` from the phone. `unknown-device` never deletes on the desktop | Terminate (sends `bye forget`); `bye forget` from the desktop; `unknown-device` for the stored key |
+| Ends | The deck's Terminate (sends `bye {reason: "forget"}` when the phone is on the cable); `bye forget` from the phone. `unknown-device` never deletes on the desktop | Terminate (sends `bye forget`); `bye forget` from the desktop; `unknown-device` for the stored key |
 
 - **Ending the pairing returns that app to the Wireless/Cable choice** (ADR-037 §4). The other side learns it from `bye forget`, or, if it was unplugged, from `unknown-device` on its next plug-in.
 - **Both stores degrade to empty** on anything unreadable (logged), as the Wi-Fi stores do: the honest fallback is one more Allow, never a link on a guessed key.

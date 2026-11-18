@@ -201,7 +201,7 @@ def main(path):
         caption(cap, x)
         if i == 0:
             f = new_frame(name, x, height, keep_all=False)
-            heading(f, "How do you want to connect?", "Choose the same on the phone. To switch later, Disconnect here "
+            heading(f, "How do you want to connect?", "Choose the same on the phone. To switch later, Terminate here "
                                                      "or Terminate on the phone.")
             for j, (title, sub, icon) in enumerate((
                     ("Wireless", "Phone and Mac on the same Wi-Fi. Scan a QR code once.", wifi_icon),

@@ -83,6 +83,12 @@ python3 -I tools/design/check_auto_layout.py designs/mobile-app.figcraft --page 
 
 `build_link_first_spec.py` writes **"Mobile flow v8 · The link is chosen first (ADR-037)"**, drawn ahead of the code, as a storyboard with arrows and the computer's side in line. The phone opens on a choice, **Wireless or Cable**: Wireless leads to today's Scan, Cable to a cable guide whose steps tick as they happen (plug in → Android's "Open Caster" → the computer's one-time Allow). Once paired the app opens on Home; switching link needs Terminate. Home opens on one connection card (computer, link, status; Disconnect and a red Terminate in its footer) above a big button that is always the next step. Rows: A first run Wireless, B first run Cable, C later (the cable reconnects by itself), D Wireless later, Terminate back to the choice, a computer left on Wireless, not allowed, unplugged mid-cast. It replaces the earlier drafts' pages v6 and v7. Renders: `designs/preview/mobile-link-first.png`, and Home in every state `designs/preview/mobile-home-suggested.png`.
 
+`build_desktop_link_home.py` draws the receiver's Home for ADR-037, frames 19–24 of `desktop-signal-deck.figcraft`: the deck with its top block replaced by one connection card, the phone's own Home card mirrored (the phone's name, the link and its status, a red Terminate in the footer). 19 Wireless connected, 20 Cable connected, 21 Cable on air, 22 Cable unplugged mid-cast (RECONNECTING, STOPS IN), 23 Cable not connected, 24 Wireless not connected. Render: `designs/preview/desktop-19-24-link-home.png`.
+
+```sh
+python3 -I tools/design/build_desktop_link_home.py designs/desktop-signal-deck.figcraft
+```
+
 `build_desktop_link_first.py` writes the receiver's side as frames **15–18** of `designs/desktop-signal-deck.figcraft`: 15 the first screen (Wireless or Cable), 16 the QR hero with Back, 17 the macOS cable guide with the one-time Allow inline at step 3, 18 the Windows cable guide with "Install the USB driver" as step 2 (drawn now, built with the Windows receiver). Frame 13 (pair over Wi-Fi first) is kept, captioned as superseded by 17. Render: `designs/preview/desktop-15-18-link-first.png`.
 
 ```bash
