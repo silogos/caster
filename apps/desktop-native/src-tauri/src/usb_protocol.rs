@@ -247,6 +247,7 @@ impl Handshake {
     }
 
     /// The user is being asked about this phone (its name).
+    #[cfg_attr(not(test), allow(dead_code))] // the session keeps its own prompt clock
     pub fn asking(&self) -> Option<&str> {
         self.enrolling.as_ref().filter(|e| e.asking).map(|e| e.name.as_str())
     }
