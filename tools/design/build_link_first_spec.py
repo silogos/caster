@@ -129,13 +129,71 @@ def stop_button(parent, label):
     text(b, label, 15, ON, "Medium", line=20)
 
 
-def profile_strip(parent, readout, casting=True):
-    c = card(parent, "card · profile")
-    z = vstack(c, "profile", gap=6, pad=(14, 16, 14, 16), h="fill")
-    mono(z, "STATUS" if casting else "NEXT CAST", 11, VARIANT, "Medium", spacing=1.1, line=14)
-    text(z, "Capture", 15, ON, "Medium", line=20)
-    mono(z, readout, 11)
-    return c
+
+def tag(parent, label, tone="muted"):
+    p = pill(parent, label, tone)
+    nodes[nodes[p]["children"][0]]["width"] = float(round(len(label) * (10 * MONO_ADVANCE + 0.8)))
+    return p
+
+
+def radio(parent, selected):
+    r = hstack(parent, "radio-on" if selected else "radio-off", main="center", cross="center", h="fixed", v="fixed",
+               width=20, height=20, radius=10, stroke=PRIMARY, stroke_weight=2.0)
+    if selected:
+        ellipse(r, "dot", 10, PRIMARY)
+    else:
+        nodes[r]["strokes"] = [solid(ON, 0.30)]
+
+
+def profile_row(parent, name, spec, tags=(), intent=None, selected=False, more=False):
+    """QualityConsoleCard's row, as shipped (design v4 H1)."""
+    row = hstack(parent, f"profile · {name}", gap=14, pad=(12, 16, 12, 16), cross="center", h="fill",
+                 fill=PRIMARY if selected else None, opacity=0.07)
+    radio(row, selected)
+    texts = vstack(row, "texts", gap=3, h="fill")
+    title = hstack(texts, "title", gap=8, cross="center")
+    text(title, name, 15, ON, "Medium", line=20)
+    for label, tone in tags:
+        tag(title, label, tone)
+    if intent:
+        text(texts, intent, 13, VARIANT, width=CARD_INNER_W - 20 - 14 - (54 if more else 0), line=19)
+    mono(texts, spec, 11)
+    if more:
+        b = hstack(row, "more", gap=3, main="center", cross="center", h="fixed", v="fixed", width=40, height=40,
+                   radius=12, stroke=OUTLINE)
+        for _ in range(3):
+            ellipse(b, "dot", 4, ON)
+    return row
+
+
+def zone(parent, label):
+    z = hstack(parent, f"zone · {label}", pad=(14, 16, 8, 16), h="fill")
+    mono(z, label, 11, VARIANT, "Medium", spacing=1.1, line=14)
+
+
+CAPTURE_SPEC = "1920 px · 120 fps · 20–30 Mbps"
+
+
+def profiles(parent, link):
+    """Home's profile list as shipped (ADR-024, design v4 H1). Since ADR-037 the list is the pairing's link's:
+    over the cable Capture is picked by itself (CABLE), over Wireless the user's pick (here Balanced)."""
+    cable = link == "Cable"
+    c = card(parent, "card · profiles")
+    nodes[c]["clip"] = True
+    zone(c, "BUILT-IN")
+    rows = [("Cool", "960 px · 30 fps · 2–3 Mbps", [("BALANCED", "muted")]),
+            ("Balanced", "1280 px · 30 fps · 4–6 Mbps", [("BALANCED", "muted")]),
+            ("Performance", "1280 px · 60 fps · 6–10 Mbps", [("KEEP FRAME RATE", "muted")]),
+            ("Sharp", "1920 px · 30 fps · 8–12 Mbps", [("KEEP RESOLUTION", "muted")])]
+    for name, spec, tags in rows:
+        profile_row(c, name, spec, tags, selected=(name == "Balanced" and not cable))
+        hairline(c, CONTENT_W)
+    profile_row(c, "Capture", CAPTURE_SPEC, [("BEST OVER USB", "amber")] + ([("CABLE", "muted")] if cable else []),
+                intent="Capture-card quality over the USB cable." + (" Picked by itself on the cable." if cable else ""),
+                selected=cable)
+    hairline(c, CONTENT_W)
+    zone(c, "YOUR PROFILES")
+    profile_row(c, "Low Latency", "1920 px · 60 fps · 8–14 Mbps", [("KEEP FRAME RATE", "muted")], more=True)
 
 
 def audio(parent, paused=False):
@@ -220,37 +278,6 @@ def system_dialog(f, title, body, options, buttons):
         text_button(acts, label)
 
 
-def saved_home(f, by_cable, by_wifi):
-    bar(f, "STANDBY")
-    hero_plate(f, MAC, [("Terminate", "muted")])
-    if by_wifi:
-        go_button(f, "Connect")
-        if by_cable:
-            hint_line(f, "Or plug the cable in.")
-    else:
-        c = status_card(f, usb_glyph, "Plug the cable in to reconnect",
-                        f"{MAC} remembers this phone. No QR code needed.", pill_label="USB", pill_tone="muted")
-        link_row(c, ["Scan QR code"])
-    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB" if not by_wifi else "1920 px · 120 fps · 20–30 Mbps",
-                  casting=False)
-    audio(f)
-
-
-def home(f, tag, on_air=False, drop=None):
-    bar(f, "RECONNECTING" if drop else ("ON AIR" if on_air else "STANDBY"),
-        tone="amber" if (on_air or drop) else "muted", tag=tag)
-    hero_plate(f, MAC, [] if (on_air or drop) else [("Disconnect", "muted"), ("Terminate", "muted")])
-    usb = tag == "CABLE"
-    if drop:
-        status_card(f, usb_glyph, "Cable unplugged", "Plug it back in to carry on. The cast waits up to 5 minutes.",
-                    color=PRIMARY, pill_label="USB", countdown="4:52")
-    if on_air or drop:
-        stop_button(f, "Stop sharing")
-    else:
-        go_button(f, "Share screen")
-    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB" if usb else "1920 px · 120 fps · 20–30 Mbps",
-                  casting=on_air or bool(drop))
-    audio(f, paused=bool(drop))
 
 
 def mac_card(page, x, y, title, lines, buttons=()):
@@ -348,21 +375,6 @@ def card_steps(f):
     return vstack(c, "steps", gap=18, pad=(18, 16, 18, 16), h="fill")
 
 
-def link_card(parent, link, status, sub=None):
-    """The one Home change (ADR-037 §7): the link and its connection status, above Share screen."""
-    dot = {"Connected": GOOD, "Reconnecting…": PRIMARY, "Not connected": VARIANT}[status]
-    c = card(parent, f"card · link · {link}")
-    row = hstack(c, "row", gap=14, pad=(13, 16, 13, 16), cross="center", h="fill")
-    (usb_glyph if link == "Cable" else wifi_glyph)(row, ON)
-    texts = vstack(row, "texts", gap=3, h="fill")
-    text(texts, link, 15, ON, "Medium", line=20)
-    st = hstack(texts, "status", gap=8, cross="center")
-    rect(st, "dot", 8, 8, dot, radius=4)
-    text(st, status, 13, dot if status != "Not connected" else VARIANT, "Medium", line=18)
-    if sub:
-        text(texts, sub, 13, VARIANT, width=CARD_INNER_W - 52, line=19)
-    return c
-
 
 def connection_card(parent, link, status, sub=None, countdown=None, actions=()):
     """Home's top card (ADR-037 §7, suggested): which computer, over which link, and its state, in one place.
@@ -420,9 +432,7 @@ def home(f, link, status, on_air=False, sub=None, countdown=None):
         go_button(f, "Connect")
     else:
         disabled_button(f, "Share screen")
-    usb = link == "Cable"
-    profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB" if usb else "1920 px · 120 fps · 20–30 Mbps",
-                  casting=casting)
+    profiles(f, link)
     audio(f, paused=bool(countdown))
 
 
