@@ -1,39 +1,43 @@
-// The receiver's main window — the mobile app's "Signal Deck" look:
-//  - QR hero while no phone is paired;
-//  - the deck once one is: source, ON AIR / STANDBY, the cast's status, and
-//    "Open video", which opens the native video window. Video plays only while
-//    that window is open; sound while it is open or the Syphon output is on
-//    (ADR-029), on the device chosen under "Plays on".
+// The receiver's main window — the mobile app's "Signal Deck" look (ADR-037):
+//  - the choice, Wireless or Cable, while nothing is paired (frame 15);
+//  - Wireless: the QR hero (16); Cable: the cable guide with the one-time
+//    Allow (17); Back returns to the choice;
+//  - once paired, the deck (19–24): one connection card (the phone, the link,
+//    its status, Terminate), "Open video", the cast's status, the sound.
+//    Video plays only while the video window is open; sound while it is open
+//    or the Syphon output is on (ADR-029), on the device chosen under "Plays on".
+// What each part says is decided in link_view.js (pure, tested); this file draws it.
 // Events from the Rust core:
-//  - pairing:session-updated → QR hero
+//  - link:mode {mode, name}  → which link runs (choice | wireless | cable)
+//  - cable:state {state, name} → the cable guide's progress
+//  - pairing:session-updated → the QR
 //  - pairing:mobile-state    → connected / disconnected / session-info / forgotten
 //  - cast:state {live}       → ON AIR + timecode
 //  - cast:picture {width,height,fps} | null → the live readout: the size and frame rate that arrive
 //  - video:window {open}     → the Open/Close video button
 // Only receiver/environment controls live here — cast settings are the phone's.
 
+import { stageFor, connectionCard, annunciator, guideSteps, applyMobileState, settingsLine } from './link_view.js'
+
 const tauri = window.__TAURI__ ?? null
 if (!tauri) console.error('window.__TAURI__ missing — events will not arrive')
 const invoke = (cmd, args) => (tauri ? tauri.core.invoke(cmd, args) : Promise.reject(new Error('no tauri')))
 const $ = (id) => document.getElementById(id)
 
-const stages = { waiting: $('stage-waiting'), deck: $('stage-deck') }
-function showStage(stage) {
-  for (const [name, el] of Object.entries(stages)) el.classList.toggle('hidden', name !== stage)
-}
+const stages = { choice: $('stage-choice'), qr: $('stage-qr'), guide: $('stage-guide'), deck: $('stage-deck') }
 
-// ---- deck state ------------------------------------------------------------
+// ---- window state ----------------------------------------------------------
 
-const state = {
+let state = {
+  mode: 'choice', // the running link (ADR-037)
   phone: null,
-  // 'connected' | 'reconnecting' (Wi-Fi dropped) | 'unplugged' (the cable went, frame 12)
-  // | 'offline' (opened with a saved phone that hasn't connected yet, frame 14)
-  link: 'connected',
-  via: 'wifi', // the link the phone is on: 'wifi' | 'usb' (ADR-034)
+  link: 'offline', // 'connected' | 'offline' | 'reconnecting'
   live: false,
   liveSince: 0,
   info: null,
   picture: null, // what the receiver is getting, measured once a second
+  dropDeadline: null,
+  cable: { state: 'waiting', name: null },
   videoOpen: false,
   syphonOutput: false, // the receiver's Syphon switch (ADR-021)
 }
@@ -47,12 +51,6 @@ function timecode(ms) {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
 }
 
-/** "1920×1200 · 60 fps · balanced": the cast as the phone set it (its session-info). */
-function settingsLine(info) {
-  if (!info) return 'Live'
-  return [`${info.width}×${info.height}`, `${info.fps} fps`, info.profile].filter(Boolean).join(' · ')
-}
-
 /**
  * "640×400 · 59 fps": the picture that is arriving right now. The sender
  * scales the frame and drops frames under pressure, so it is not always
@@ -63,53 +61,60 @@ function liveLine(info, picture) {
   return `${picture.width}×${picture.height} · ${picture.fps} fps`
 }
 
+function render() {
+  const stage = stageFor(state)
+  for (const [name, el] of Object.entries(stages)) el.classList.toggle('hidden', name !== stage)
+  if (stage === 'guide') renderGuide()
+  if (stage === 'deck') renderDeck()
+}
+
+function renderGuide() {
+  const { steps, note } = guideSteps(state.cable)
+  const list = $('guide-steps')
+  list.replaceChildren(...steps.map((step, i) => {
+    const el = document.createElement('div')
+    el.className = `step ${step.state}`
+    el.innerHTML = `<div class="n">${step.state === 'done' ? '✓' : i + 1}</div><div><div class="t"></div><div class="s"></div></div>`
+    el.querySelector('.t').textContent = step.title
+    el.querySelector('.s').textContent = step.sub
+    if (step.ask) {
+      const ask = document.createElement('div')
+      ask.className = 'ask'
+      ask.innerHTML = '<button class="btn btn-secondary" data-allow="false">Don\'t Allow</button><button class="btn btn-primary" data-allow="true">Allow</button>'
+      el.lastElementChild.appendChild(ask)
+    }
+    return el
+  }))
+  $('guide-note').textContent = note ?? ''
+  $('guide-note').classList.toggle('hidden', !note)
+}
+
 function renderDeck() {
-  $('phone-name').textContent = state.phone ?? 'Android device'
+  const card = connectionCard(state)
+  $('phone-name').textContent = card.name
+  $('conn').className = `card conn ${card.tone}`
+  const glyph = $(`glyph-${card.glyph}`)
+  if (glyph) $('conn-glyph').replaceChildren(glyph.content.cloneNode(true))
+  $('conn-status').textContent = `${card.link} · ${card.status}`
+  $('conn-sub').textContent = card.sub ?? ''
+  $('conn-sub').classList.toggle('hidden', !card.sub)
+  $('conn-count').classList.toggle('hidden', !card.countdown)
+  if (card.countdown) $('conn-count-v').textContent = card.countdown
+  $('conn-foot').classList.toggle('hidden', !card.footer)
+  if (card.footer) $('conn-hint').textContent = card.footer.hint
+  else resetTerminate()
 
-  const ann = $('annunciator')
-  ann.className = 'annunciator'
-  if (state.link === 'offline') {
-    ann.textContent = 'OFFLINE'
-  } else if (state.link === 'reconnecting') {
-    ann.textContent = 'RECONNECTING'
-    ann.classList.add('reconnecting')
-  } else if (state.live) {
-    ann.textContent = 'ON AIR'
-    ann.classList.add('on-air')
-  } else {
-    ann.textContent = 'STANDBY'
-  }
-
-  const pill = $('status-pill')
-  pill.className = 'pill'
-  const cable = state.via === 'usb'
-  if (state.link === 'offline') {
-    pill.textContent = 'Not connected — tap Connect on the phone, or plug the cable in'
-  } else if (state.link === 'unplugged') {
-    pill.textContent = 'Cable unplugged — plug it in again, or tap Connect on the phone for Wi-Fi'
-  } else if (state.link === 'reconnecting') {
-    pill.textContent = `Waiting for ${state.phone ?? 'the phone'} to reconnect…`
-    pill.classList.add('reconnecting')
-  } else if (state.live) {
-    pill.textContent = cable ? `Casting by cable · ${settingsLine(state.info)}` : `Casting · ${settingsLine(state.info)}`
-    pill.classList.add('live')
-  } else {
-    pill.textContent = cable ? 'Connected by cable — start casting from your phone' : 'Connected — start casting from your phone'
-    pill.classList.add('connected')
-  }
+  const ann = annunciator(state)
+  $('annunciator').textContent = ann.word
+  $('annunciator').className = `annunciator ${ann.tone}`.trim()
 
   $('readout').textContent = state.live
-    ? liveLine(state.info, state.picture) + (cable ? ' · USB' : '')
+    ? liveLine(state.info, state.picture) + (state.mode === 'cable' ? ' · USB' : '')
     : 'Waiting for the cast'
   $('timecode').classList.toggle('idle', !state.live)
   if (!state.live) $('timecode').textContent = '00:00:00'
   $('chip-game').classList.toggle('on', state.live && state.info?.gameAudio === true)
   $('chip-mic').classList.toggle('on', state.live && state.info?.mic === true)
-
-  const tag = $('link-tag')
-  tag.classList.toggle('hidden', !(cable && state.link !== 'offline'))
-  tag.classList.toggle('dim', state.link === 'unplugged')
-  $('show-qr-hint').classList.toggle('hidden', state.link !== 'offline')
   $('video-hint').classList.toggle('hidden', state.link === 'offline')
 
   const toggle = $('video-toggle')
@@ -128,65 +133,72 @@ function renderGameSub() {
 
 setInterval(() => {
   if (state.live) $('timecode').textContent = timecode(Date.now() - state.liveSince)
+  if (state.dropDeadline) {
+    if (Date.now() >= state.dropDeadline) state = { ...state, link: 'offline', dropDeadline: null }
+    render()
+  }
 }, 1000)
 
 // ---- events ----------------------------------------------------------------
 
+/** link_state / link:mode: which link runs, and the paired phone's name. */
+function applyMode(view) {
+  if (!view) return
+  const mode = view.mode ?? 'choice'
+  const changed = mode !== state.mode
+  state = { ...state, mode, phone: view.name ?? null }
+  if (changed) state = { ...state, link: 'offline', live: false, info: null, dropDeadline: null, cable: { state: 'waiting', name: null } }
+  render()
+}
+
+tauri?.event.listen('link:mode', (event) => applyMode(event.payload))
+invoke('link_state').then(applyMode).catch((err) => console.error('link_state failed:', err))
+
+tauri?.event.listen('cable:state', (event) => {
+  state = { ...state, cable: { state: event.payload?.state ?? 'waiting', name: event.payload?.name ?? state.cable.name } }
+  render()
+})
+
 tauri?.event.listen('pairing:session-updated', (event) => {
-  if (!event.payload) return
-  $('qr-img').src = event.payload.qrDataUrl
-  resetDisconnect()
-  // A saved or connected phone keeps the deck (frame 14); the QR is one click away.
-  if (!state.phone) showStage('waiting')
-// Opened with a phone already trusted (ADR-006): the deck, offline, not the QR (frame 14).
-invoke('saved_phone')
-  .then((name) => {
-    if (name && !state.phone) {
-      Object.assign(state, { phone: name, link: 'offline', via: 'wifi' })
-      renderDeck()
-      showStage('deck')
-    }
-  })
-  .catch((err) => console.error('saved_phone failed:', err))
-$('show-qr').addEventListener('click', () => showStage('waiting'))
+  if (event.payload?.qrDataUrl) $('qr-img').src = event.payload.qrDataUrl
 })
 
 tauri?.event.listen('pairing:mobile-state', (event) => {
-  const s = event.payload?.state
-  if (s === 'connected') {
-    state.phone = event.payload.name ?? 'Android device'
-    state.link = 'connected'
-    state.via = event.payload.link === 'usb' ? 'usb' : 'wifi'
-    state.info = null
-    showStage('deck')
-  } else if (s === 'disconnected') {
-    // A cable that went has nothing to wait for; a Wi-Fi drop may come back (ADR-006).
-    state.link = event.payload.link === 'usb' ? 'unplugged' : 'reconnecting'
-    state.live = false
-  } else if (s === 'session-info') {
-    state.info = event.payload.info ?? state.info
-  } else if (s === 'forgotten') {
-    Object.assign(state, { phone: null, link: 'connected', via: 'wifi', live: false, info: null })
-    showStage('waiting')
-  }
-  renderDeck()
+  state = applyMobileState(state, event.payload)
+  render()
 })
 
 tauri?.event.listen('cast:state', (event) => {
   const live = event.payload?.live === true
   if (live && !state.live) state.liveSince = Date.now()
-  state.live = live
-  renderDeck()
+  state = { ...state, live, dropDeadline: live ? null : state.dropDeadline, link: live ? 'connected' : state.link }
+  render()
 })
 
 tauri?.event.listen('cast:picture', (event) => {
   state.picture = event.payload ?? null
-  renderDeck()
+  render()
 })
 
 tauri?.event.listen('video:window', (event) => {
   state.videoOpen = event.payload?.open === true
-  renderDeck()
+  render()
+})
+
+// ---- the link: choose, Back, Allow ------------------------------------------
+
+function choose(link) {
+  invoke('choose_link', { link }).then(applyMode).catch((err) => console.error('choose_link failed:', err))
+}
+$('choose-wireless').addEventListener('click', () => choose('wireless'))
+$('choose-cable').addEventListener('click', () => choose('cable'))
+for (const back of document.querySelectorAll('[data-back]')) {
+  back.addEventListener('click', () => invoke('back_to_choice').then(applyMode).catch((err) => console.error('back_to_choice failed:', err)))
+}
+$('guide-steps').addEventListener('click', (event) => {
+  const allow = event.target.closest('[data-allow]')?.dataset.allow
+  if (allow === undefined) return
+  invoke('cable_answer', { allow: allow === 'true' }).catch((err) => console.error('cable_answer failed:', err))
 })
 
 // ---- controls ----------------------------------------------------------------
@@ -333,25 +345,25 @@ invoke('receiver_settings')
 
 loadCasterDevices()
 
-// Disconnect forgets the phone (it must scan again) — a two-step link
-// instead of a dialog, so a stray click cannot end a cast.
+// Terminate ends the pairing on both sides and returns to the choice — a
+// two-step link instead of a dialog, so a stray click cannot end it.
 const CONFIRM_WINDOW_MS = 4000
 let confirmTimer = null
-function resetDisconnect() {
+function resetTerminate() {
   clearTimeout(confirmTimer)
   confirmTimer = null
-  $('disconnect').textContent = 'Disconnect'
-  $('disconnect').classList.remove('confirming')
+  $('terminate').textContent = 'Terminate'
+  $('terminate').classList.remove('confirming')
 }
-$('disconnect').addEventListener('click', () => {
+$('terminate').addEventListener('click', () => {
   if (confirmTimer === null) {
-    $('disconnect').textContent = 'Forget this phone?'
-    $('disconnect').classList.add('confirming')
-    confirmTimer = setTimeout(resetDisconnect, CONFIRM_WINDOW_MS)
+    $('terminate').textContent = 'Forget this phone?'
+    $('terminate').classList.add('confirming')
+    confirmTimer = setTimeout(resetTerminate, CONFIRM_WINDOW_MS)
     return
   }
-  resetDisconnect()
-  invoke('forget_phone').catch((err) => console.error('forget_phone failed:', err))
+  resetTerminate()
+  invoke('terminate').then(applyMode).catch((err) => console.error('terminate failed:', err))
 })
 
 $('new-qr').addEventListener('click', () => {
@@ -361,8 +373,7 @@ $('new-qr').addEventListener('click', () => {
 // Pull the session on load: the setup-time emit can race the webview load.
 invoke('pairing_payload')
   .then((session) => { if (session?.qrDataUrl) $('qr-img').src = session.qrDataUrl })
-  .catch((err) => console.error('pairing_payload failed:', err))
+  .catch(() => {}) // none outside Wireless mode
 
 renderTracks()
-renderDeck()
-showStage('waiting')
+render()
