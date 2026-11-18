@@ -11,7 +11,7 @@ class UsbFrameTest {
     @Test
     fun `the header matches the receiver's vector`() {
         val bytes = UsbFrame.encode(UsbFrame.KIND_GAME_AUDIO, 0, 0x0102030405060708L, byteArrayOf(0xAA.toByte(), 0xBB.toByte()))
-        val expected = intArrayOf(1, 2, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 2, 0xAA, 0xBB).map { it.toByte() }.toByteArray()
+        val expected = intArrayOf(2, 2, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 2, 0xAA, 0xBB).map { it.toByte() }.toByteArray()
         assertArrayEquals(expected, bytes)
     }
 
@@ -50,7 +50,7 @@ class UsbFrameTest {
 
     @Test
     fun `a wrong version, an unknown kind or a huge length breaks the stream`() {
-        val badVersion = UsbFrame.encode(UsbFrame.KIND_VIDEO, 0, 0, ByteArray(0)).also { it[0] = 2 }
+        val badVersion = UsbFrame.encode(UsbFrame.KIND_VIDEO, 0, 0, ByteArray(0)).also { it[0] = 1 } // a v1 receiver
         val badKind = UsbFrame.encode(UsbFrame.KIND_VIDEO, 0, 0, ByteArray(0)).also { it[1] = 9 }
         val huge = UsbFrame.encode(UsbFrame.KIND_VIDEO, 0, 0, ByteArray(0)).also {
             val n = UsbFrame.MAX_PAYLOAD + 1

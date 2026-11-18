@@ -8,15 +8,18 @@
   - caster.saved-desktop: the trust entry (ADR-006). Its key is sealed by this
     phone's Keystore and cannot be opened elsewhere, so a restored entry is
     only a dead "saved desktop" that fails to connect.
+  - caster.cable-trust: the cable pairing (ADR-037), sealed the same way.
   Keep in sync with backup_rules.xml (Android 10–11).
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="caster_device.xml" />
         <exclude domain="sharedpref" path="caster.saved-desktop.xml" />
+        <exclude domain="sharedpref" path="caster.cable-trust.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="caster_device.xml" />
         <exclude domain="sharedpref" path="caster.saved-desktop.xml" />
+        <exclude domain="sharedpref" path="caster.cable-trust.xml" />
     </device-transfer>
 </data-extraction-rules>

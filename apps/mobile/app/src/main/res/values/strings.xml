@@ -99,10 +99,6 @@
     <string name="cast_waiting_wifi_text">Your screen share stays on. The cast carries on when the Wi-Fi connection is back.</string>
     <string name="cast_waiting_cable_title">Waiting for the cable</string>
     <string name="cast_waiting_cable_text">Your screen share stays on. Plug the cable back in and the cast carries on.</string>
-    <string name="cast_waiting_wifi_card_title">Wi-Fi connection lost</string>
-    <string name="cast_waiting_wifi_card_sub">The cast carries on by itself when the desktop is reachable again. No need to share your screen again.</string>
-    <string name="cast_waiting_cable_card_title">Cable unplugged</string>
-    <string name="cast_waiting_cable_card_sub">Plug it back in to carry on. No need to share your screen again. Nothing is captured while it\'s out.</string>
     <string name="cast_waiting_stops_in">Stops in</string>
     <string name="cast_waiting_audio_sub">Paused until the link is back.</string>
     <string name="cast_waiting_mic_sub">Not recording until the link is back.</string>
@@ -143,7 +139,6 @@
     <string name="profile_tag_cable">Cable</string>
     <string name="profile_action_use_for_cable">Use when the cable is in</string>
     <string name="profiles_foot_cable">For the next cast over the cable. The profile you tap here is the cable\'s; Wi-Fi keeps its own pick.</string>
-    <string name="usb_ready_profile">Using %1$s while the cable is in.</string>
     <string name="profile_wifi_only">Wi-Fi only</string>
     <string name="profile_hint_fps_120">120 fps is smoothest over the USB cable. Over Wi-Fi the cast lowers it when the network can\'t keep up.</string>
     <string name="profile_hint_codec_cable">Over the cable the video is always H.264.</string>
@@ -288,16 +283,38 @@
     <string name="hotspot_error_os_revoked">The system turned the hotspot off.</string>
     <string name="hotspot_error_unknown">Couldn\'t start the hotspot. Try again.</string>
     <!-- USB cast (ADR-034, designs/mobile-app.figcraft "Mobile design v3 · USB cast") -->
-    <string name="usb_pill">USB</string>
-    <string name="usb_checking_title">Cable connected</string>
-    <string name="usb_checking_sub">Checking the desktop…</string>
-    <string name="usb_ready_title">Connected by cable</string>
-    <string name="usb_ready_sub">Sharing goes over the USB cable. Wi-Fi isn\'t needed while it\'s plugged in.</string>
-    <string name="usb_casting_title">Sharing by cable</string>
-    <string name="usb_casting_sub">Unplugging the cable pauses the cast for up to 5 minutes; plug it back in to carry on.</string>
-    <string name="usb_casting_quality">Over the cable the picture stays at the profile for the whole cast: automatic quality and live changes work over Wi-Fi only for now.</string>
-    <string name="usb_refused_title">This desktop doesn\'t know this phone</string>
-    <string name="usb_refused_sub">Scan the desktop\'s QR code over Wi-Fi once, then plug the cable in again.</string>
-    <string name="usb_not_paired_title">Cable connected</string>
-    <string name="usb_not_paired_sub">Pair once over Wi-Fi by scanning the QR code. After that, casting works by cable too.</string>
+
+    <!-- ADR-037: the link is chosen first (designs/mobile-app.figcraft, "Mobile flow v8") -->
+    <string name="link_choice_title">Connect to your computer</string>
+    <string name="link_choice_sub">Choose how. To change it later, Terminate on Home.</string>
+    <string name="link_wireless">Wireless</string>
+    <string name="link_wireless_sub">Same Wi-Fi. Scan the code on the computer.</string>
+    <string name="link_cable">Cable</string>
+    <string name="link_cable_sub">USB cable. No Wi-Fi needed.</string>
+    <string name="link_choice_note">Both need Caster open on the computer, set to the same choice.</string>
+    <string name="cable_guide_title">Connect with a cable</string>
+    <string name="cable_guide_sub">No Wi-Fi and no QR code needed.</string>
+    <string name="cable_step_plug_title">Plug the cable into the computer</string>
+    <string name="cable_step_plug_sub">Use a cable that carries data, not one for charging only.</string>
+    <string name="cable_step_open_title">Tap OK on “Open Caster”</string>
+    <string name="cable_step_open_sub">Android asks once. Tick “Use by default” and later plug-ins open Caster by themselves.</string>
+    <string name="cable_step_allow_title">Allow this phone on the computer</string>
+    <string name="cable_step_allow_sub">The computer asks once: “Allow %1$s to cast over the cable?”</string>
+    <string name="cable_waiting_allow">Found on the cable. Waiting for Allow…</string>
+    <string name="cable_hint_choose_cable">Plugged in but nothing yet? On the computer, choose Cable too.</string>
+    <string name="cable_not_allowed_title">The computer didn\'t allow this phone</string>
+    <string name="cable_not_allowed_sub">Unplug the cable and plug it in again to ask again.</string>
+    <string name="cable_busy">The computer is paired with another phone.</string>
+    <string name="cable_update_computer">Update Caster on the computer to cast over the cable.</string>
+    <string name="cable_failed">Couldn\'t connect over the cable. Unplug it and plug it in again.</string>
+    <string name="cable_other_computer">This phone is paired with another computer. Terminate to switch.</string>
+    <string name="link_status_line">%1$s · %2$s</string>
+    <string name="link_connected">Connected</string>
+    <string name="link_not_connected">Not connected</string>
+    <string name="link_reconnecting">Reconnecting…</string>
+    <string name="link_hint_plug_in">Plug the cable in to reconnect.</string>
+    <string name="link_hint_unplug">Unplug to disconnect</string>
+    <string name="link_hint_plug_back">Plug it back in to carry on.</string>
+    <string name="link_hint_same_wifi">Same Wi-Fi as the computer.</string>
+    <string name="link_hint_waiting_wifi">Waiting for Wi-Fi to come back.</string>
 </resources>

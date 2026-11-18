@@ -102,6 +102,9 @@ import io.github.silogos.caster.ui.settings.settingsFactory
 import io.github.silogos.caster.ui.theme.CasterTheme
 import io.github.silogos.caster.usb.UsbCastService
 import io.github.silogos.caster.usb.UsbLink
+import io.github.silogos.caster.link.Link
+import io.github.silogos.caster.link.LinkMode
+import io.github.silogos.caster.pairing.CableTrust
 
 /**
  * The Home hub (designs/mobile-app.html — the broadcast-console redesign):
@@ -116,7 +119,10 @@ import io.github.silogos.caster.usb.UsbLink
 @Composable
 fun HomeScreen(
     onEditProfile: (Int) -> Unit,
+    /** The pairing ended: back to the choice (ADR-037 §4). */
     onDisconnected: () -> Unit,
+    /** Wireless: a failed reconnect's "Scan QR code" — Scan again, still in Wireless mode. */
+    onScanAgain: () -> Unit = onDisconnected,
     viewModel: HomeViewModel = viewModel(factory = homeFactory()),
     settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory()),
 ) {
@@ -140,10 +146,14 @@ fun HomeScreen(
     val usbCastState by UsbCastService.castState.collectAsStateWithLifecycle()
     // ADR-036: a cable cast waiting for its cable is still this cast.
     val usbCasting = usbCastState.isLive()
+    val link = LinkMode.mode.collectAsStateWithLifecycle().value ?: Link.Wireless
+    val savedName = remember(link) {
+        if (link == Link.Cable) CableTrust(context).load()?.name.orEmpty() else ""
+    }
 
-    // No pairing session → nothing to show here: back to the scan screen.
-    LaunchedEffect(connection) {
-        if (connection is ConnectedDesktop.State.None) onDisconnected()
+    // Wireless: the Wi-Fi pairing ended (Terminate, the desktop's bye forget) → back to the choice.
+    LaunchedEffect(connection, link) {
+        if (link == Link.Wireless && connection is ConnectedDesktop.State.None) onDisconnected()
     }
 
     // The resume machine's outcomes (ADR-006): a reconnected session is
@@ -233,6 +243,8 @@ fun HomeScreen(
 
     HomeContent(
         castState = castState,
+        link = link,
+        savedName = savedName,
         connection = connection,
         pairingState = pairingState,
         gameAudioState = gameAudioState,
@@ -307,10 +319,11 @@ fun HomeScreen(
         onStopUsb = { UsbCastService.requestStop(context) },
         onDisconnect = { CastService.requestDisconnect(context) },
         onTerminate = { CastService.requestTerminate(context) },
+        onTerminateCable = { UsbLink.terminate(context) },
         onConnectSaved = { viewModel.connectSaved() },
         onScanQr = {
             viewModel.prepareForScan()
-            onDisconnected()
+            onScanAgain()
         },
         onTerminateSaved = {
             viewModel.terminateSaved()
@@ -326,6 +339,10 @@ fun HomeScreen(
 @Composable
 fun HomeContent(
     castState: CastState,
+    /** The pairing's link (ADR-037): only its state is shown. */
+    link: Link = Link.Wireless,
+    /** The paired computer's name, until a live state names it. */
+    savedName: String = "",
     connection: ConnectedDesktop.State = ConnectedDesktop.State.Connected("Gaming PC"),
     pairingState: PairingClient.State = PairingClient.State.Idle,
     gameAudioState: GameAudioState = GameAudioState.Off,
@@ -364,6 +381,8 @@ fun HomeContent(
         onStopUsb: () -> Unit = {},
         onDisconnect: () -> Unit = {},
         onTerminate: () -> Unit = {},
+        /** Terminate in Cable mode (ADR-037 §4): `bye forget` over the cable, back to the choice. */
+        onTerminateCable: () -> Unit = {},
         onConnectSaved: () -> Unit = {},
         onScanQr: () -> Unit = {},
         onTerminateSaved: () -> Unit = {},
@@ -375,8 +394,6 @@ fun HomeContent(
     val casting = castState.isLive()
     val usbCasting = usbCastState.isLive()
     val interruption = (castState as? CastState.Interrupted) ?: (usbCastState as? CastState.Interrupted)
-    // The cable takes Share screen only while no Wi-Fi cast is starting or running.
-    val usbReady = usbState is UsbLink.State.Ready && !casting && !usbCasting && castState !is CastState.Starting
     val annunc = when {
         interruption != null -> ConsoleAnnunciator.RECONNECTING
         usbCasting -> ConsoleAnnunciator.ON_AIR
@@ -454,42 +471,32 @@ fun HomeContent(
             )
         }
 
-        // ---- Hero: the destination plate — name only, both states; the
-        // live timecode and quality readout live in the STATUS header. Saved
-        // but offline (ADR-006): the Disconnect slot becomes Connect — the
-        // one-tap QR-less reconnect. The hero STAYS when a cast failed (found
-        // live 2026-10-31: "The connection to the desktop…" used to replace
-        // it, leaving the failure without its destination plate — Connect and
-        // Terminate must stay reachable in that exact moment). ----
-        val failure = (castState as? CastState.Failed) ?: (usbCastState as? CastState.Failed)?.takeIf { castState == CastState.Idle }
+        // ---- The connection card and the big button (ADR-037 §7): what
+        // computer, over which link, its status, and the one next step —
+        // decided by linkUi() from the active link's state only. ----
+        val failure = (if (link == Link.Cable) usbCastState else castState) as? CastState.Failed
         if (failure != null) {
             Spacer(Modifier.height(12.dp))
             CastCard {
                 IconListRow(iconRes = R.drawable.ic_warning, title = failure.message, err = true)
             }
         }
-        OnAirHero(
-            desktopName = when {
-                casting -> castState.liveDesktopName() ?: ""
-                usbCasting -> usbCastState.liveDesktopName() ?: ""
-                connected -> (connection as ConnectedDesktop.State.Connected).desktopName
-                saved != null -> saved.desktopName
-                else -> stringResource(R.string.home_not_connected)
-            },
-            saved = saved,
-            connecting = reconnecting,
-            onConnect = onConnectSaved,
+        val ui = linkUi(link, savedName, connection, pairingState, usbState, castState, usbCastState)
+        ConnectionCard(
+            ui = ui,
             onDisconnect = onDisconnect,
-            onTerminate = if (connected) onTerminate else onTerminateSaved,
+            onTerminate = when {
+                link == Link.Cable -> onTerminateCable
+                connected -> onTerminate
+                else -> onTerminateSaved
+            },
         )
 
-        // ---- A failed reconnect (ADR-06): why it failed, plus the two
-        // escapes — scan a QR instead, or forget this desktop entirely (the
-        // saved entry is kept on plain failures: the desktop may just be off).
+        // ---- A failed reconnect (ADR-06, Wireless): why it failed, plus the
+        // two escapes — scan a QR instead, or forget this desktop entirely.
         // The unreachable case (the #1 error — no shared network) gains the
-        // hotspot escape (issue #96): the failure becomes a three-step
-        // solution instead of a dead end.
-        if (resumeFailure != null && !connected) {
+        // hotspot escape (issue #96). ----
+        if (link == Link.Wireless && resumeFailure != null && !connected) {
             Spacer(Modifier.height(8.dp))
             CastCard {
                 IconListRow(iconRes = R.drawable.ic_warning, title = resumeFailureMessage(resumeFailure.error), err = true)
@@ -498,7 +505,6 @@ fun HomeContent(
                     modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
                 ) {
                     CastTextButton(text = stringResource(R.string.home_scan_qr), onClick = onScanQr)
-                    CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminateSaved)
                 }
                 if (hotspotHintFor(resumeFailure.error)) {
                     Row(
@@ -511,89 +517,22 @@ fun HomeContent(
             }
         }
 
-        // ---- Hotspot pairing mode (issue #96, ADR-011): the phone hosts the
-        // network the desktop joins; SSID + password live here while the
-        // guided-manual flow runs (start → join on the desktop → scan its
-        // fresh QR). The hotspot is explicit: it stays on while casting and
-        // only the Stop button (or the OS) ends it. ----
-        if (hotspotState != HotspotMachine.State.Idle) {
+        // ---- Hotspot pairing mode (issue #96, ADR-011, Wireless only) ----
+        if (link == Link.Wireless && hotspotState != HotspotMachine.State.Idle) {
             Spacer(Modifier.height(8.dp))
             HotspotCard(state = hotspotState, onStop = onStopHotspot, onRetry = onStartHotspot)
         }
 
-        // ---- The cable (ADR-034, design v3 U1–U3) ----
-        val cableProfileName = when (val cable = settings.cableSelection) {
-            is ProfileSelection.BuiltIn -> profileName(cable.profile)
-            is ProfileSelection.Custom -> settings.customProfile(cable.id)?.name ?: ""
-        }
-        // ADR-036 (design v5 D1/D2): the cast waits for its link — why, how long, and Stop below.
-        if (interruption != null) {
-            CastWaitingCard(interruption, modifier = Modifier.padding(top = 12.dp))
-        } else {
-            UsbLinkCard(
-                state = usbState,
-                onScanQr = onScanQr,
-                cableProfileName = cableProfileName,
-                modifier = Modifier.padding(top = 12.dp),
-            )
-        }
-
-        // ---- The transport control: amber to go, outlined to stop ----
-        // (stopping leaves the pairing connected — only the video stops)
-        if (usbCasting || usbReady) {
-            // Over the cable: the same two buttons, driving the USB cast.
-            CastTransportButton(go = !usbCasting, onClick = if (usbCasting) onStopUsb else onShareOverUsb)
-        } else if (castState is CastState.Starting) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(top = 18.dp),
-            ) {
-                CircularProgressIndicator(Modifier.size(16.dp))
-                Text(text = stringResource(R.string.starting_cast), fontSize = 14.sp)
-            }
+        PrimaryButton(
+            action = ui.primary,
+            onShare = if (link == Link.Cable) onShareOverUsb else onShareScreen,
+            onConnect = onConnectSaved,
+            onStop = if (link == Link.Cable) onStopUsb else onStopShareScreen,
+        )
+        if (ui.primary == PrimaryAction.Starting) {
             // mobile.md consent affordance (Android 14+): the dialog shown
             // during this window defaults to the cast-killing choice.
             HintText(stringResource(R.string.share_full_screen_hint))
-        } else if (!connected && !casting) {
-            // Saved/offline (ADR-006): no Share button — the hero's Connect
-            // leads; casting needs a live pairing first.
-        } else {
-            val goShape = RoundedCornerShape(16.dp)
-            if (casting) {
-                OutlinedButton(
-                    onClick = onStopShareScreen,
-                    shape = goShape,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp)
-                        // A minimum: a large system font grows it, never clips the label.
-                        .heightIn(min = 54.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                    ),
-                ) {
-                    Text(text = stringResource(R.string.stop_share_screen), fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                }
-            } else {
-                Button(
-                    onClick = onShareScreen,
-                    shape = goShape,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp)
-                        // A minimum: a large system font grows it, never clips the label.
-                        .heightIn(min = 54.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                ) {
-                    Text(text = stringResource(R.string.share_screen_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                }
-            }
         }
 
         // ---- The quality console (the profile list, ADR-024) — same card
@@ -609,7 +548,7 @@ fun HomeContent(
             onSelect = onSelectProfile,
             onApplyLive = onApplyLiveQuality,
             // The cable in and no Wi-Fi cast running: the list is the cable's (ADR-034).
-            cable = (usbState is UsbLink.State.Ready || usbCasting) && !casting,
+            cable = link == Link.Cable,
             onUseForCable = onUseForCable,
             onAddProfile = { addingProfile = true },
             onEditProfile = onEditProfile,
@@ -765,89 +704,6 @@ fun HomeContent(
             }
         }
         Spacer(Modifier.height(28.dp))
-        }
-    }
-}
-
-/**
- * The hero (the prototype's .hero) — the destination plate: desktop name +
- * its one action. Connected: Disconnect (as before). Saved/offline (ADR-006):
- * the same slot becomes Connect — one tap resumes without a QR; while a
- * reconnect is in flight it reads Connecting… and is disabled.
- */
-@Composable
-private fun OnAirHero(
-    desktopName: String,
-    saved: ConnectedDesktop.State.Saved?,
-    connecting: Boolean,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
-    onTerminate: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 18.dp),
-    ) {
-        Text(
-            text = desktopName,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            letterSpacing = (-0.25).sp,
-            lineHeight = 27.sp,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(12.dp))
-        if (saved != null) {
-            CastTextButton(
-                text = stringResource(if (connecting) R.string.home_connecting else R.string.home_connect),
-                onClick = onConnect,
-                quiet = true,
-            )
-        } else {
-            CastTextButton(text = stringResource(R.string.disconnect), onClick = onDisconnect, quiet = true)
-        }
-        // Terminate is the session-level exit (ADR-006): deleting the saved
-        // session is deliberate, so it sits next to — quieter than — the
-        // connection-level action, never replacing it.
-        CastTextButton(text = stringResource(R.string.home_terminate), onClick = onTerminate, quiet = true)
-    }
-}
-
-/** Share screen (amber, [go]) or Stop share screen (outlined) — the transport's two faces. */
-@Composable
-private fun CastTransportButton(go: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
-    val modifier = Modifier
-        .fillMaxWidth()
-        .padding(top = 16.dp)
-        .heightIn(min = 54.dp)
-    if (go) {
-        Button(
-            onClick = onClick,
-            shape = shape,
-            modifier = modifier,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ),
-        ) {
-            Text(text = stringResource(R.string.share_screen_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        }
-    } else {
-        OutlinedButton(
-            onClick = onClick,
-            shape = shape,
-            modifier = modifier,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-            ),
-        ) {
-            Text(text = stringResource(R.string.stop_share_screen), fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

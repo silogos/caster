@@ -7,17 +7,25 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import io.github.silogos.caster.service.CastState
-import io.github.silogos.caster.service.isLive
-import io.github.silogos.caster.usb.UsbCastService
-import io.github.silogos.caster.service.CastService
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.silogos.caster.link.Link
+import io.github.silogos.caster.link.LinkMode
 import io.github.silogos.caster.service.ConnectedDesktop
 import io.github.silogos.caster.ui.home.HomeScreen
+import io.github.silogos.caster.ui.link.BackLink
+import io.github.silogos.caster.ui.link.CableGuideScreen
+import io.github.silogos.caster.ui.link.ChoiceScreen
 import io.github.silogos.caster.ui.pairing.ScanScreen
 import io.github.silogos.caster.ui.profiles.ProfileEditScreen
 import io.github.silogos.caster.ui.theme.CasterTheme
@@ -33,40 +41,54 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
-        // Persistent session (ADR-006): a saved desktop means the hub leads —
-        // Home with its one-tap Connect. No store (or an unusable one) keeps
-        // the scan-first flow.
+        // ADR-037: the link is chosen first. The saved pairing (or the
+        // user's earlier choice) decides the mode, and only that link runs.
+        LinkMode.hydrate(this)
+        // Persistent session (ADR-006): a saved desktop means Home with its
+        // one-tap Connect. In Cable mode there is none (one pairing at a time).
         ConnectedDesktop.hydrateSaved(this)
-        // USB cast (ADR-034): Android opened us for Caster's accessory.
+        // USB cast (ADR-034): Android opened us for Caster's accessory — used only in Cable mode.
         UsbLink.attachFrom(this, intent)
         setContent {
             CasterTheme {
-                // Scan-first (designs/mobile-app.html): a fresh launch opens on
-                // the scanner — unless a pairing session is already live or
-                // saved: the session/cast live in the process
-                // (ConnectedDesktop / CastService statics), and the saved
-                // desktop lives in the trust store — so reopening the app
-                // (notification, launcher, back-then-again) lands on the Home
-                // hub, never on the scanner. Plain state-based navigation, no
-                // nav library (docs/development/mobile.md: add libraries when
-                // the need is real).
-                var screen by rememberSaveable { mutableStateOf(initialScreen()) }
-                // Which of the user's profiles the edit screen shows (ADR-024).
+                // The screen follows the link mode (ADR-037): nothing chosen →
+                // the choice; chosen, not paired → Scan (Wireless) or the cable
+                // guide (Cable); paired → Home. Plain state-based navigation,
+                // no nav library (docs/development/mobile.md: add libraries
+                // when the need is real).
+                val mode by LinkMode.mode.collectAsStateWithLifecycle()
+                val paired by LinkMode.paired.collectAsStateWithLifecycle()
+                // Which of the user's profiles the edit screen shows (ADR-024); NO_PROFILE: Home.
                 var editingProfileId by rememberSaveable { mutableIntStateOf(NO_PROFILE) }
-                when (screen) {
-                    SCREEN_SCAN -> ScanScreen(onPaired = { screen = SCREEN_HOME })
-                    SCREEN_HOME -> HomeScreen(
-                        onEditProfile = { id ->
-                            editingProfileId = id
-                            screen = SCREEN_PROFILE
-                        },
-                        onDisconnected = { screen = SCREEN_SCAN },
-                    )
-
-                    else -> ProfileEditScreen(
+                // Wireless: a failed reconnect's "Scan QR code" shows Scan without leaving the pairing.
+                var rescanning by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(mode) { if (mode == Link.Cable) UsbLink.attachFrom(this@MainActivity, null) }
+                val back = { LinkMode.backToChoice(this@MainActivity) }
+                when {
+                    mode == null -> ChoiceScreen(onChoose = { LinkMode.choose(this@MainActivity, it) })
+                    mode == Link.Wireless && (!paired || rescanning) -> {
+                        BackHandler(onBack = back)
+                        Box {
+                            ScanScreen(onPaired = {
+                                rescanning = false
+                                LinkMode.paired(this@MainActivity, Link.Wireless)
+                            })
+                            BackLink(onBack = back, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding())
+                        }
+                    }
+                    mode == Link.Cable && !paired -> {
+                        BackHandler(onBack = back)
+                        CableGuideScreen(phoneModel = android.os.Build.MODEL, onBack = back)
+                    }
+                    editingProfileId != NO_PROFILE -> ProfileEditScreen(
                         profileId = editingProfileId,
-                        onBack = { screen = SCREEN_HOME },
+                        onBack = { editingProfileId = NO_PROFILE },
                         onOpenProfile = { id -> editingProfileId = id },
+                    )
+                    else -> HomeScreen(
+                        onEditProfile = { id -> editingProfileId = id },
+                        onDisconnected = back,
+                        onScanAgain = { rescanning = true },
                     )
                 }
             }
@@ -81,30 +103,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // A cable already in (and granted) when the app comes back.
+        // A cable already in (and granted) when the app comes back — Cable mode only (UsbLink checks).
         UsbLink.attachFrom(this, null)
     }
 
-    /**
-     * The real first screen: Home when the process still holds a pairing
-     * session (connected hub, a cast starting/running, or a cast failure
-     * with the session retained) — the scanner otherwise. `rememberSaveable`
-     * only runs this on a genuinely fresh launch; rotation and config changes
-     * keep the current screen.
-     */
-    private fun initialScreen(): String {
-        val connected = ConnectedDesktop.state.value is ConnectedDesktop.State.Connected
-        val saved = ConnectedDesktop.state.value is ConnectedDesktop.State.Saved
-        val casting = CastService.state.value is CastState.Starting || CastService.state.value.isLive() ||
-            UsbCastService.castState.value.isLive()
-        return if (connected || saved || casting) SCREEN_HOME else SCREEN_SCAN
-    }
-
     companion object {
-        private const val SCREEN_SCAN = "scan"
-        private const val SCREEN_HOME = "home"
-        private const val SCREEN_PROFILE = "profile"
-
         /** No profile is open for editing. */
         private const val NO_PROFILE = 0
     }
