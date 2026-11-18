@@ -1,6 +1,6 @@
 # ADR-037: The link is chosen first — Wireless or Cable, never both
 
-- **Status:** proposed (2026-11-18). The phone's design was approved by the product owner on 2026-11-18; the receiver's Home (deck frames 19–24) is awaiting review. The product owner's decisions of 2026-11-18:
+- **Status:** accepted (2026-11-18): the product owner approved the phone's design (Mobile flow v8) and the receiver's (deck frames 15–24) the same day. The product owner's decisions of 2026-11-18:
   - one link at a time ("agar tidak terjadi bug status"), and the link not chosen is **not run at all** ("ketika pilih wireless kita baru buka connection webrtc, ketika buka cable kita hanya buka connection aoa");
   - **both apps open on a choice, Wireless or Cable**; then a pairing screen: Wireless → the QR (desktop) / Scan (phone), Cable → a cable guide, like TikTok LIVE Studio's (with a driver step on Windows);
   - once paired, both apps open straight on Home; **switching link needs Terminate**;
