@@ -364,27 +364,65 @@ def link_card(parent, link, status, sub=None):
     return c
 
 
-def home(f, link, status, on_air=False, sub=None, countdown=None):
-    bar(f, "RECONNECTING" if countdown else ("ON AIR" if on_air else "STANDBY"),
-        tone="amber" if (on_air or countdown) else "muted")
-    connected = status == "Connected" or countdown
-    hero_plate(f, PC, [] if (on_air or countdown) else
-               ([("Disconnect", "muted"), ("Terminate", "muted")] if connected else [("Terminate", "muted")]))
-    c = link_card(f, link, status, sub)
+def connection_card(parent, link, status, sub=None, countdown=None, actions=()):
+    """Home's top card (ADR-037 §7, suggested): which computer, over which link, and its state, in one place.
+    The pairing's actions sit in the card's footer, Terminate apart from Disconnect and in red."""
+    tone = {"Connected": GOOD, "Reconnecting…": PRIMARY, "Not connected": VARIANT}[status]
+    c = card(parent, f"card · connection · {link}")
+    row = hstack(c, "row", gap=14, pad=(16, 16, 16, 16), cross="center", h="fill")
+    (usb_glyph if link == "Cable" else wifi_glyph)(row, ON if status == "Not connected" else tone)
+    texts = vstack(row, "texts", gap=4, h="fill")
+    text(texts, PC, 20, ON, "SemiBold", line=26)
+    st = hstack(texts, "status", gap=8, cross="center")
+    rect(st, "dot", 8, 8, tone, radius=4)
+    text(st, f"{link} · {status}", 13, ON if status == "Not connected" else tone, "Medium", line=18)
+    if sub:
+        text(texts, sub, 13, VARIANT, width=CARD_INNER_W - 52, line=19)
     if countdown:
         hairline(c, CONTENT_W)
         z = hstack(c, "countdown", gap=10, pad=(12, 16, 14, 16), main="spaceBetween", cross="center", h="fill")
         mono(z, "STOPS IN", 11, VARIANT, "Medium", spacing=1.1, line=14)
         mono(z, countdown, 15, PRIMARY, "Bold", spacing=0.6, line=20)
-    if on_air or countdown:
+    if actions:
+        hairline(c, CONTENT_W)
+        foot = hstack(c, "actions", pad=(2, 4, 2, 4), main="spaceBetween", cross="center", h="fill")
+        left = hstack(foot, "left", cross="center")
+        for label in actions:
+            if label != "Terminate":
+                text_button(left, label, ON)
+        if link == "Cable" and status == "Connected":  # the cable has no Disconnect: unplugging is the disconnect
+            ln = hstack(left, "hint", pad=(10, 12, 10, 12), cross="center")
+            text(ln, "Unplug to disconnect", 13, VARIANT, line=20)
+        if "Terminate" in actions:
+            text_button(foot, "Terminate", BAD)
+    return c
+
+
+def disabled_button(parent, label):
+    b = hstack(parent, f"button · {label} (disabled)", main="center", cross="center", h="fill", v="fixed", height=56,
+               fill=ON, opacity=0.06, radius=16)
+    text(b, label, 15, VARIANT, "Bold", line=20)
+
+
+def home(f, link, status, on_air=False, sub=None, countdown=None):
+    bar(f, "RECONNECTING" if countdown else ("ON AIR" if on_air else "STANDBY"),
+        tone="amber" if (on_air or countdown) else "muted")
+    casting = on_air or bool(countdown)
+    actions = () if casting else (("Disconnect", "Terminate") if (link == "Wireless" and status == "Connected")
+                                  else ("Terminate",))
+    connection_card(f, link, status, sub, countdown, actions)
+    # The big button is always there and always the next step, so Home never jumps between states.
+    if casting:
         stop_button(f, "Stop sharing")
     elif status == "Connected":
         go_button(f, "Share screen")
     elif link == "Wireless":
         go_button(f, "Connect")
+    else:
+        disabled_button(f, "Share screen")
     usb = link == "Cable"
     profile_strip(f, "1920 px · 120 fps · 30 Mbps · USB" if usb else "1920 px · 120 fps · 20–30 Mbps",
-                  casting=on_air or bool(countdown))
+                  casting=casting)
     audio(f, paused=bool(countdown))
 
 
@@ -420,7 +458,7 @@ nodes[PAGE] = {"id": PAGE, "name": PAGE_NAME, "type": "page", "background": hexc
                "prototype": {"device": "None", "background": hexc("#1E1E1E"), "rotation": "portrait"},
                "children": [], "width": 0.0, "height": 0.0}
 page_caption(PAGE, "ADR-037 · THE LINK IS CHOSEN FIRST — WIRELESS OR CABLE · ONLY THAT LINK RUNS · PAIRED → STRAIGHT "
-                   "TO HOME · SWITCHING NEEDS TERMINATE · HOME GAINS ONE LINK CARD", 40, 30, 15, "Bold", ON)
+                   "TO HOME · SWITCHING NEEDS TERMINATE · HOME OPENS ON ONE CONNECTION CARD", 40, 30, 15, "Bold", ON)
 
 
 def mac_card(page, x, y, *_):
@@ -462,7 +500,7 @@ y = flow_row(y, "A · FIRST RUN, WIRELESS — CHOOSE, THEN TODAY'S SCAN", [
     ("A3 · SCAN — PAIRING", "phone", lambda f: (back(f), scan_screen(f, pairing=True)), "Paired",
      ["The QR pairing and its auth are unchanged (ADR-002/ADR-006)."]),
     ("A4 · HOME — WIRELESS, CONNECTED", "phone", lambda f: home(f, "Wireless", "Connected"), None,
-     ["Home as it ships, plus the link card above Share screen.",
+     ["One card says which computer, over which link, and its state; its footer holds Disconnect and, apart in red, Terminate.",
       "From now on the app opens here. The cable is never opened while this pairing is Wireless."]),
 ])
 
@@ -492,7 +530,7 @@ y = flow_row(y + ROW_GAP + 74, "C · LATER, ALREADY PAIRED — STRAIGHT TO HOME;
     ("C1 · HOME — CABLE, NOT CONNECTED", "phone",
      lambda f: home(f, "Cable", "Not connected", sub="Plug the cable in to reconnect."), "Plug the cable in",
      ["The app opens on Home, never on the choice, while a pairing exists.",
-      "Nothing to tap: no Connect for the cable."]),
+      "Nothing to tap: no Connect for the cable. Share screen stays in place, greyed, until the cable is in."]),
     ("C2 · HOME — CABLE, CONNECTED", "phone", lambda f: home(f, "Cable", "Connected"), "Share screen",
      ["Android opens Caster by itself, the stored key proves both sides: no prompt on either side.",
       "Even with the app closed, plugging in is enough."]),
@@ -506,7 +544,7 @@ y = flow_row(y + ROW_GAP + 74, "C · LATER, ALREADY PAIRED — STRAIGHT TO HOME;
 ])
 
 flow_row(y + ROW_GAP + 74, "D · WIRELESS LATER, SWITCHING LINK, AND WHEN IT GOES WRONG", [
-    ("D1 · HOME — WIRELESS, NOT CONNECTED", "phone", lambda f: home(f, "Wireless", "Not connected"), None,
+    ("D1 · HOME — WIRELESS, NOT CONNECTED", "phone", lambda f: home(f, "Wireless", "Not connected", sub="Same Wi-Fi as the computer."), None,
      ["Today's one-tap Connect (ADR-006), with the link card.", "Connect → A4."]),
     ("D2 · TERMINATE — BACK TO THE CHOICE", "phone", choice_screen, None,
      ["Switching link: Terminate on Home ends the pairing on both sides (bye forget) and the app is back on A1.",
