@@ -17,6 +17,8 @@ futures-util = "0.3"
 sha2 = "0.10"
 hmac = "0.12"
 hkdf = "0.12"
+# The cable key of USB link v2 (ADR-037, usb-link.md §The cable key): ephemeral ECDH on P-256.
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "std"] }
 base64 = "0.22"
 rand = "0.8"
 qrcode = { version = "0.14", features = ["image"] }

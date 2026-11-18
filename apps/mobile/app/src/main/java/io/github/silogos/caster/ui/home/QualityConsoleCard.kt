@@ -92,7 +92,7 @@ fun QualityConsoleCard(
     onDeleteProfile: (Int) -> Unit,
     modifier: Modifier = Modifier,
     statusRows: @Composable () -> Unit = {},
-    /** The USB cable is in (ADR-034): the list shows and picks the cable's profile. */
+    /** Cable mode (ADR-034, ADR-037): the list shows and picks the cable's profile; only then does a row carry CABLE. */
     cable: Boolean = false,
     onUseForCable: (ProfileSelection) -> Unit = {},
 ) {
@@ -119,7 +119,7 @@ fun QualityConsoleCard(
                 selected = lit == selection,
                 topDivider = preset != QualityProfile.entries.first(),
                 onClick = { pick(selection, preset.toValues()) },
-                usbTags = usbTags(preset.toValues(), settings.cableSelection == selection),
+                usbTags = usbTags(preset.toValues(), cable && settings.cableSelection == selection),
             )
         }
 
@@ -136,12 +136,12 @@ fun QualityConsoleCard(
                 selected = lit == selection,
                 topDivider = index > 0,
                 onClick = { pick(selection, profile.values) },
-                usbTags = usbTags(profile.values, settings.cableSelection == selection),
+                usbTags = usbTags(profile.values, cable && settings.cableSelection == selection),
                 menu = ProfileMenu(
                     onEdit = { onEditProfile(profile.id) },
                     onDuplicate = { onDuplicateProfile(profile.id) }.takeIf { settings.canAddProfile },
                     onDelete = { deleting = profile },
-                    onUseForCable = { onUseForCable(selection) }.takeIf { settings.cableSelection != selection },
+                    onUseForCable = { onUseForCable(selection) }.takeIf { cable && settings.cableSelection != selection },
                 ),
             )
         }

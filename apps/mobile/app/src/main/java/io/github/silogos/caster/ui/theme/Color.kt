@@ -19,3 +19,7 @@ val CastOnSurface = Color(0xFFE6EAF2)
 val CastOnSurfaceVariant = Color(0xFF95999F)
 val CastOutline = Color(0xFF31363D)
 val CastError = Color(0xFFF2B8B5)
+/** A live link (ADR-037's connection card): the design file's GOOD. */
+val CastGood = Color(0xFF3FB950)
+/** Terminate: the design file's BAD. */
+val CastBad = Color(0xFFE5484D)

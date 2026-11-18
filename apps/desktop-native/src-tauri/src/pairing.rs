@@ -25,6 +25,8 @@ const QR_APP_TAG: &str = "caster";
 /// The receiver's data folder (ADR-035).
 const APP_SUPPORT_DIR: &str = "Library/Application Support/Caster";
 const TRUST_FILE: &str = "trust.json";
+/// The cable pairing (usb-link.md §Cable trust, ADR-037): the same document as trust.json.
+const CABLE_TRUST_FILE: &str = "cable-trust.json";
 const DESKTOP_ID_FILE: &str = "desktop-id";
 const TRUST_DOC_VERSION: i64 = 1;
 /// Owner read/write only — the trust file holds the trustKey.
@@ -38,7 +40,7 @@ pub fn b64url(data: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
-fn b64url_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
 }
 
@@ -267,14 +269,66 @@ pub struct TrustEntry {
 #[derive(Clone)]
 pub struct StorePaths {
     pub trust: PathBuf,
+    pub cable_trust: PathBuf,
     pub desktop_id: PathBuf,
 }
 
 impl StorePaths {
     pub fn from_home() -> Option<Self> {
         let dir = PathBuf::from(std::env::var("HOME").ok()?).join(APP_SUPPORT_DIR);
-        Some(Self { trust: dir.join(TRUST_FILE), desktop_id: dir.join(DESKTOP_ID_FILE) })
+        Some(Self::in_dir(&dir))
     }
+
+    pub fn in_dir(dir: &Path) -> Self {
+        Self { trust: dir.join(TRUST_FILE), cable_trust: dir.join(CABLE_TRUST_FILE), desktop_id: dir.join(DESKTOP_ID_FILE) }
+    }
+
+    fn of(&self, link: Link) -> &Path {
+        match link {
+            Link::Wireless => &self.trust,
+            Link::Cable => &self.cable_trust,
+        }
+    }
+}
+
+/// The link a pairing was made on (ADR-037 §3): one pairing at a time, tagged with its link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Link {
+    Wireless,
+    Cable,
+}
+
+impl Link {
+    fn other(self) -> Self {
+        match self {
+            Link::Wireless => Link::Cable,
+            Link::Cable => Link::Wireless,
+        }
+    }
+}
+
+/// The receiver's one pairing and its link, or `None` (the app opens on the choice).
+/// Should both files exist (a crash between write and remove), the newer one wins.
+pub fn saved_pairing(paths: &StorePaths) -> Option<(Link, TrustEntry)> {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let mut found: Vec<(Link, TrustEntry, Option<std::time::SystemTime>)> = [Link::Wireless, Link::Cable]
+        .into_iter()
+        .filter_map(|link| read_trust(paths.of(link)).map(|e| (link, e, modified(paths.of(link)))))
+        .collect();
+    found.sort_by_key(|(_, _, m)| *m);
+    found.pop().map(|(link, entry, _)| (link, entry))
+}
+
+/// Writes the pairing for `link` and removes the other link's (ADR-037 §3: writing one removes the other).
+pub fn store_pairing(paths: &StorePaths, link: Link, entry: &TrustEntry) -> Result<(), String> {
+    write_trust(paths.of(link), entry)?;
+    clear_trust(paths.of(link.other()))
+}
+
+/// Ends the pairing on `link` (Terminate, `bye forget`).
+pub fn forget_pairing(paths: &StorePaths, link: Link) -> Result<(), String> {
+    clear_trust(paths.of(link))
 }
 
 /// Reads the single trust entry; anything unreadable degrades to `None`
@@ -529,6 +583,21 @@ mod tests {
         std::fs::set_permissions(path.with_extension("tmp"), std::fs::Permissions::from_mode(0o644)).unwrap();
         write_trust(&path, &entry()).expect("write");
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_pairing_at_a_time_writing_one_link_removes_the_other() {
+        let dir = scratch("links");
+        let paths = StorePaths::in_dir(&dir);
+        assert!(saved_pairing(&paths).is_none(), "nothing paired: the choice");
+        store_pairing(&paths, Link::Wireless, &entry()).unwrap();
+        assert_eq!(saved_pairing(&paths).map(|(l, _)| l), Some(Link::Wireless));
+        store_pairing(&paths, Link::Cable, &entry()).unwrap();
+        assert_eq!(saved_pairing(&paths).map(|(l, _)| l), Some(Link::Cable));
+        assert!(read_trust(&paths.trust).is_none(), "the Wi-Fi pairing went with the cable's");
+        forget_pairing(&paths, Link::Cable).unwrap();
+        assert!(saved_pairing(&paths).is_none(), "Terminate: back to the choice");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

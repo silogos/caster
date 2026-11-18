@@ -9,7 +9,7 @@ import java.nio.ByteOrder
  * receiver's own encoding (mirrored vectors in both apps).
  */
 object UsbFrame {
-    const val LINK_VERSION = 1
+    const val LINK_VERSION = 2
     const val HEADER_LEN = 16
     const val MAX_PAYLOAD = 4 * 1024 * 1024
 

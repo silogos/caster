@@ -193,11 +193,85 @@
       .qr-card { display: inline-block; background: #fff; padding: 14px; border-radius: 20px; margin-top: 22px; }
       .qr-card img { width: 250px; height: 250px; display: block; }
       .hero .btn { width: auto; padding: 12px 22px; font-size: 14px; }
+
+      /* ADR-037: the choice (frame 15), Back (16–18), the cable guide (17) */
+      .back { position: absolute; top: 26px; left: 28px; }
+      .choice h1, .guide h1 { font-family: var(--display); font-size: 26px; font-weight: 800; margin: 30px 0 6px; }
+      .choice p.lead, .guide p.lead { margin: 0; color: var(--muted); font-size: 14px; }
+      .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+      .tile {
+        text-align: left; padding: 26px 22px 24px; border-radius: 18px; cursor: pointer; color: var(--text);
+        background: linear-gradient(180deg, var(--surface-top), var(--surface-bottom)); border: 1px solid #2a313a;
+      }
+      .tile:hover { border-color: var(--signal); }
+      .tile .glyph { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 22px; color: var(--signal); background: #12382f; }
+      .tile .t { font: 700 18px var(--body); }
+      .tile .s { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.4; }
+      .footnote { margin-top: 20px; font-size: 12px; color: var(--faint); line-height: 1.5; }
+      .steps { margin-top: 24px; }
+      .step { display: grid; grid-template-columns: 28px 1fr; gap: 0 16px; padding-bottom: 22px; position: relative; }
+      .step .n {
+        width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+        font: 700 13px var(--body); border: 1px solid #3a424c; color: var(--muted); background: var(--bg); z-index: 1;
+      }
+      .step.now .n { border-color: var(--signal); color: var(--signal); }
+      .step.done .n { border-color: var(--signal); background: var(--signal); color: #062a24; }
+      .step:not(:last-child)::after { content: ""; position: absolute; left: 13px; top: 32px; bottom: 4px; width: 2px; background: #3a424c; }
+      .step .t { font-size: 15px; font-weight: 600; margin-top: 4px; }
+      .step.later .t { color: var(--muted); }
+      .step .s { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+      .step .ask { display: flex; gap: 12px; margin-top: 12px; }
+      .step .ask .btn { width: 150px; margin: 0; padding: 10px; font-size: 14px; }
+      .note { margin-top: 4px; padding: 12px 16px; border-radius: 12px; background: #2a1612; color: var(--tally); font-size: 13px; }
+      .note.hidden { display: none; }
+
+      /* the deck's connection card (frames 19–24) */
+      .conn { margin-top: 18px; padding: 0; overflow: hidden; }
+      .conn-row { display: flex; align-items: center; gap: 16px; padding: 18px 20px; }
+      .conn-glyph { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none; color: var(--text); background: rgba(238, 241, 244, 0.08); }
+      .conn-glyph svg { width: 22px; height: 22px; }
+      .conn.ok .conn-glyph { color: var(--signal); background: #12382f; }
+      .conn.caution .conn-glyph { color: var(--caution); background: #2a2112; }
+      .conn-name { font-family: var(--display); font-size: 24px; font-weight: 700; word-break: break-word; }
+      .conn-status { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; font-weight: 500; }
+      .conn-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+      .conn.ok .conn-status { color: var(--signal); }
+      .conn.ok .conn-status::before { background: var(--signal); }
+      .conn.caution .conn-status { color: var(--caution); }
+      .conn.caution .conn-status::before { background: var(--caution); }
+      .conn-sub { margin-top: 4px; font-size: 13px; color: var(--muted); }
+      .conn-foot { display: flex; align-items: center; justify-content: space-between; padding: 6px 20px; border-top: 1px solid var(--hairline); }
+      .conn-foot .hint { margin: 0; font-size: 13px; color: var(--muted); text-align: left; }
+      .conn-foot .link { margin: 0; font-size: 14px; color: #e5484d; }
+      .conn-foot .link.confirming { color: var(--tally); }
+      .conn-count { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid var(--hairline); }
+      .conn-count .v { font: 700 17px var(--mono); color: var(--caution); }
+      .hidden { display: none !important; }
     </style>
   </head>
   <body>
-    <!-- QR hero: waiting for a phone -->
-    <div id="stage-waiting" class="stage">
+    <!-- ADR-037 frame 15: nothing paired — choose the link; nothing runs yet -->
+    <div id="stage-choice" class="stage">
+      <div class="column choice">
+        <div class="topbar">
+          <div class="brand-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15a4 4 0 0 1 4 4M3 11a8 8 0 0 1 8 8"/></svg></div>
+          <div class="brand">CASTER</div>
+          <span class="spacer"></span>
+          <span class="annunciator">STANDBY</span>
+        </div>
+        <h1>How do you want to connect?</h1>
+        <p class="lead">Choose the same on the phone. To switch later, Terminate here or on the phone.</p>
+        <div class="tiles">
+          <button id="choose-wireless" class="tile"><div class="glyph"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.2" r="1.1" fill="currentColor"/></svg></div><div class="t">Wireless</div><div class="s">Phone and Mac on the same Wi-Fi. Scan a QR code once.</div></button>
+          <button id="choose-cable" class="tile"><div class="glyph"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4M15 2v4"/><rect x="6" y="6" width="12" height="8" rx="2"/><path d="M12 14v8"/></svg></div><div class="t">Cable</div><div class="s">A USB cable to this Mac. No Wi-Fi needed; you allow the phone once.</div></button>
+        </div>
+        <p class="footnote">Only the link you choose runs: Wireless leaves USB alone (a phone plugged in to charge stays a phone); Cable opens nothing on the network.</p>
+      </div>
+    </div>
+
+    <!-- Frame 16: Wireless — the QR hero, with Back to the choice -->
+    <div id="stage-qr" class="stage hidden">
+      <button class="link back" data-back>‹ Back</button>
       <div class="column">
         <div class="topbar">
           <div class="brand-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15a4 4 0 0 1 4 4M3 11a8 8 0 0 1 8 8"/></svg></div>
@@ -214,6 +288,23 @@
       </div>
     </div>
 
+    <!-- Frame 17: the cable guide — steps tick as they happen; Allow is step 3 -->
+    <div id="stage-guide" class="stage hidden">
+      <button class="link back" data-back>‹ Back</button>
+      <div class="column guide">
+        <div class="topbar">
+          <div class="brand-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15a4 4 0 0 1 4 4M3 11a8 8 0 0 1 8 8"/></svg></div>
+          <div class="brand">CASTER</div>
+          <span class="spacer"></span>
+          <span class="annunciator">STANDBY</span>
+        </div>
+        <h1>Connect with a cable</h1>
+        <p class="lead">Plug your phone into this Mac with a USB cable. No Wi-Fi needed.</p>
+        <div id="guide-steps" class="steps"></div>
+        <div id="guide-note" class="note hidden"></div>
+      </div>
+    </div>
+
     <!-- The deck: a phone is paired (connected, casting, or reconnecting) -->
     <div id="stage-deck" class="stage hidden">
       <div class="column">
@@ -224,18 +315,25 @@
           <span id="annunciator" class="annunciator">STANDBY</span>
         </div>
 
-        <div class="source">
-          <div style="flex: 1; min-width: 0">
-            <div class="label">Source<span id="link-tag" class="link-tag hidden">USB</span></div>
-            <div id="phone-name" class="source-name">Android device</div>
-            <div id="status-pill" class="pill connected">Connected — start casting from your phone</div>
+        <!-- The connection card (frames 19–24): the phone, the link and its status; Terminate in the footer -->
+        <div id="conn" class="card conn">
+          <div class="conn-row">
+            <div id="conn-glyph" class="conn-glyph"></div>
+            <div style="flex: 1; min-width: 0">
+              <div id="phone-name" class="conn-name">Android device</div>
+              <div id="conn-status" class="conn-status">Not connected</div>
+              <div id="conn-sub" class="conn-sub hidden"></div>
+            </div>
           </div>
-          <button id="disconnect" class="link" title="Ends the cast and forgets this phone">Disconnect</button>
+          <div id="conn-count" class="conn-count hidden"><span class="label">Stops in</span><span id="conn-count-v" class="v">5:00</span></div>
+          <div id="conn-foot" class="conn-foot hidden">
+            <span id="conn-hint" class="hint"></span>
+            <button id="terminate" class="link" title="Ends the pairing on both sides; this Mac goes back to the choice">Terminate</button>
+          </div>
         </div>
 
         <button id="video-toggle" class="btn btn-primary">Open video</button>
         <div id="video-hint" class="hint">Video plays while the video window is open.</div>
-        <div id="show-qr-hint" class="hint hidden"><button id="show-qr" class="link">Pair a different phone? Show QR code</button></div>
 
         <div class="card">
           <div class="card-head"><span class="label">Status</span></div>
@@ -311,6 +409,8 @@
         </div>
       </div>
     </div>
+    <template id="glyph-wireless"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.2" r="1.1" fill="currentColor"/></svg></template>
+    <template id="glyph-cable"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4M15 2v4"/><rect x="6" y="6" width="12" height="8" rx="2"/><path d="M12 14v8"/></svg></template>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

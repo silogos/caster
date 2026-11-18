@@ -76,6 +76,8 @@ Mobile                                   Desktop
 
 ## Persistent sessions (trusted reconnect without a QR)
 
+Since 2026-11-18 ([ADR-037](../decisions/ADR-037-the-link-is-chosen-first.md)) this is the **Wireless** pairing: each side holds one pairing at a time, tagged with its link, and the cable makes its own ([usb-link.md](usb-link.md) §Cable trust). Writing the Wi-Fi pairing removes a cable pairing, and the other way round; a Wi-Fi pairing that exists at upgrade carries over as Wireless.
+
 Since 2026-10-30 ([ADR-006](../decisions/ADR-006-persistent-trust-sessions.md)): one QR pairing establishes a **persistent session** between this phone and this desktop. Both sides remember it — the phone reconnects with one tap (`hello {resume}`) and no camera — until either side presses **Disconnect** (`bye` with the reserved reason `forget`). Everything else (app kills, Wi-Fi drops, restarts, a stopped cast) keeps it. The QR payload and `proto` stayed at `1` for this; everything below is additive-optional per the versioning rules.
 
 ### Trust establishment — derived, never transmitted

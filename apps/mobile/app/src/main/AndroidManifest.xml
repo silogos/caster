@@ -63,15 +63,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- USB cast (ADR-034): opened by Android when the receiver
-                 switches the phone into accessory mode over the cable. -->
+        </activity>
+
+        <!-- USB cast (ADR-034): opened by Android when the receiver switches
+             the phone into accessory mode over the cable. An alias, disabled
+             unless the phone is in Cable mode (ADR-037, link/LinkMode.kt): in
+             Wireless mode Android doesn't offer "Open Caster?" for the cable. -->
+        <activity-alias
+            android:name=".CableEntry"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
             </intent-filter>
             <meta-data
                 android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
                 android:resource="@xml/accessory_filter" />
-        </activity>
+        </activity-alias>
 
         <!-- Minimal Phase5 skeleton (service/CastService.kt): owns the
              MediaProjection + media pipeline; full lifecycle is Phase6. The

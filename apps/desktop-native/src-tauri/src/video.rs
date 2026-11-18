@@ -1278,3 +1278,58 @@ mod tests {
         assert_eq!(window_state(false, false, true), (false, false), "never opened: nothing to render");
     }
 }
+
+// ---- the picture's state for the deck, shared by both links' frame loops (Wi-Fi and USB) ----
+
+/// The picture the receiver is actually getting, measured once a second:
+/// what the decoder hands over, not what the phone said it captures. The
+/// two differ whenever the sender scales the frame down or drops frames
+/// under pressure (found 2026-11-11: 640×400 arrived under a status that
+/// read 1920×1200 · 60 fps).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReceivedPicture {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) fps: u32,
+}
+
+/// The picture that is arriving changed, or stopped arriving (None): the
+/// deck's live readout shows it. The cast's settings stay the phone's
+/// `session-info`, on the pill and the tray.
+pub(crate) fn announce_picture(app: &tauri::AppHandle, picture: Option<ReceivedPicture>) {
+    let payload = picture.map(|p| serde_json::json!({ "width": p.width, "height": p.height, "fps": p.fps }));
+    let _ = tauri::Emitter::emit(app, "cast:picture", payload);
+}
+
+/// Input went live or stopped: the deck's ON AIR, and the video window's
+/// NO INPUT card (main thread). No-op when nothing changed.
+pub(crate) fn announce_input(app: &tauri::AppHandle, live: bool) {
+    if crate::video::set_live(live) {
+        let _ = tauri::Emitter::emit(app, "cast:state", serde_json::json!({ "live": live }));
+        let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
+        if !live {
+            // OBS shows the still, not the last frame of the cast (ADR-021).
+            crate::syphon::publish_no_input();
+        }
+    }
+}
+
+/// Keeps the video window's visibility fresh from the main thread, at most
+/// every [`crate::video::VISIBILITY_POLL_INTERVAL`] — called by every frame
+/// loop (Wi-Fi and USB).
+pub(crate) fn poll_window_visibility(app: &tauri::AppHandle, last: &mut Option<std::time::Instant>) {
+    if last.map_or(false, |t| t.elapsed() < crate::video::VISIBILITY_POLL_INTERVAL) {
+        return;
+    }
+    *last = Some(std::time::Instant::now());
+    let poll_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        // The window's own close button: silence the sound, update the UI.
+        if crate::video::refresh_visibility() {
+            crate::remember_video_open(&poll_app, false);
+            crate::audio::set_window_open(false);
+            crate::tray::sync_dock_icon(&poll_app);
+            let _ = tauri::Emitter::emit(&poll_app, "video:window", serde_json::json!({ "open": false }));
+        }
+    });
+}

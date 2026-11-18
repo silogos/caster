@@ -56,11 +56,22 @@ Dependency direction: `ui` and `service` drive the session; `pairing`, `signalin
   - **The mic row follows the real state, casting or not.** With the mic switched on and RECORD_AUDIO missing, the row is drawn **off** with its reason. Android has no "permanently denied" query: `shouldShowRequestPermissionRationale` is false both before the first ask and once Android stops asking (Android 11+: the second denial). A persisted "has asked" flag (`MicPermission.kt`) tells the two apart, and once Android stops asking the row offers **Open settings** (app info). Returning with the grant restores the ordinary row and, mid-cast, starts the mic. Known limitation: on Android 11+, dismissing the dialog without answering also leaves no rationale, so the row can offer settings one step early.
 - **Consent mode pitfall (Android 14+):** the projection dialog defaults to *Share one app*; a single-app share ends the moment that app leaves the foreground. Users must choose *Share full screen*. Handled cleanly (it is a normal projection-revoked stop), and since Phase13 the scan screen carries a UX affordance: a hint under the cast trigger — "When your phone asks what to share, choose 'Share full screen'."
 
+### The link is chosen first (ADR-037)
+
+`link/LinkMode` is the one owner of the mode. A saved pairing decides it at launch (its link wins: `CableTrust` → Cable, `SavedDesktops` → Wireless); before pairing, the user's choice is kept (`caster.link`) so a plug-in that launches the app finds it in Cable mode; with neither, the app opens on the choice and nothing runs. `MainActivity` draws the screen from `LinkMode.mode` / `paired`: the choice → Scan (Wireless, with Back) or the cable guide (Cable) → Home.
+
+| Mode | Runs | Never runs |
+|---|---|---|
+| **Wireless** | the Wi-Fi pairing; signaling and WebRTC only on Connect / Share (`CastService`) | the accessory: `UsbLink.attachFrom` returns, and the `.CableEntry` activity-alias carrying `USB_ACCESSORY_ATTACHED` is disabled, so Android doesn't even offer "Open Caster?" |
+| **Cable** | the accessory (`UsbLink`, `UsbCastService`) | any signaling socket, WebRTC or WifiLock |
+
+One pairing at a time: `LinkMode.paired` removes the other link's pairing. Terminate (either link) ends the pairing and returns to the choice. Home's top is **one connection card and one big button** (`ConnectionCard.kt`), drawn from `linkUi()` (`LinkUi.kt`, pure, `LinkUiTest`): which computer, over which link, Connected / Not connected / Reconnecting (with ADR-036's countdown), a hint, the footer (Disconnect for Wireless; a red Terminate; none while a cast runs or waits), and the next step (Connect, Share, Share greyed for an unplugged cable, Stop). It reads only the active link's state, so the card can't mix the two links. The profile list follows the pairing's link (Cable: the cable's profile, CABLE). The old hero and `UsbLinkCard` / `CastWaitingCard` are gone.
+
 ### The cast over a USB cable (ADR-034)
 
 A separate, small path in the `usb` package. It is not a mode of `CastService`, because that service is built around the WebRTC session:
-- `UsbLink` owns the accessory link between casts, like `ConnectedDesktop` owns the signaling connection.
-- `UsbHandshake` proves the trust key and checks the desktop's proof.
+- `UsbLink` owns the accessory link between casts, like `ConnectedDesktop` owns the signaling connection. It opens the accessory in Cable mode only, refuses a receiver whose accessory version string is not `2`, stores the cable pairing (`pairing/CableTrust`, sealed by the `TrustVault`, excluded from backup) when the computer allows the phone, and forgets it on Terminate or the computer's `bye forget`.
+- `UsbHandshake` (pure) runs link v2's handshake: `auth` with the stored cable key, or enrolment — `CableKey` (ECDH P-256 with `KeyPairGenerator("EC")` / `KeyAgreement("ECDH")`, HKDF-SHA256) makes the key, the phone proves it, and the computer's user allows. Its tests pin the receiver's vectors.
 - `UsbCastService` (FGS `mediaProjection`) owns one cable cast: `UsbVideoEncoder`, which drives MediaCodec directly, `UsbGameAudioCapture`, which reads playback capture as 10 ms PCM16, and `UsbMicCapture`.
 
 `UsbVideoEncoder`'s drain thread is the only thread that touches the codec once it runs: it copies each access unit straight into one link frame (one copy, `UsbFrame.framed`), and on its way out it stops and releases the codec. `stop()` only releases the VirtualDisplay and signals the thread, so a cable pulled mid-cast can never release the codec under a call in flight. Whichever ends first — `stop()` or the loop itself (link gone, codec error) — owns the end, so `onStopped` fires at most once. The video write is still synchronous on that thread and shares the link's write lock with audio and control; whether that costs frames at 120 fps is unmeasured.

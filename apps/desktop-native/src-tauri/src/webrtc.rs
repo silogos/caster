@@ -41,15 +41,15 @@ fn stereo_answer_sdp(role: PcId, sdp: &str) -> Option<String> {
 
 /// The Opus track's stereo line, once a second (10 ms frames).
 const OPUS_TRACK_LOG_EVERY_FRAMES: u64 = 100;
-use serde_json::json;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
 
 /// The PeerConnectionFactory — created ONCE on the main thread (Tauri
 /// setup), accessed from the signaling thread. libwebrtc's macOS video
 /// encoder enumeration dispatches internally and requires NSApplication
 /// context during creation (crashed with NSException otherwise, found
 /// live in M0-r).
+use crate::video::{announce_input, announce_picture, poll_window_visibility, ReceivedPicture};
+
 static FACTORY: std::sync::OnceLock<PeerConnectionFactory> = std::sync::OnceLock::new();
 
 /// Creates the factory on the CALLING thread. Must be called from the
@@ -466,59 +466,6 @@ const VIDEO_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 /// How often a frame loop waiting for frames checks whether its stream is
 /// still the current one.
 const STALE_STREAM_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// The picture the receiver is actually getting, measured once a second:
-/// what the decoder hands over, not what the phone said it captures. The
-/// two differ whenever the sender scales the frame down or drops frames
-/// under pressure (found 2026-11-11: 640×400 arrived under a status that
-/// read 1920×1200 · 60 fps).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReceivedPicture {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) fps: u32,
-}
-
-/// The picture that is arriving changed, or stopped arriving (None): the
-/// deck's live readout shows it. The cast's settings stay the phone's
-/// `session-info`, on the pill and the tray.
-pub(crate) fn announce_picture(app: &tauri::AppHandle, picture: Option<ReceivedPicture>) {
-    let payload = picture.map(|p| json!({ "width": p.width, "height": p.height, "fps": p.fps }));
-    let _ = app.emit("cast:picture", payload);
-}
-
-/// Input went live or stopped: the deck's ON AIR, and the video window's
-/// NO INPUT card (main thread). No-op when nothing changed.
-pub(crate) fn announce_input(app: &tauri::AppHandle, live: bool) {
-    if crate::video::set_live(live) {
-        let _ = app.emit("cast:state", json!({ "live": live }));
-        let _ = app.run_on_main_thread(crate::video::apply_no_input_card);
-        if !live {
-            // OBS shows the still, not the last frame of the cast (ADR-021).
-            crate::syphon::publish_no_input();
-        }
-    }
-}
-
-/// Keeps the video window's visibility fresh from the main thread, at most
-/// every [`crate::video::VISIBILITY_POLL_INTERVAL`] — called by every frame
-/// loop (Wi-Fi and USB).
-pub(crate) fn poll_window_visibility(app: &tauri::AppHandle, last: &mut Option<std::time::Instant>) {
-    if last.map_or(false, |t| t.elapsed() < crate::video::VISIBILITY_POLL_INTERVAL) {
-        return;
-    }
-    *last = Some(std::time::Instant::now());
-    let poll_app = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        // The window's own close button: silence the sound, update the UI.
-        if crate::video::refresh_visibility() {
-            crate::remember_video_open(&poll_app, false);
-            crate::audio::set_window_open(false);
-            crate::tray::sync_dock_icon(&poll_app);
-            let _ = poll_app.emit("video:window", json!({ "open": false }));
-        }
-    });
-}
 
 /// The SDP session id — the second field of the `o=` line. It stays fixed
 /// for one PeerConnection across renegotiations (JSEP), so equal ids on two
