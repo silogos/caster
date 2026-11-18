@@ -90,7 +90,7 @@ Done (2026-11-18):
 - **The cable key agrees across the two apps:** the receiver computes the vectors with the `p256` crate (`usb_protocol.rs`), the phone pins them and derives the same Z, transcript, key and both macs with the platform's EC provider (`UsbHandshakeTest`).
 - **JVM, 452 tests green:** `UsbHandshakeTest` (enrol → Asking → Trusted with the key to store; stored key; stale key → enrol; refusals: not-allowed, busy, another computer, older computer; a point off the curve), `LinkUiTest` (every Home state of the design, and that each link reads only its own state), `UsbFrameTest` (v2 header, a v1 frame refused).
 - **`cargo test --lib`, 128 green:** the handshake (Allow pairs, the next plug-in is trusted with no prompt, Don't Allow refuses and isn't asked again on the attach, busy, a peer that can't derive the key never reaches the prompt, a point off the curve closes, ready mid-prompt drops it); one pairing at a time (`store_pairing` removes the other link's, `forget_pairing` → the choice).
-- **`node --test`, 9 green:** the receiver window's screens, connection card, countdown and cable guide (`link_view.test.mjs`).
+- **`node --test`, 14 green:** the receiver window's reducer and view (`window_state.test.mjs`): every deck state of the design, the clock running through a drop and stopping when the five minutes run out, a mid-cast unplug reading RECONNECTING, another link starting clean, the cable guide.
 - **The receiver on this Mac** (a scratch data folder): nothing paired → no listening socket and no USB thread; a cable pairing → the USB thread only, no socket; a Wi-Fi pairing → signaling only, no USB thread.
 
 To do on the device (Lenovo TB321FU, the receiver on the Mac):

@@ -323,9 +323,12 @@ fn session(config: &Config, handle: DeviceHandle<Context>) {
         }
     };
     log::info!(target: "usb", "link ended: {end}");
+    // Said before the media stops: the window must know a cast was running
+    // when the link went (ADR-036's wait), not see "no picture" first.
+    let was_casting = s.media.casting;
     s.media.stop();
     if s.trusted {
-        announce_mobile(&config.app, json!({ "state": "disconnected", "link": "usb" }));
+        announce_mobile(&config.app, json!({ "state": "disconnected", "link": "usb", "casting": was_casting }));
     }
     if !config.stop.load(Ordering::Relaxed) {
         announce_cable(&config.app, "waiting", None);

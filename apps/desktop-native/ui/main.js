@@ -6,7 +6,8 @@
 //    its status, Terminate), "Open video", the cast's status, the sound.
 //    Video plays only while the video window is open; sound while it is open
 //    or the Syphon output is on (ADR-029), on the device chosen under "Plays on".
-// What each part says is decided in link_view.js (pure, tested); this file draws it.
+// What the window says is decided by window_state.js — reduce(state, event) and view(state),
+// pure and tested; this file only dispatches events and draws view().
 // Events from the Rust core:
 //  - link:mode {mode, name}  → which link runs (choice | wireless | cable)
 //  - cable:state {state, name} → the cable guide's progress
@@ -17,7 +18,7 @@
 //  - video:window {open}     → the Open/Close video button
 // Only receiver/environment controls live here — cast settings are the phone's.
 
-import { stageFor, connectionCard, annunciator, guideSteps, applyMobileState, settingsLine } from './link_view.js'
+import { initialState, reduce, view } from './window_state.js'
 
 const tauri = window.__TAURI__ ?? null
 if (!tauri) console.error('window.__TAURI__ missing — events will not arrive')
@@ -26,52 +27,28 @@ const $ = (id) => document.getElementById(id)
 
 const stages = { choice: $('stage-choice'), qr: $('stage-qr'), guide: $('stage-guide'), deck: $('stage-deck') }
 
-// ---- window state ----------------------------------------------------------
+// ---- state: one reducer, one view (window_state.js) ------------------------
 
-let state = {
-  mode: 'choice', // the running link (ADR-037)
-  phone: null,
-  link: 'offline', // 'connected' | 'offline' | 'reconnecting'
-  live: false,
-  liveSince: 0,
-  info: null,
-  picture: null, // what the receiver is getting, measured once a second
-  dropDeadline: null,
-  cable: { state: 'waiting', name: null },
-  videoOpen: false,
-  syphonOutput: false, // the receiver's Syphon switch (ADR-021)
-}
+let state = initialState
 
-function pad(n) {
-  return String(n).padStart(2, '0')
-}
-
-function timecode(ms) {
-  const s = Math.floor(ms / 1000)
-  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
-}
-
-/**
- * "640×400 · 59 fps": the picture that is arriving right now. The sender
- * scales the frame and drops frames under pressure, so it is not always
- * what the phone set. Until the first measured second: the settings.
- */
-function liveLine(info, picture) {
-  if (!picture) return settingsLine(info)
-  return `${picture.width}×${picture.height} · ${picture.fps} fps`
+/** Every change to the window's state goes through here. */
+function dispatch(type, payload) {
+  state = reduce(state, { type, payload, now: Date.now() })
+  render()
 }
 
 function render() {
-  const stage = stageFor(state)
-  for (const [name, el] of Object.entries(stages)) el.classList.toggle('hidden', name !== stage)
-  if (stage === 'guide') renderGuide()
-  if (stage === 'deck') renderDeck()
+  const v = view(state)
+  for (const [name, el] of Object.entries(stages)) el.classList.toggle('hidden', name !== v.stage)
+  if (v.stage === 'guide') drawGuide(v.guide)
+  if (v.stage === 'deck') drawDeck(v.deck)
+  $('game-sub').textContent = v.gameSub
+  $('syphon-switch').classList.toggle('on', v.syphon.on)
+  $('syphon-sub').textContent = v.syphon.sub
 }
 
-function renderGuide() {
-  const { steps, note } = guideSteps(state.cable)
-  const list = $('guide-steps')
-  list.replaceChildren(...steps.map((step, i) => {
+function drawGuide({ steps, note }) {
+  $('guide-steps').replaceChildren(...steps.map((step, i) => {
     const el = document.createElement('div')
     el.className = `step ${step.state}`
     el.innerHTML = `<div class="n">${step.state === 'done' ? '✓' : i + 1}</div><div><div class="t"></div><div class="s"></div></div>`
@@ -89,101 +66,53 @@ function renderGuide() {
   $('guide-note').classList.toggle('hidden', !note)
 }
 
-function renderDeck() {
-  const card = connectionCard(state)
+function drawDeck({ annunciator, card, video, status }) {
+  $('annunciator').textContent = annunciator.word
+  $('annunciator').className = `annunciator ${annunciator.tone}`.trim()
+
   $('phone-name').textContent = card.name
   $('conn').className = `card conn ${card.tone}`
   const glyph = $(`glyph-${card.glyph}`)
-  if (glyph) $('conn-glyph').replaceChildren(glyph.content.cloneNode(true))
+  if (glyph && $('conn-glyph').dataset.glyph !== card.glyph) {
+    $('conn-glyph').replaceChildren(glyph.content.cloneNode(true))
+    $('conn-glyph').dataset.glyph = card.glyph
+  }
   $('conn-status').textContent = `${card.link} · ${card.status}`
   $('conn-sub').textContent = card.sub ?? ''
   $('conn-sub').classList.toggle('hidden', !card.sub)
   $('conn-count').classList.toggle('hidden', !card.countdown)
-  if (card.countdown) $('conn-count-v').textContent = card.countdown
+  $('conn-count-v').textContent = card.countdown ?? ''
   $('conn-foot').classList.toggle('hidden', !card.footer)
-  if (card.footer) $('conn-hint').textContent = card.footer.hint
-  else resetTerminate()
-
-  const ann = annunciator(state)
-  $('annunciator').textContent = ann.word
-  $('annunciator').className = `annunciator ${ann.tone}`.trim()
-
-  $('readout').textContent = state.live
-    ? liveLine(state.info, state.picture) + (state.mode === 'cable' ? ' · USB' : '')
-    : 'Waiting for the cast'
-  $('timecode').classList.toggle('idle', !state.live)
-  if (!state.live) $('timecode').textContent = '00:00:00'
-  $('chip-game').classList.toggle('on', state.live && state.info?.gameAudio === true)
-  $('chip-mic').classList.toggle('on', state.live && state.info?.mic === true)
-  $('video-hint').classList.toggle('hidden', state.link === 'offline')
+  $('conn-hint').textContent = card.footer?.hint ?? ''
+  if (!card.footer) resetTerminate()
 
   const toggle = $('video-toggle')
-  toggle.disabled = state.link === 'offline' && !state.videoOpen
-  toggle.textContent = state.videoOpen ? 'Close video' : 'Open video'
-  toggle.className = `btn ${state.videoOpen ? 'btn-secondary' : 'btn-primary'}`
-  renderGameSub()
+  toggle.textContent = video.label
+  toggle.className = `btn ${video.primary ? 'btn-primary' : 'btn-secondary'}`
+  toggle.disabled = video.disabled
+  $('video-hint').textContent = video.hint ?? ''
+  $('video-hint').classList.toggle('hidden', !video.hint)
+
+  $('timecode').textContent = status.timecode
+  $('timecode').classList.toggle('idle', status.idle)
+  $('readout').textContent = status.readout
+  $('chip-game').classList.toggle('on', status.game)
+  $('chip-mic').classList.toggle('on', status.mic)
 }
 
-// Sound plays while something shows the cast: the window or Syphon (ADR-029).
-function renderGameSub() {
-  $('game-sub').textContent = state.videoOpen || state.syphonOutput
-    ? 'Playing on this computer.'
-    : 'Plays while the video window is open or Syphon is on.'
-}
-
-setInterval(() => {
-  if (state.live) $('timecode').textContent = timecode(Date.now() - state.liveSince)
-  if (state.dropDeadline) {
-    if (Date.now() >= state.dropDeadline) state = { ...state, link: 'offline', dropDeadline: null }
-    render()
-  }
-}, 1000)
+// The timecode and ADR-036's countdown move once a second; the tick also ends a wait that ran out.
+setInterval(() => dispatch('tick'), 1000)
 
 // ---- events ----------------------------------------------------------------
 
-/** link_state / link:mode: which link runs, and the paired phone's name. */
-function applyMode(view) {
-  if (!view) return
-  const mode = view.mode ?? 'choice'
-  const changed = mode !== state.mode
-  state = { ...state, mode, phone: view.name ?? null }
-  if (changed) state = { ...state, link: 'offline', live: false, info: null, dropDeadline: null, cable: { state: 'waiting', name: null } }
-  render()
+for (const name of ['link:mode', 'cable:state', 'pairing:mobile-state', 'cast:state', 'cast:picture', 'video:window']) {
+  tauri?.event.listen(name, (event) => dispatch(name, event.payload))
 }
-
-tauri?.event.listen('link:mode', (event) => applyMode(event.payload))
-invoke('link_state').then(applyMode).catch((err) => console.error('link_state failed:', err))
-
-tauri?.event.listen('cable:state', (event) => {
-  state = { ...state, cable: { state: event.payload?.state ?? 'waiting', name: event.payload?.name ?? state.cable.name } }
-  render()
-})
-
 tauri?.event.listen('pairing:session-updated', (event) => {
   if (event.payload?.qrDataUrl) $('qr-img').src = event.payload.qrDataUrl
 })
-
-tauri?.event.listen('pairing:mobile-state', (event) => {
-  state = applyMobileState(state, event.payload)
-  render()
-})
-
-tauri?.event.listen('cast:state', (event) => {
-  const live = event.payload?.live === true
-  if (live && !state.live) state.liveSince = Date.now()
-  state = { ...state, live, dropDeadline: live ? null : state.dropDeadline, link: live ? 'connected' : state.link }
-  render()
-})
-
-tauri?.event.listen('cast:picture', (event) => {
-  state.picture = event.payload ?? null
-  render()
-})
-
-tauri?.event.listen('video:window', (event) => {
-  state.videoOpen = event.payload?.open === true
-  render()
-})
+const applyMode = (view) => dispatch('link:mode', view)
+invoke('link_state').then(applyMode).catch((err) => console.error('link_state failed:', err))
 
 // ---- the link: choose, Back, Allow ------------------------------------------
 
@@ -315,31 +244,24 @@ function installCasterDevices(name) {
 // Re-read when this window gains focus: a device installed meanwhile.
 function loadCasterDevices() {
   return invoke('caster_devices')
-    .then((devices) => { casterDevices = devices; renderTracks(); renderSyphon() })
+    .then((devices) => { casterDevices = devices; renderTracks(); render() })
     .catch((err) => console.error('caster_devices failed:', err))
 }
 window.addEventListener('focus', loadCasterDevices)
 
 // The Syphon output for OBS: a receiver control, saved with the others.
-function renderSyphon() {
-  $('syphon-switch').classList.toggle('on', state.syphonOutput)
-  $('syphon-sub').textContent = state.syphonOutput
-    ? `On. In OBS add a Syphon Client source named "Caster", and Audio Input Captures of "Caster Audio" and "Caster Mic".`
-    : 'Off. OBS can still capture the video window.'
-  renderGameSub()
-}
 $('syphon-switch').addEventListener('click', () => {
   invoke('set_syphon_output', { enabled: !state.syphonOutput })
-    .then((saved) => { state.syphonOutput = saved.syphonOutput === true; renderSyphon() })
+    .then((saved) => dispatch('syphon', saved.syphonOutput === true))
     .catch((err) => console.error('set_syphon_output failed:', err))
 })
 
 invoke('receiver_settings')
   .then((settings) => {
     saved = settings
-    state.syphonOutput = settings.syphonOutput === true
+    dispatch('syphon', settings.syphonOutput === true)
     renderTracks()
-    renderSyphon()
+    render()
   })
   .catch(() => {})
 
