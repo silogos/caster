@@ -84,8 +84,18 @@ So both links can be up at once, and the phone and the Mac disagree about which 
 | Keep a pairing per link (a phone paired on both) | Rejected on review: switching link is a Terminate, so a second live pairing would only be a way back to two links |
 | No Allow prompt (any phone on the cable is trusted) | Rejected: any phone plugged into the Mac, by anyone, could cast to it |
 
-## Verification (to do)
+## Verification
 
-- JVM: the choice and the pairing's link are stored and restored; with Wireless, `UsbLink` never opens the accessory; with Cable, no Wi-Fi socket or resume starts; Terminate returns to the choice; the v2 handshake (enrol, auth, refusals) against the vectors shared with the receiver.
-- `cargo test --lib`: the receiver's half of the same vectors; one pairing with its link stores, finds and forgets, and a new pairing replaces the other link's; a v1 frame is refused; the mode owner starts only one link.
-- Device (Lenovo TB321FU, the receiver on the Mac): both on Cable → plug in → Allow in the receiver's guide → Home (Cable · Connected); unplug and plug in → Home, no prompt; Don't Allow → the phone says so; receiver on Wireless, plug the phone in → nothing on either side (no accessory dialog); Terminate on the phone → choice → Wireless → Scan → Home (Wireless · Connected).
+Done (2026-11-18):
+- **The cable key agrees across the two apps:** the receiver computes the vectors with the `p256` crate (`usb_protocol.rs`), the phone pins them and derives the same Z, transcript, key and both macs with the platform's EC provider (`UsbHandshakeTest`).
+- **JVM, 452 tests green:** `UsbHandshakeTest` (enrol → Asking → Trusted with the key to store; stored key; stale key → enrol; refusals: not-allowed, busy, another computer, older computer; a point off the curve), `LinkUiTest` (every Home state of the design, and that each link reads only its own state), `UsbFrameTest` (v2 header, a v1 frame refused).
+- **`cargo test --lib`, 128 green:** the handshake (Allow pairs, the next plug-in is trusted with no prompt, Don't Allow refuses and isn't asked again on the attach, busy, a peer that can't derive the key never reaches the prompt, a point off the curve closes, ready mid-prompt drops it); one pairing at a time (`store_pairing` removes the other link's, `forget_pairing` → the choice).
+- **`node --test`, 9 green:** the receiver window's screens, connection card, countdown and cable guide (`link_view.test.mjs`).
+- **The receiver on this Mac** (a scratch data folder): nothing paired → no listening socket and no USB thread; a cable pairing → the USB thread only, no socket; a Wi-Fi pairing → signaling only, no USB thread.
+
+To do on the device (Lenovo TB321FU, the receiver on the Mac):
+- both on Cable → plug in → Allow in the receiver's guide → Home (Cable · Connected);
+- unplug and plug in → Home, no prompt;
+- Don't Allow → the phone says so;
+- receiver on Wireless, plug the phone in → nothing on either side (no accessory dialog);
+- Terminate on the phone → choice → Wireless → Scan → Home (Wireless · Connected).
