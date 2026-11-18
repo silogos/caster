@@ -90,6 +90,9 @@ pub(crate) fn on_mobile_state(app: &tauri::AppHandle, state: Value) {
     let forgotten = state["state"] == "forgotten";
     let _ = app.emit("pairing:mobile-state", state);
     if forgotten {
+        if let Err(e) = hide_video(app) {
+            log::warn!(target: "link", "video window not closed: {e}");
+        }
         if let Some(owner) = app.try_state::<LinkOwner>() {
             owner.stop(app);
         }
@@ -126,7 +129,14 @@ fn open_video(app: tauri::AppHandle) -> Result<(), String> {
 /// "Close video": hides the window and silences the sound.
 #[tauri::command]
 fn close_video(app: tauri::AppHandle) -> Result<(), String> {
-    remember_video_open(&app, false);
+    hide_video(&app)
+}
+
+/// The video window closes and its sound stops, and the closed state is
+/// saved: "Close video", and a pairing that ended (Terminate on either side —
+/// there is no phone left to show).
+pub(crate) fn hide_video(app: &tauri::AppHandle) -> Result<(), String> {
+    remember_video_open(app, false);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         video::close_video_window();

@@ -47,7 +47,7 @@ class QualityConsoleCardUiTest {
     private val deleted = mutableListOf<Int>()
     private var adds = 0
 
-    private fun show(settings: CastSettings, casting: Boolean = false, live: QualityLevel? = null) {
+    private fun show(settings: CastSettings, casting: Boolean = false, live: QualityLevel? = null, cable: Boolean = false) {
         compose.setContent {
             CasterTheme {
                 QualityConsoleCard(
@@ -61,6 +61,7 @@ class QualityConsoleCardUiTest {
                     onEditProfile = { edited.add(it) },
                     onDuplicateProfile = { duplicated.add(it) },
                     onDeleteProfile = { deleted.add(it) },
+                    cable = cable,
                 )
             }
         }
@@ -76,10 +77,16 @@ class QualityConsoleCardUiTest {
         // Sharp and the copy made from it both keep resolution; Performance and Capture keep frame rate.
         assertEquals(2, compose.onAllNodes(hasText("KEEP RESOLUTION")).fetchSemanticsNodes().size)
         assertEquals(2, compose.onAllNodes(hasText("KEEP FRAME RATE")).fetchSemanticsNodes().size)
-        // Capture is the cable's profile (ADR-034) and more than Wi-Fi usually carries.
+        // Capture carries more than Wi-Fi usually does; in Wireless mode no row is the cable's (ADR-037).
         assertEquals(1, compose.onAllNodes(hasText("BEST OVER USB")).fetchSemanticsNodes().size)
-        assertEquals(1, compose.onAllNodes(hasText("CABLE")).fetchSemanticsNodes().size)
+        assertEquals(0, compose.onAllNodes(hasText("CABLE")).fetchSemanticsNodes().size)
         compose.onNodeWithText("1920 px · 60 fps · 8–12 Mbps").assertExists()
+    }
+
+    @Test
+    fun `in Cable mode the cable's profile carries CABLE`() {
+        show(withMine, cable = true)
+        assertEquals(1, compose.onAllNodes(hasText("CABLE")).fetchSemanticsNodes().size)
     }
 
     @Test

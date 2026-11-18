@@ -112,6 +112,8 @@ impl LinkOwner {
             }
         }
         log::info!(target: "link", "Terminate — the pairing over {link:?} ends");
+        // No phone left to show: the video window closes with the pairing.
+        crate::hide_video(app)?;
         self.stop(app);
         Ok(())
     }
