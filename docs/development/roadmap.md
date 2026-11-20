@@ -506,7 +506,7 @@ The second release, and the first under one product version ([release.md](releas
 **Checked:** mobile JVM 452, desktop `cargo test --lib` 128, `window_state.test.mjs` 14. On the TB321FU → M1 Pro: each mode runs only its link; cable enrol → Allow → cast at 1920×1200 @ 120 fps with game audio; unplug/replug mid-cast carries on (~49 min run); Terminate from either side; a v1 peer refused. **Not checked on the device:** Don't Allow; the Mac in Wireless mode with the phone plugged in. Open: the Windows driver step of the cable guide; the libwebrtc factory stays loaded (idle) after a Wireless → Cable switch.
 
 
-## Feature 2026-11an — The Windows receiver: cable, Wi-Fi, speaker and the video window ⏳ accepted (2026-11-20); spikes S1 and S2 next
+## Feature 2026-11an — The Windows receiver: cable, Wi-Fi, speaker and the video window ⏳ accepted (2026-11-20); S0 next
 
 *(Not a numbered phase. Decision record: [ADR-038](../decisions/ADR-038-the-windows-receiver.md), accepted 2026-11-20. Scope from the product owner, 2026-11-20: cable, Wi-Fi (WebRTC), audio on the speakers, the video window. Not in scope: an OBS output, Caster Audio/Mic devices, the virtual camera, launch at login, a signed installer.)*
 
@@ -514,12 +514,13 @@ The second release, and the first under one product version ([release.md](releas
 
 Each step below is reviewed by the product owner before the next starts (AGENTS.md: one phase at a time).
 
+**S0 — the crate compiles on Windows.** Both spikes run the receiver itself on Windows, so it has to build there first (found 2026-11-20, after ADR-038 was accepted). The macOS-only dependencies move under a macOS target table; `video`, `h264` and `power` get one file per platform behind `cfg(target_os)`; `syphon` and `virtual_audio` compile only on macOS; the Windows video window and decoder are stubs that log "not yet on Windows". A `windows-latest` CI job runs the build and `cargo test --lib`. **Accept:** that job green; on the Mac, `cargo test --lib` green and one ordinary cast that looks and sounds as before (a pure move, no behaviour change).
+
 **S1 — spike: the cable on Windows.** UsbDk installed on the product owner's Windows PC; the receiver's USB thread (libusb with `LIBUSB_OPTION_USE_USBDK`) switches the phone to accessory mode, claims the accessory, completes the v2 handshake, and logs the first video access units. **Accept:** those log lines on the device, or a recorded failure and the fallback (a WinUSB INF) brought back to the product owner.
 
 **S2 — spike: H.264 inside libwebrtc on Windows.** Today's receiver built on Windows: does its SDP answer carry H.264? Expected no (ADR-038 §Context). Then a Media Foundation decoder factory in a vendored `webrtc-sys` decodes one Wi-Fi cast's frames. **Accept:** the SDP before and after, and decoded frame counts in the log; or a recorded failure brought back to the product owner.
 
-**W1 — the Windows build, the video window, the speakers, the cable.**
-- The crate builds on Windows (macOS-only dependencies and modules behind `cfg(target_os)`); a `windows-latest` CI job runs the build and `cargo test --lib`.
+**W1 — the video window, the speakers, the cable.**
 - The video window: Win32 + D3D11 flip-model swap chain, `ID3D11VideoProcessor` NV12 → RGB with the frame's range, aspect fit, frameless drag and resize, NO INPUT card, paced by `pacing.rs`.
 - The Media Foundation H.264 decoder (DXVA, D3D11, low-latency mode) for the cable; the log says hardware or software decode and the per-frame decode time.
 - Speaker playout for both tracks through CPAL's WASAPI host; Plays on offers only Speaker.
