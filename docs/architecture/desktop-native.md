@@ -1,12 +1,14 @@
 # Native Desktop Receiver Architecture (`apps/desktop-native`)
 
-Status: the desktop receiver going forward ([ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)); the Electron receiver ([desktop.md](desktop.md)) is obsolete. macOS only. First hardening pass 2026-11-09.
+Status: the desktop receiver going forward ([ADR-015](../decisions/ADR-015-native-receiver-tauri-libwebrtc.md)); the Electron receiver ([desktop.md](desktop.md)) is obsolete. macOS; Windows is being added ([ADR-038](../decisions/ADR-038-the-windows-receiver.md)) — since S0 the crate builds on Windows with the window, the decoder and stay-awake as stubs. First hardening pass 2026-11-09.
 
 The role is unchanged — **a receiver**: pair, receive, render, play. No cast settings live here (*mobile controls, desktop receives*).
 
 ## Modules
 
 Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
+
+**Platforms (ADR-038 §1).** A module tied to the OS is a folder with one file per platform behind `cfg(target_os)` and the same public functions on both: `video/`, `h264/`, `power/`. The rest of the crate calls `crate::video::…` without knowing the platform. `syphon` and `virtual_audio` compile only on macOS; on Windows their commands answer "not running" / "failed". The `objc2*` crates are a macOS-only dependency table, and `build.rs` compiles the Objective-C bridges only when the *target* is macOS. A `windows-latest` CI job builds the crate and runs `cargo test --lib`.
 
 | Module | Concern | Talks to |
 |---|---|---|
@@ -16,16 +18,16 @@ Small modules with one concern each (AGENTS.md); `lib.rs` only wires them.
 | `webrtc.rs` | One `MediaAnswerer` **per pc** (`media`, `mic`): answer, ICE both ways, the `game-audio` DataChannel, the fallback track, the video frame loop. | `audio`, `video` |
 | `audio.rs` | The ear paths, one engine per track (game audio, mic): source selection, ring, CPAL playout, the output device — reopened by itself when its callback stops (a `coreaudiod` restart, ADR-030). | CoreAudio |
 | `virtual_audio.rs` | Installs the bundled `CasterAudio.driver` ("Caster Audio", "Caster Mic") with macOS's administrator password dialog: installed / declined / failed ([ADR-030](../decisions/ADR-030-caster-audio-devices-installed-from-plays-on.md)). Plug-in source and build: `apps/desktop-native/caster-audio/`. | `osascript`, `audio` |
-| `video.rs` | The native video window and the per-stream `Renderer`. | AppKit, CoreVideo, AVFoundation |
+| `video/` | The native video window and the per-stream `Renderer`. `mod.rs`: the stream generation, the live flag, the range, what the deck is told. `mac.rs`: the AppKit window. `windows.rs`: a stub until W1. | AppKit, CoreVideo, AVFoundation |
 | `syphon.rs` + `native/syphon_bridge.m` | The Syphon output for OBS: frames released at their due time by `publisher.rs`, and the Objective-C bridge that converts the frame's pixel buffer on the GPU and publishes it (ADR-021). | `video`, Metal, Core Image, `Syphon.framework` |
-| `obs_camera.rs` + `native/obs_camera_bridge.m` | The OBS Virtual Camera output: the frame's own NV12 buffer, released at its due time by `publisher.rs`, enqueued into the sink stream of OBS Studio's camera extension through CoreMediaIO, so camera apps see the cast with OBS closed (ADR-039). | `video`, `publisher`, CoreMediaIO, OBS's installed extension |
-| `publisher.rs` | Releases frames to an output at the pacer's due time, on the output's own thread (ADR-017); shared by Syphon and the OBS camera. | — |
+| `obs_camera.rs` + `native/obs_camera_bridge.m` | The OBS Virtual Camera output: the frame's own NV12 buffer, released at its due time by `publisher.rs`, enqueued into the sink stream of OBS Studio's camera extension through CoreMediaIO, so camera apps see the cast with OBS closed (ADR-039). macOS only. | `video`, `publisher`, CoreMediaIO, OBS's installed extension |
+| `publisher.rs` | Releases frames to an output at the pacer's due time, on the output's own thread (ADR-017); shared by Syphon and the OBS camera; macOS only. | — |
 | `pacing.rs` | When each frame shows: a schedule with a bounded 50 ms delay that evens out Wi-Fi delivery jitter (ADR-017). Pure — no I/O. | — |
 | `latency_probe.rs` | Measurement only, off unless `CASTER_LATENCY_PROBE=1`: marks when the latency test pattern's flips are decoded and its clicks arrive ([latency-measurement.md](../development/latency-measurement.md)). | — |
 | `logging.rs` | `HH:MM:SS.mmm LEVEL [scope] message`; `CASTER_LOG=debug` for more. | stderr |
 | `settings.rs` | The receiver's own persisted controls (per track: volume, mute, Plays on; the Syphon output; the OBS camera output) — `native-receiver.json` beside the trust store. | filesystem |
 | `tray.rs` | The menu-bar tray (ADR-010): close → hide, status line, Open window / Forget phone / Quit; pure `TrayModel` for the text and armed state. | Tauri tray |
-| `power.rs` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected. | IOKit |
+| `power/` | Stay-awake: one IOKit `PreventUserIdleDisplaySleep` assertion held while the media pc is connected (`mac.rs`; `windows.rs` a stub until W1). | IOKit |
 
 `lib.rs`'s `TauriHost` implements `SignalingHost` (answerers + UI events); that seam is why the protocol is tested without WebRTC (`src/signaling/tests.rs` — a real WebSocket client against the real server).
 
@@ -137,7 +139,7 @@ UI → server requests travel a `ServerCommand` channel into the signaling threa
 `usb_link.rs` runs on its own thread, in Cable mode only (ADR-037; `link_mode.rs` starts and stops it):
 - It polls USB, switches Android phones to accessory mode, and claims Caster's accessory.
 - It authenticates the phone with the cable pairing (`cable-trust.json`), or enrols it: the pure handshake in `usb_protocol.rs` (ECDH P-256 with the `p256` crate, HKDF, [usb-link.md](usb-link.md) v2) makes the cable key, the window asks the user (`cable:state asking`, 60 s), and `cable_answer` brings the answer back over a channel the session polls between reads.
-- While a cable cast runs, it decodes inline with VideoToolbox (`h264.rs`, `native/h264_decoder.m`) and hands each NV12 pixel buffer to `Renderer::render_decoded`, zero-copy (ADR-031): the Wi-Fi path's pacer, layer and Syphon.
+- While a cable cast runs, it decodes inline with VideoToolbox (`h264/mac.rs`, `native/h264_decoder.m`) and hands each NV12 pixel buffer to `Renderer::render_decoded`, zero-copy (ADR-031): the Wi-Fi path's pacer, layer and Syphon.
 - Game audio goes to `audio::feed_dc_pcm16`, and the mic (48 kHz mono on the link) to the mic engine, on both channels.
 - The deck opens on the paired phone offline (`link_state`) rather than the choice, and the video window's open/closed state is kept in the receiver settings (`videoOpen`).
 - The deck and tray get `pairing:mobile-state` as for a Wi-Fi phone.

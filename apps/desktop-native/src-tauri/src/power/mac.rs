@@ -1,4 +1,4 @@
-//! Stay-awake while a cast is live (the Electron receiver's
+//! macOS: stay-awake while a cast is live (the Electron receiver's
 //! `powerSaveBlocker('prevent-display-sleep')`, Phase 14): a 30-minute
 //! session must not stall on display sleep or a screensaver firing into
 //! the captured window. One IOKit power assertion, held exactly while the

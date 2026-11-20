@@ -3,20 +3,25 @@ mod h264;
 mod latency_probe;
 mod link_mode;
 mod logging;
+#[cfg(target_os = "macos")]
 mod obs_camera;
 mod opus_fmtp;
 mod pacing;
 mod pairing;
 mod power;
 mod protocol;
+#[cfg(target_os = "macos")]
 mod publisher;
 mod settings;
 mod signaling;
+// Syphon and the Caster virtual devices are macOS only (ADR-038 §2).
+#[cfg(target_os = "macos")]
 mod syphon;
 mod tray;
 mod usb_link;
 mod usb_protocol;
 mod video;
+#[cfg(target_os = "macos")]
 mod virtual_audio;
 mod webrtc;
 
@@ -180,7 +185,7 @@ fn set_game_audio(
 #[tauri::command]
 fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
-    current.syphon_output = syphon::set_enabled(enabled);
+    current.syphon_output = start_syphon(enabled);
     audio::set_syphon_on(current.syphon_output);
     if let Err(e) = settings::save(&controls.path, &current) {
         log::warn!(target: "settings", "not saved: {e}");
@@ -194,7 +199,7 @@ fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool
 #[tauri::command]
 fn set_obs_camera_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
     let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
-    current.obs_camera_output = obs_camera::set_enabled(enabled);
+    current.obs_camera_output = start_obs_camera(enabled);
     audio::set_camera_on(current.obs_camera_output);
     if let Err(e) = settings::save(&controls.path, &current) {
         log::warn!(target: "settings", "not saved: {e}");
@@ -204,9 +209,41 @@ fn set_obs_camera_output(controls: tauri::State<'_, ReceiverControls>, enabled: 
 
 /// Whether OBS's camera can be fed on this Mac: `ready`, `no-obs`,
 /// `old-obs` or `not-set-up`. The window asks when it comes to the front.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 fn obs_camera_status() -> obs_camera::Availability {
     obs_camera::availability()
+}
+
+/// OBS's camera extension is macOS only; the virtual camera is outside the
+/// Windows scope (ADR-038).
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn obs_camera_status() -> Result<(), String> {
+    Err("OBS Virtual Camera is macOS only (ADR-038)".into())
+}
+
+/// Starts or stops the OBS Virtual Camera output; returns whether it runs.
+fn start_obs_camera(on: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    return obs_camera::set_enabled(on);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = on;
+        false
+    }
+}
+
+/// Starts or stops the Syphon output; returns whether it runs. There is no
+/// OBS output on Windows (ADR-038 §2): OBS captures the video window there.
+fn start_syphon(on: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    return syphon::set_enabled(on);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = on;
+        false
+    }
 }
 
 /// Mic volume / mute — the mic's own, never the game audio's (ADR-003).
@@ -257,8 +294,15 @@ fn caster_devices(app: tauri::AppHandle) -> Value {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn bundled_caster_driver(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path().resource_dir().ok().and_then(|dir| virtual_audio::bundled_driver(&dir))
+}
+
+/// The Caster virtual devices are a CoreAudio plug-in: none on Windows (ADR-038 §2).
+#[cfg(not(target_os = "macos"))]
+fn bundled_caster_driver(_app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    None
 }
 
 /// Installs Caster Audio and Caster Mic (ADR-030): macOS asks for the
@@ -267,6 +311,18 @@ fn bundled_caster_driver(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 /// already running resolves to "busy".
 #[tauri::command]
 async fn install_caster_devices(app: tauri::AppHandle) -> Result<&'static str, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        log::error!(target: "virtual-audio", "the Caster devices exist only on macOS");
+        return Ok("failed");
+    }
+    #[cfg(target_os = "macos")]
+    install_caster_devices_mac(app).await
+}
+
+#[cfg(target_os = "macos")]
+async fn install_caster_devices_mac(app: tauri::AppHandle) -> Result<&'static str, String> {
     let Some(source) = bundled_caster_driver(&app) else {
         log::error!(target: "virtual-audio", "{} is not in this build's resources", virtual_audio::DRIVER_BUNDLE);
         return Ok(virtual_audio::Outcome::Failed.as_str());
@@ -379,17 +435,18 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PairingView::default())
         .setup(|app| {
-            let paths = pairing::StorePaths::from_home().ok_or("HOME is not set")?;
+            let paths = pairing::StorePaths::from_home().ok_or("no home folder (HOME, or APPDATA on Windows)")?;
             let desktop_id = pairing::desktop_id(&paths.desktop_id)?;
             let saved_link = pairing::saved_pairing(&paths).map(|(link, _)| link);
             let settings_path = settings::settings_path(paths.trust.parent().ok_or("no app support dir")?);
             let saved = settings::load(&settings_path);
             audio::set_gain(audio::Track::Game, saved.effective_game_gain());
             audio::set_gain(audio::Track::Mic, saved.effective_mic_gain());
-            let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && syphon::set_enabled(true), ..saved };
+            let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && start_syphon(true), ..saved };
             audio::set_syphon_on(saved.syphon_output);
+            #[cfg(target_os = "macos")]
             obs_camera::init(app.handle().clone());
-            let saved = settings::ReceiverSettings { obs_camera_output: saved.obs_camera_output && obs_camera::set_enabled(true), ..saved };
+            let saved = settings::ReceiverSettings { obs_camera_output: saved.obs_camera_output && start_obs_camera(true), ..saved };
             audio::set_camera_on(saved.obs_camera_output);
             apply_plays_on(audio::Track::Game, saved.game_plays_on);
             apply_plays_on(audio::Track::Mic, saved.mic_plays_on);

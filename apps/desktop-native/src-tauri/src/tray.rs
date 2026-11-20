@@ -262,6 +262,7 @@ pub fn quit(app: &AppHandle, goodbye: &dyn Fn()) {
         std::thread::sleep(QUIT_GOODBYE_GRACE);
         // Camera apps go back to OBS's own picture, not our last frame.
         // The saved setting is untouched: the camera is on again next launch.
+        #[cfg(target_os = "macos")]
         crate::obs_camera::set_enabled(false);
         app.exit(0);
     });

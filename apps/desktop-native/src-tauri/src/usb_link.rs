@@ -655,31 +655,10 @@ impl UsbMedia {
 
 /// The latency pattern's flips, read from the decoded picture's luma plane
 /// (latency-measurement.md) — the same mark the Wi-Fi path logs.
-fn probe_luma(marker: &mut crate::latency_probe::LumaMarker, hold_ms: f64, picture: &objc2_core_video::CVPixelBuffer, w: u32, h: u32) {
-    {
-        use objc2_core_video::{
-            CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress,
-            CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
-        };
-        let decoded_ms = crate::latency_probe::wall_ms();
-        let mean = unsafe {
-            if CVPixelBufferLockBaseAddress(picture, CVPixelBufferLockFlags::ReadOnly) != 0 {
-                return;
-            }
-            let base = CVPixelBufferGetBaseAddressOfPlane(picture, 0) as *const u8;
-            let stride = CVPixelBufferGetBytesPerRowOfPlane(picture, 0);
-            let mean = if base.is_null() {
-                None
-            } else {
-                let plane = std::slice::from_raw_parts(base, stride * h as usize);
-                Some(crate::latency_probe::mean_luma(plane, stride as u32, w, h))
-            };
-            CVPixelBufferUnlockBaseAddress(picture, CVPixelBufferLockFlags::ReadOnly);
-            mean
-        };
-        if let Some(white) = mean.and_then(|m| marker.observe(m)) {
-            log::info!(target: "latency", "video {} decoded_ms={decoded_ms:.1} hold_ms={hold_ms:.1}", if white { "white" } else { "black" });
-        }
+fn probe_luma(marker: &mut crate::latency_probe::LumaMarker, hold_ms: f64, picture: &crate::video::Picture, w: u32, h: u32) {
+    let decoded_ms = crate::latency_probe::wall_ms();
+    if let Some(white) = crate::video::mean_luma_of(picture, w, h).and_then(|m| marker.observe(m)) {
+        log::info!(target: "latency", "video {} decoded_ms={decoded_ms:.1} hold_ms={hold_ms:.1}", if white { "white" } else { "black" });
     }
 }
 

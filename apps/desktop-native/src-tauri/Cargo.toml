@@ -24,13 +24,6 @@ rand = "0.8"
 qrcode = { version = "0.14", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 if-addrs = "0.13"
-objc2 = { version = "0.6", features = ["exception"] }
-objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
-objc2-app-kit = "0.3"
-objc2-foundation = "0.3"
-objc2-av-foundation = { version = "0.3", features = ["AVSampleBufferDisplayLayer"] }
-objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription", "CMSync"] }
-objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVPixelBufferPool", "CVBuffer", "CVReturn"] }
 cpal = "0.15"
 anyhow = "1"
 log = { version = "0.4", features = ["std"] }
@@ -38,6 +31,16 @@ libc = "0.2"
 livekit = "0.10"
 # The USB link (ADR-034): libusb built from source and linked in (LGPL; the app source is public), so no Homebrew libusb is needed.
 rusb = { version = "0.9", features = ["vendored"] }
+
+# The macOS window, decoder, Syphon and stay-awake (ADR-038 §1: built only for macOS).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["AVSampleBufferDisplayLayer"] }
+objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription", "CMSync"] }
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVPixelBufferPool", "CVBuffer", "CVReturn"] }
 
 [lib]
 name = "desktop_native_lib"

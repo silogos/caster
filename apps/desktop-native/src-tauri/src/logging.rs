@@ -63,7 +63,11 @@ fn local_time() -> String {
     let secs = now.as_secs() as libc::time_t;
     // SAFETY: localtime_r writes only into the provided struct.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    #[cfg(unix)]
     unsafe { libc::localtime_r(&secs, &mut tm) };
+    // SAFETY: as above; the CRT's argument order is (out, in).
+    #[cfg(windows)]
+    unsafe { libc::localtime_s(&mut tm, &secs) };
     format!("{:02}:{:02}:{:02}.{:03}", tm.tm_hour, tm.tm_min, tm.tm_sec, now.subsec_millis())
 }
 

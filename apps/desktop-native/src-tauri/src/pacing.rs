@@ -17,7 +17,7 @@
 //! bounded delay hides them.
 //!
 //! Pure (times in seconds on any monotonic clock) so the policy is testable
-//! without a window; `video.rs` feeds it host-clock arrival times.
+//! without a window; `video/mac.rs` feeds it host-clock arrival times.
 
 /// The most a frame is held after it arrives (product choice, 2026-11-09:
 /// "pakai buffer kecil" — WebRTC's adaptive buffer was smoother but its delay

@@ -17,7 +17,7 @@ Cast over a USB cable through Android Open Accessory: no ADB, no Developer Optio
 |---|---|---|
 | `usb_link.rs` | receiver | Polls USB once a second. Sends the AOA switch to known Android vendor ids, once per plug-in. Claims an accessory, sends `hello` until the app answers, checks the phone's proof, and runs the cast inline on its thread. |
 | `usb_protocol.rs` | receiver | Pure: the 16-byte frame, the reader, and the desktop's half of the handshake |
-| `h264.rs` + `native/h264_decoder.m` | receiver | VideoToolbox, hardware: Annex-B access unit → NV12 IOSurface pixel buffer, shown zero-copy through `Renderer::render_decoded` (ADR-031; the same pacer, layer and Syphon as Wi-Fi) |
+| `h264/mac.rs` + `native/h264_decoder.m` | receiver | VideoToolbox, hardware: Annex-B access unit → NV12 IOSurface pixel buffer, shown zero-copy through `Renderer::render_decoded` (ADR-031; the same pacer, layer and Syphon as Wi-Fi) |
 | `UsbLink` / `AccessoryLink` | phone | The link's lifetime (opened from the accessory intent, or by asking for the permission when the app is opened with the cable in). Re-opens the accessory after the receiver restarts. |
 | `UsbHandshake` | phone | Pure: the phone's half (proves the trust key; checks the desktop's proof) |
 | `UsbCastService` | phone | The FGS (`mediaProjection`, plus `microphone` while the mic is on) owning one cable cast: `UsbVideoEncoder` (MediaCodec surface encoder, ADR-018 keys, repeat-frame 100 ms), `UsbGameAudioCapture` (playback capture, 10 ms PCM16 48 kHz stereo) and `UsbMicCapture` (source `MIC` at the input's own rate, ADR-004, resampled to 48 kHz mono) |

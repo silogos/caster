@@ -155,7 +155,8 @@ impl LinkOwner {
         // libwebrtc's factory needs the main thread (its encoder enumeration
         // wants NSApplication context — found live: NSException on a
         // background thread). Created on the first Wireless start only.
-        if objc2_foundation::MainThreadMarker::new().is_some() {
+        // Elsewhere the factory has no such need: created on this thread.
+        if cfg!(not(target_os = "macos")) || on_main_thread() {
             webrtc::init_factory();
         } else {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -213,3 +214,15 @@ fn stop_running(running: &mut Running) {
         Running::Nothing => {}
     }
 }
+
+/// Whether this is the main thread (macOS: AppKit's own answer).
+#[cfg(target_os = "macos")]
+fn on_main_thread() -> bool {
+    objc2_foundation::MainThreadMarker::new().is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn on_main_thread() -> bool {
+    false
+}
+

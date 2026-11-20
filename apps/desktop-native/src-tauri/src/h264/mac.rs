@@ -1,4 +1,4 @@
-//! The USB cast's H.264 decoder (ADR-034): a thin owner of the VideoToolbox
+//! macOS: the USB cast's H.264 decoder (ADR-034), a thin owner of the VideoToolbox
 //! session in `native/h264_decoder.m`. One access unit in, one NV12 pixel
 //! buffer out; a new codec config (SPS/PPS) rebuilds the session.
 

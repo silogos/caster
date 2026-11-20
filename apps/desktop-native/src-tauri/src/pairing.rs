@@ -2,7 +2,8 @@
 //! persistent trust entry (ADR-006), the desktop's persistent identity, and
 //! the handshake crypto. No sockets here — the signaling server drives it.
 //!
-//! The trust file and `desktop-id` live in `~/Library/Application Support/Caster`.
+//! The trust file and `desktop-id` live in `~/Library/Application Support/Caster`
+//! (`%APPDATA%\Caster` on Windows).
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -23,7 +24,11 @@ const QR_PAYLOAD_VERSION: u32 = 2;
 const QR_APP_TAG: &str = "caster";
 
 /// The receiver's data folder (ADR-035).
+#[cfg(not(windows))]
 const APP_SUPPORT_DIR: &str = "Library/Application Support/Caster";
+/// Under `%APPDATA%` on Windows.
+#[cfg(windows)]
+const WINDOWS_APP_DIR: &str = "Caster";
 const TRUST_FILE: &str = "trust.json";
 /// The cable pairing (usb-link.md §Cable trust, ADR-037): the same document as trust.json.
 const CABLE_TRUST_FILE: &str = "cable-trust.json";
@@ -275,7 +280,11 @@ pub struct StorePaths {
 
 impl StorePaths {
     pub fn from_home() -> Option<Self> {
+        #[cfg(not(windows))]
         let dir = PathBuf::from(std::env::var("HOME").ok()?).join(APP_SUPPORT_DIR);
+        // Windows has no HOME: the per-user roaming app data, `%APPDATA%\Caster`.
+        #[cfg(windows)]
+        let dir = PathBuf::from(std::env::var("APPDATA").ok()?).join(WINDOWS_APP_DIR);
         Some(Self::in_dir(&dir))
     }
 

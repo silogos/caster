@@ -29,3 +29,19 @@ jobs:
           java-version: 17 # the build's JVM target (build.gradle.kts)
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew testDebugUnitTest --console=plain
+
+  # ADR-038 S0: the receiver builds on Windows and its unit tests pass there
+  # (window, decoder and stay-awake are stubs until W1). The Mac build is
+  # checked locally: CI has no macOS job yet.
+  desktop-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-native/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-native/src-tauri
+      - run: cargo build --locked
+      - run: cargo test --locked --lib
