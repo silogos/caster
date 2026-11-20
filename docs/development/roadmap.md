@@ -506,6 +506,34 @@ The second release, and the first under one product version ([release.md](releas
 **Checked:** mobile JVM 452, desktop `cargo test --lib` 128, `window_state.test.mjs` 14. On the TB321FU → M1 Pro: each mode runs only its link; cable enrol → Allow → cast at 1920×1200 @ 120 fps with game audio; unplug/replug mid-cast carries on (~49 min run); Terminate from either side; a v1 peer refused. **Not checked on the device:** Don't Allow; the Mac in Wireless mode with the phone plugged in. Open: the Windows driver step of the cable guide; the libwebrtc factory stays loaded (idle) after a Wireless → Cable switch.
 
 
+## Feature 2026-11an — The Windows receiver: cable, Wi-Fi, speaker and the video window ⏳ accepted (2026-11-20); spikes S1 and S2 next
+
+*(Not a numbered phase. Decision record: [ADR-038](../decisions/ADR-038-the-windows-receiver.md), accepted 2026-11-20. Scope from the product owner, 2026-11-20: cable, Wi-Fi (WebRTC), audio on the speakers, the video window. Not in scope: an OBS output, Caster Audio/Mic devices, the virtual camera, launch at login, a signed installer.)*
+
+**Why now:** the Mac receiver carried a ~5-hour live over the cable (2026-11-20, [reliability.md](../features/reliability.md) Native session 1). The checks still open in [verification-pass.md](verification-pass.md) are carried with that reason, not dropped.
+
+Each step below is reviewed by the product owner before the next starts (AGENTS.md: one phase at a time).
+
+**S1 — spike: the cable on Windows.** UsbDk installed on the product owner's Windows PC; the receiver's USB thread (libusb with `LIBUSB_OPTION_USE_USBDK`) switches the phone to accessory mode, claims the accessory, completes the v2 handshake, and logs the first video access units. **Accept:** those log lines on the device, or a recorded failure and the fallback (a WinUSB INF) brought back to the product owner.
+
+**S2 — spike: H.264 inside libwebrtc on Windows.** Today's receiver built on Windows: does its SDP answer carry H.264? Expected no (ADR-038 §Context). Then a Media Foundation decoder factory in a vendored `webrtc-sys` decodes one Wi-Fi cast's frames. **Accept:** the SDP before and after, and decoded frame counts in the log; or a recorded failure brought back to the product owner.
+
+**W1 — the Windows build, the video window, the speakers, the cable.**
+- The crate builds on Windows (macOS-only dependencies and modules behind `cfg(target_os)`); a `windows-latest` CI job runs the build and `cargo test --lib`.
+- The video window: Win32 + D3D11 flip-model swap chain, `ID3D11VideoProcessor` NV12 → RGB with the frame's range, aspect fit, frameless drag and resize, NO INPUT card, paced by `pacing.rs`.
+- The Media Foundation H.264 decoder (DXVA, D3D11, low-latency mode) for the cable; the log says hardware or software decode and the per-frame decode time.
+- Speaker playout for both tracks through CPAL's WASAPI host; Plays on offers only Speaker.
+- Stay-awake via `SetThreadExecutionState`.
+- The cable guide's driver step installs UsbDk.
+- **Accept:** on the product owner's Windows PC and the TB321FU: cable enrol → Allow → a cast with game audio on the speakers, a 30+ min session, unplug/replug mid-cast carries on (ADR-036), OBS Window Capture records the video window, glass-to-glass latency by `latency_probe` set against the Mac's 7 ms, CPU/GPU over the 30 min at Capture 60 fps, a rotation mid-cast. 120 fps at 1920×1200 is tried and its result recorded, best-effort (ADR-038 §4). `desktop-native.md` describes the Windows modules.
+
+**W2 — Wi-Fi on Windows.**
+- The S2 decoder factory, shared with W1's decoder.
+- The firewall note on the QR hero, and a log line when no phone reaches port 52341.
+- **Accept:** QR pairing → a Wi-Fi cast with game audio, a resumed session, a Wi-Fi drop that recovers (ADR-036), a 30+ min session.
+
+**Needs from the product owner:** a Windows 10/11 x64 PC for every device check.
+
 ## Feature 2026-11ao — Caster on the Mac's cameras, through OBS Virtual Camera ✅ V1 accepted on the device (2026-11-22)
 
 *(Not a numbered phase. Decision record: [ADR-039](../decisions/ADR-039-feeding-the-obs-virtual-camera.md), accepted 2026-11-22 after a spike verified end to end on the M1 Pro: a probe fed OBS Virtual Camera with OBS closed, 7200/7200 frames taken, and the product owner saw them in a camera app. macOS only: ADR-038 keeps the virtual camera out of the Windows scope.)*
