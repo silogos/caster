@@ -102,7 +102,7 @@ One fixed-duration cast per profile on the real device, same content across runs
 | T2 | 20-min cast, `balanced` | Same | — |
 | T3 | 20-min cast, `performance` | Same; expected the measurably hottest run (thermal.md's own prediction) | — |
 | T4 | 20-min cast, `sharp` | Same; outside the adaptive ladder by design | — |
-| T5 | 30+ min OBS Window Capture session | Clean, correctly-proportioned, smooth feed; window stays where placed; rotation mid-cast re-fits the bars without moving the window (Phase14's remaining acceptance, [obs-streaming.md](obs-streaming.md)) | — |
+| T5 | 30+ min OBS Window Capture session | Clean, correctly-proportioned, smooth feed; window stays where placed; rotation mid-cast re-fits the bars without moving the window (Phase14's remaining acceptance, [obs-streaming.md](obs-streaming.md)) | **partial PASS** (2026-11-20, native receiver — see Native session 1): a ~5-hour live over the cable, Syphon → OBS → TikTok LIVE Studio; the OBS recording (3h48m of it) holds 59.95 fps with one ~25 s video gap while the PO re-logged PUBG at 21:17 (single-app share). The cast recovered by itself. Owed: rotation re-fit, and game audio reaching OBS through exactly one source (Caster Audio played on the Mac's output this session) |
 | T6 | Profile switch visible in the stats line | The ~1 Hz line shows the new WxH/bitrate window immediately after a settings change takes effect on the next cast ([thermal.md](thermal.md) feature doc's remaining item) | — |
 | T7 | Thermal-driven step-down (if any run reaches `MODERATE`+ for 120 s) | `adaptive quality: DOWN (THERMAL)` announced; one rung only; "Restore quality" returns it (if no run reaches it in 20 min, record that fact — itself a thermal result) | *Electron receiver, not counted —* partial — session D observed the full staircase live (timings exact, every transition announced); controlled run + Restore-quality check owed |
 | T8 | Glass-to-glass latency measurement | The on-screen clock method (R6): a ms clock displayed on the phone, both screens photographed — measured number replaces the Phase5 "eyeballed" gap | — |
@@ -166,6 +166,25 @@ Two live casts on the measurement rig (custo 920px/60fps start, game content; se
 - **Two receiver copies raced** (both bind attempts logged): a second desktop instance bound an ephemeral signaling port and showed a QR nobody scanned — the exact R7/R9-shaped confusion. Fixed with the Electron single-instance lock (found in the working tree during the session, verified, committed separately).
 - **SEVERE vs headroom, contradiction recorded:** throughout both casts the platform reported status SEVERE while the same samples carried headroom ≈ 1.1–1.2 (comfortable) and battery temperature read normally (39.5→41.5 °C). This contradicts session B/C's "reads went dry at SEVERE" — here nothing went dry; the signals simply disagree. Tuning should treat headroom as the more plausible of the two on this device; both are recorded per sample for the T-runs.
 - **Freeze bursts are content-shaped (metric caveat):** receiver freezeCount grows around resolution steps and while the cast screen is static (settings screens — the encoder sends on change, gaps exceed Chromium's freeze threshold); steady windows show zero freeze growth. freezeCount is a content-sensitive metric — record it, but never read it as a defect signal on its own.
+
+### Native session 1 — 2026-11-20 — native receiver, cable (Lenovo TB321FU → macOS, USB/AOA)
+
+**The first long session on the native receiver, and the first long cable cast.** The product owner streamed live for about 5 hours: Caster → Syphon → OBS → TikTok LIVE Studio. Settings: a copy of the Capture profile with the frame rate set to 60 fps; consent: **Share one app** (PUBG Mobile); link: cable (ADR-034); Caster Audio played on the Mac's output (headset plugged into the MacBook); Caster Mic not used.
+
+| Case | Verdict | Evidence |
+|---|---|---|
+| T5 | **partial PASS** | See the recording analysis below. Rotation re-fit and the one-audio-source check into OBS were not part of this session. |
+
+**Evidence — the OBS recording.** The product owner reported the live as smooth throughout. OBS recorded part of it; recording stopped at 00:48 only because the files were getting large. Two files: 20:59:40 → 22:24 (1h25m) and 22:25 → 00:48 (2h23m), together **3h48m** of the ~5 h. Both are 1920×1080 HEVC, averaging **59.95 fps**, with AAC 48 kHz stereo. The game fills the whole frame (16:10 pillarboxed into 16:9), so a stalled Caster feed shows as repeated identical frames. Scanned with ffmpeg `freezedetect` (−60 dB, ≥0.5 s), `blackdetect` (≥0.5 s) and `silencedetect` (−50 dB, ≥1 s); every freeze's middle frame was then compared against the receiver's "No input video" stage.
+
+- **One video gap, ~25 s, at 21:17:51** (file 1, 18:10): mid-gameplay the picture went black. The receiver then showed **"No input video"** for ~10 s, with the PUBG/KRAFTON splash flickering in small letterboxed frames between more no-input frames. PUBG was back at its title screen ~25 s after the black. **Cause (PO, 2026-11-20): they re-logged PUBG Mobile, and the cast was a single-app share of PUBG.** While the game restarted, the shared app had nothing on screen, so no frames came and the receiver showed its no-input stage (the designed response). When the game drew again, video resumed by itself: no re-pair, no new cast. This is the only no-input stage anywhere in the 3h48m.
+- **Single-app share, on purpose.** The PO shares only PUBG for live streams, so only the game reaches the stream and notifications and other apps stay off it. The share survived the re-log: the cast came back without any action.
+- **Every other frozen span is the game standing still** (572 spans, ~7 min in total, mostly 0.5–2 s): loading screens, match-result and MVP screens, menus. Each long span (>2.1 s) was looked at. Runs of exactly 2.0 s match static screens where only the HUD's ping figure changes.
+- **Black:** apart from the gap, four spans under 1.1 s in file 2. The two checked are the game's own fades.
+- **Silence:** four spans (1.5–4.5 s) in file 1 at 15:45–16:02, on the match-result screen; none in file 2.
+- No stats, temperatures or battery figures for this run: no logs.
+
+Also closes two items in [usb-cast.md](usb-cast.md) §Known limitations: a cable session longer than a few minutes, and OBS through Syphon on the cable. Explains one gap: the game's own restart under a single-app share.
 
 ## Findings & fixes (as they surface)
 

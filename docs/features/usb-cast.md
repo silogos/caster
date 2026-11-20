@@ -69,6 +69,8 @@ Lenovo TB321FU (Android 16) → MacBook Pro M1 Pro, USB-C cable. Profile "Low La
   - Capture reached 115–120 fps while the screen moved, and the repeat-frame floor of ~10 fps on a still screen;
   - link up to 9.6 Mbit/s, no errors.
 
+- **A ~5-hour live (2026-11-20, user-reported):** a copy of Capture at 60 fps over the cable, Caster → Syphon → OBS → TikTok LIVE Studio — smooth by the product owner's account. The OBS recording (3h48m of it) holds 59.95 fps with **one ~25 s video gap**: the product owner re-logged PUBG at 21:17 under a single-app share, and the receiver showed "No input video" until the game drew again; the cast recovered by itself. No logs were captured ([reliability.md](reliability.md) Native session 1).
+
 ## Known limitations
 
 - **The pacer holds USB frames ~20 ms on average.** ADR-017's pacer smooths Wi-Fi bunching. The cable delivers steadily (spike: p99 arrival within ~3.5 ms of capture), so on USB the hold is pure delay. The follow-up is to give the cable a much smaller hold or none, and to measure it with the latency pattern.
@@ -78,7 +80,5 @@ Lenovo TB321FU (Android 16) → MacBook Pro M1 Pro, USB-C cable. Profile "Low La
 - **Not seen in the logs yet:** the unplug ("Cable unplugged") and the offline launch (frame 14); the product owner confirmed the flow, but no log line records either.
 - **Not measured yet:**
   - glass-to-glass latency on this path with the latency pattern;
-  - a session longer than a few minutes;
-  - OBS through Syphon;
   - other phone brands;
   - Windows and Linux receivers (not built).

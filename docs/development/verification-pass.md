@@ -53,6 +53,8 @@ Four 20-min casts (cool, balanced, performance, sharp) with the same game, cool-
 
 OBS Syphon source + Caster Audio + Caster Mic, one game session: clean, correctly proportioned, smooth; rotation re-fits; game audio reaches OBS through exactly one source. Also closes 11ab's open half if run on "Keep frame rate" vs "Keep resolution" with a real game.
 
+**2026-11-20 — mostly done:** a ~5-hour live over the cable (Syphon → OBS → TikTok LIVE Studio, Capture copy at 60 fps) ran smooth apart from one ~25 s "No input video" gap while the PO re-logged PUBG under a single-app share; the cast recovered by itself (reliability.md Native session 1). Still owed: rotation re-fit; game audio into OBS through exactly one source (Caster Audio played on the Mac's output that session); the 11ab comparison. Caster Mic stays out while the PO uses the laptop headset.
+
 ## Order
 
 1 + 2 in one sitting (~30 min), 3 over one or two sittings, 4 and 5 when there is time to play.
