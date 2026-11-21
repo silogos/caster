@@ -505,3 +505,43 @@ The second release, and the first under one product version ([release.md](releas
 
 **Checked:** mobile JVM 452, desktop `cargo test --lib` 128, `window_state.test.mjs` 14. On the TB321FU → M1 Pro: each mode runs only its link; cable enrol → Allow → cast at 1920×1200 @ 120 fps with game audio; unplug/replug mid-cast carries on (~49 min run); Terminate from either side; a v1 peer refused. **Not checked on the device:** Don't Allow; the Mac in Wireless mode with the phone plugged in. Open: the Windows driver step of the cable guide; the libwebrtc factory stays loaded (idle) after a Wireless → Cable switch.
 
+
+## Feature 2026-11ao — Caster on the Mac's cameras, through OBS Virtual Camera ⏳ accepted (2026-11-22); V0 next
+
+*(Not a numbered phase. Decision record: [ADR-039](../decisions/ADR-039-feeding-the-obs-virtual-camera.md), accepted 2026-11-22 after a spike verified end to end on the M1 Pro: a probe fed OBS Virtual Camera with OBS closed, 7200/7200 frames taken, and the product owner saw them in a camera app. macOS only: ADR-038 keeps the virtual camera out of the Windows scope.)*
+
+**Why:** Syphon (ADR-021) reaches OBS and VJ apps only. Call apps, browsers and TikTok LIVE Studio see cameras, and Caster's own camera would need Apple's entitlement. OBS's signed extension, once the user has approved it, gives that reach without one.
+
+Each step is reviewed by the product owner before the next starts. It goes on its own branch from `main`, not on `feat/windows-s0`.
+
+**V0 — the design.** The receiver's output control drawn in `designs/desktop-signal-deck.figcraft` before any code (the design leads the code). It covers:
+- A new, separate "OBS Virtual Camera" switch next to "Output to OBS → Syphon", which stays as it is. Either or both can be on (product owner, 2026-11-22: Syphon is not replaced).
+- Its states: *ready*; *OBS not installed*; *OBS's camera not set up yet* ("Open OBS and click Start Virtual Camera once"); *in use by OBS*.
+- The deck's status line while the camera is fed.
+
+**Accept:** the product owner picks the frame.
+
+**V1 — the output.**
+- Shared publisher: `syphon::Scheduler` moves to a shared module, with no behaviour change for Syphon.
+- `obs_camera.rs` + `native/obs_camera_bridge.m`. The bridge finds OBS by bundle id, the device by the UID in OBS's extension bundle, and the sink by direction. It starts and stops the sink and enqueues the frame's own NV12 `CVPixelBuffer` at its due time.
+- Status: *not installed* / *not set up* / *ready* / *feeding*, plus a failure that switches the output off with a simple message. The output never crashes the receiver when OBS changes.
+- `kCMIODevicePropertyDeviceIsRunningSomewhere` is checked as the "is anyone reading" signal (ADR-039 §5). Whatever is found goes into the ADR.
+- Between casts the sink stops, so the camera shows OBS's placeholder.
+- The control from V0 and `settings.rs` persistence (off by default).
+- `camera` log scope: found/not found and why, sink started/stopped, frames fed/dropped, average enqueue time.
+- Tests:
+  - Unit: the bundle/UID lookup against fixture plists; the status machine.
+  - End to end through the bridge: frames enqueued and drained by the real extension, which needs OBS installed and is skipped with a stated reason when it isn't.
+  - The Syphon tests still pass, and Syphon with the camera both on feeds both.
+- Docs: `desktop-native.md` describes the module; `features/virtual-camera.md` gains the native macOS section.
+
+**Accept**, on the TB321FU → M1 Pro with OBS closed:
+- A live cast shows in Photo Booth or QuickTime, a browser, Zoom or Meet, and TikTok LIVE Studio.
+- 1920×1200 and a portrait cast are shown whole, not cropped to 1920×1080.
+- 60 and 120 fps; the receiver's CPU is set against Syphon at the same settings.
+- The placeholder returns between casts.
+- OBS started with its own virtual camera mid-cast: what happens is recorded.
+- With OBS uninstalled or the extension not approved, the control shows the right state.
+- 30+ min session.
+
+**Needs from the product owner:** OBS installed (32.x is on the Mac today); the call apps and TikTok LIVE Studio signed in on the Mac.
