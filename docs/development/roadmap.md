@@ -506,7 +506,7 @@ The second release, and the first under one product version ([release.md](releas
 **Checked:** mobile JVM 452, desktop `cargo test --lib` 128, `window_state.test.mjs` 14. On the TB321FU → M1 Pro: each mode runs only its link; cable enrol → Allow → cast at 1920×1200 @ 120 fps with game audio; unplug/replug mid-cast carries on (~49 min run); Terminate from either side; a v1 peer refused. **Not checked on the device:** Don't Allow; the Mac in Wireless mode with the phone plugged in. Open: the Windows driver step of the cable guide; the libwebrtc factory stays loaded (idle) after a Wireless → Cable switch.
 
 
-## Feature 2026-11ao — Caster on the Mac's cameras, through OBS Virtual Camera ⏳ accepted (2026-11-22); V0 next
+## Feature 2026-11ao — Caster on the Mac's cameras, through OBS Virtual Camera ✅ V1 accepted on the device (2026-11-22)
 
 *(Not a numbered phase. Decision record: [ADR-039](../decisions/ADR-039-feeding-the-obs-virtual-camera.md), accepted 2026-11-22 after a spike verified end to end on the M1 Pro: a probe fed OBS Virtual Camera with OBS closed, 7200/7200 frames taken, and the product owner saw them in a camera app. macOS only: ADR-038 keeps the virtual camera out of the Windows scope.)*
 
@@ -561,3 +561,5 @@ Found while building:
 - 30+ min session.
 
 **Needs from the product owner:** OBS installed (32.x is on the Mac today); the call apps and TikTok LIVE Studio signed in on the Mac.
+
+*2026-11-22, accepted on the device:* the product owner ran it live for 2 h 31 min over the cable at 1920×1200 ~60 fps, with OBS closed: 499,732 frames to the camera, 0 dropped, send time flat at ~0.38 ms. The camera stopped and restarted across four casts. The product owner reported "All checks passed". They judged that the rest wasn't needed for V1 and accepted it without those checks: 120 fps, a portrait cast, a quit mid-cast, OBS's own Start Virtual Camera, and the not-installed/not-set-up states on a real Mac. Details: [features/virtual-camera.md](../features/virtual-camera.md).
