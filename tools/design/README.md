@@ -110,6 +110,14 @@ python3 -I tools/design/build_desktop_audio_output.py designs/desktop-signal-dec
 python3 -I tools/design/build_desktop_caster_install.py designs/desktop-signal-deck.figcraft  # 08–09 (needs 07)
 ```
 
+## The OBS Virtual Camera switch
+
+`build_desktop_obs_camera.py` draws ADR-039's receiver control, drawn ahead of the code, as frames **25–26** of `designs/desktop-signal-deck.figcraft`. Syphon stays as it is; the camera is a **new, separate switch** under it in the "Output to OBS" card (product owner, 2026-11-22). Frame 25 is frame 21 (cable, on air) with both on. Frame 26 is the row state by state: off; on and casting; on with no cast (OBS's own picture); OBS not installed and OBS's camera not set up (greyed out); taken by OBS; couldn't start. It ends with the open questions. Like frames 07–24 it is absolute layers, so `check_auto_layout.py` does not apply. Renders: `designs/preview/desktop-25-obs-virtual-camera.png`, `designs/preview/desktop-26-obs-camera-states.png`.
+
+```bash
+python3 -I tools/design/build_desktop_obs_camera.py designs/desktop-signal-deck.figcraft   # 25–26 (needs 21)
+```
+
 ## The app icon
 
 `build_app_icon.py` draws Caster's icon once (ADR-027): the receiver's mark on the orange tile, as a Mac icon on Apple's grid, and the mark alone as the menu-bar template.

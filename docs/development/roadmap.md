@@ -521,6 +521,8 @@ Each step is reviewed by the product owner before the next starts. It goes on it
 
 **Accept:** the product owner picks the frame.
 
+*2026-11-22, drawn:* frames 25–26 (`tools/design/build_desktop_obs_camera.py`; renders `designs/preview/desktop-25-obs-virtual-camera.png`, `desktop-26-obs-camera-states.png`). Decided by the product owner the same day: the camera counts for sound, like Syphon (ADR-039 §7). Still open: state 6 depends on V1 being able to detect OBS taking the camera.
+
 **V1 — the output.**
 - Shared publisher: `syphon::Scheduler` moves to a shared module, with no behaviour change for Syphon.
 - `obs_camera.rs` + `native/obs_camera_bridge.m`. The bridge finds OBS by bundle id, the device by the UID in OBS's extension bundle, and the sink by direction. It starts and stops the sink and enqueues the frame's own NV12 `CVPixelBuffer` at its due time.
@@ -528,6 +530,7 @@ Each step is reviewed by the product owner before the next starts. It goes on it
 - `kCMIODevicePropertyDeviceIsRunningSomewhere` is checked as the "is anyone reading" signal (ADR-039 §5). Whatever is found goes into the ADR.
 - Between casts the sink stops, so the camera shows OBS's placeholder.
 - The control from V0 and `settings.rs` persistence (off by default).
+- Sound follows the camera too (ADR-039 §7): the tracks play while the window is open, Syphon is on, or the camera is on.
 - `camera` log scope: found/not found and why, sink started/stopped, frames fed/dropped, average enqueue time.
 - Tests:
   - Unit: the bundle/UID lookup against fixture plists; the status machine.
