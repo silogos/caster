@@ -185,6 +185,10 @@
       }
       .switch.on { background: linear-gradient(180deg, var(--signal-top), var(--signal-bottom)); }
       .switch.on::after { left: 25px; background: #fff; }
+      .switch:disabled { opacity: 0.4; cursor: default; }
+      .row-divided { border-top: 1px solid var(--hairline); padding-top: 12px; margin-top: 12px; }
+      .camera-message { color: var(--tally); margin-top: 6px; }
+      .camera-message:empty { display: none; }
 
       /* QR hero */
       .hero { text-align: center; }
@@ -353,7 +357,7 @@
             <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15 12h.01M18 13h.01"/></svg></div>
             <div style="flex: 1">
               <div class="row-title">Audio</div>
-              <div id="game-sub" class="row-sub">Plays while the video window is open or Syphon is on.</div>
+              <div id="game-sub" class="row-sub">Plays while the video window, Syphon or the camera is on.</div>
             </div>
             <button id="game-switch" class="switch on" aria-label="Audio on/off"></button>
           </div>
@@ -405,6 +409,15 @@
               <div id="syphon-sub" class="row-sub">Off. OBS can still capture the video window.</div>
             </div>
             <button id="syphon-switch" class="switch" aria-label="Syphon output on/off"></button>
+          </div>
+          <div class="row row-divided">
+            <div class="icon-tile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c9d1da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="12" rx="6"/><circle cx="12" cy="10" r="2.6"/><path d="M9 20h6"/></svg></div>
+            <div style="flex: 1">
+              <div class="row-title">OBS Virtual Camera</div>
+              <div id="camera-sub" class="row-sub"></div>
+              <div id="camera-message" class="row-sub camera-message" aria-live="polite"></div>
+            </div>
+            <button id="camera-switch" class="switch" aria-label="OBS Virtual Camera on/off" aria-describedby="camera-sub"></button>
           </div>
         </div>
       </div>

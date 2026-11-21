@@ -43,6 +43,9 @@ pub struct ReceiverSettings {
     pub mic_plays_on: PlaysOn,
     /// The Syphon output for OBS (ADR-021). Off until the user turns it on.
     pub syphon_output: bool,
+    /// The OBS Virtual Camera output (ADR-039), independent of Syphon. Off
+    /// until the user turns it on.
+    pub obs_camera_output: bool,
     /// Whether the video window was open when the receiver last ran: it opens
     /// again at launch, so a cast shows without a click (product owner,
     /// 2026-11-17: "manual, following the last state").
@@ -59,6 +62,7 @@ impl Default for ReceiverSettings {
             mic_muted: true,
             mic_plays_on: PlaysOn::Speaker,
             syphon_output: false,
+            obs_camera_output: false,
             video_open: false,
         }
     }
@@ -128,6 +132,7 @@ mod tests {
             mic_muted: false,
             mic_plays_on: PlaysOn::Caster,
             syphon_output: true,
+            obs_camera_output: true,
             video_open: true,
         };
         save(&path, &s).unwrap();
@@ -158,6 +163,7 @@ mod tests {
         std::fs::write(&path, r#"{"gameVolume": 7.5}"#).unwrap();
         assert_eq!(load(&path).game_volume, 1.0, "clamped, and a missing key takes its default");
         assert!(!load(&path).syphon_output, "a file from before the Syphon output leaves it off");
+        assert!(!load(&path).obs_camera_output, "and one from before the camera leaves that off");
         assert_eq!(load(&path).game_plays_on, PlaysOn::Speaker, "and plays on the speaker");
         assert_eq!(load(&path).mic_volume, 1.0, "the mic at full level");
         assert!(load(&path).mic_muted, "but muted: a receiver before ADR-029 never played the mic");

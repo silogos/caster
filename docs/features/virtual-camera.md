@@ -2,6 +2,35 @@
 
 Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.md](../architecture/webrtc.md) §Virtual camera control (proto 2) · architecture: [desktop.md](../architecture/desktop.md) §Virtual camera · issue #69. The desktop re-publishes the cast for other apps: **Windows** = system webcam (softcam via koffi), **macOS** = Syphon server (native helper — OBS/VJ reach). Toggled from the phone; output follows the cast's fps 1:1 (no cap); **no preview while active** — the receiver shows a placeholder and may be minimized.
 
+## Native receiver, macOS: OBS Virtual Camera (ADR-039, 2026-11-22)
+
+[ADR-039](../decisions/ADR-039-feeding-the-obs-virtual-camera.md) · design frames 25–26 (`designs/preview/desktop-25-obs-virtual-camera.png`, `desktop-26-obs-camera-states.png`) · architecture: [desktop-native.md](../architecture/desktop-native.md) §OBS Virtual Camera output. The native receiver feeds OBS Studio's own camera extension, so every camera app on the Mac sees the cast as "OBS Virtual Camera" while OBS is closed. It is a switch of its own under Syphon, and Syphon is unchanged. The Electron-era records below are kept as history; they don't count for the native receiver (verification-pass.md).
+
+**Automated (MacBook Pro M1 Pro, macOS 26.2, OBS 32.1.1 installed with its camera allowed):**
+- `cargo test --lib`: 133 passed (+5).
+  - `obs_camera`: the UID is found in a fake OBS.app's extension bundle; an OBS without the key and a UID that is not a UUID are refused; the bridge's answers map to the switch's vocabulary.
+  - **End to end through the bridge and OBS's real extension:** 30 frames at 60 fps, none refused, and the queue drained by the extension (skipped with a reason where OBS is missing).
+  - `publisher` (moved from `syphon.rs`, 4 tests unchanged).
+  - `audio`: the camera alone makes the sound play.
+  - `settings`: an old file leaves the camera off.
+- `node --test ui/window_state.test.mjs`: 20 passed (+6). Covered: the row in every state of frame 26 except "taken by OBS"; the Audio line; Syphon and the camera independent.
+- **The window, in a browser with a stand-in for the Rust side:** off → on (casting / no cast) → failed event → a start that fails → not set up and no OBS (greyed out) → back on after a focus re-check. Each line matches frame 26.
+
+**Measured while building it (the spike probe):**
+- CMIO reports the device as running as soon as our sink alone is, so "is anyone watching" cannot be known (ADR-039 §5). Frames go in whenever the switch is on.
+- With OBS running (started with `--startvirtualcam`), our frames kept draining from the queue: a full queue is **not** a sign that OBS took the camera. Frame 26's state 6 is not built. What a camera app shows when both write is a manual check below.
+
+**Manual — PENDING (TB321FU → M1 Pro, OBS closed unless the line says otherwise):**
+- [ ] A live cast in Photo Booth or QuickTime, a browser (webcam test page), Zoom or Meet, and TikTok LIVE Studio, picking "OBS Virtual Camera".
+- [ ] 1920×1200 and a portrait cast are shown whole, not cropped to the 1920×1080 OBS's camera advertises.
+- [ ] 60 and 120 fps. Receiver CPU with the camera on versus Syphon on, at the same settings (`camera` log line: send avg).
+- [ ] The cast ends → OBS's own picture, not a frozen frame; the next cast → the picture comes back.
+- [ ] Video window closed, camera on: the call app still gets the picture, and the sound plays (Caster Audio as the call app's mic).
+- [ ] Quit Caster mid-cast → camera apps show OBS's picture.
+- [ ] OBS opened and its own Start Virtual Camera clicked while Caster feeds it: record what the camera app shows.
+- [ ] OBS uninstalled (or renamed away), and a Mac where OBS's camera was never started: the switch is greyed out with the right line, and becomes clickable after the fix once the window comes to the front.
+- [ ] 30+ min session with the camera on.
+
 ## Automated (2026-10-30/31, macOS dev machine)
 
 **Desktop — vitest 178/178 green, typecheck (node+web) green, `dist:win` + mac `.app` builds green:**

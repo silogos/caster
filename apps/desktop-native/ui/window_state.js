@@ -23,7 +23,23 @@ export const initialState = Object.freeze({
   cable: { state: 'waiting', name: null }, // the cable guide's progress
   videoOpen: false,
   syphonOutput: false,
+  // The OBS Virtual Camera output (ADR-039): on, whether OBS's camera can be
+  // fed here ('ready' | 'no-obs' | 'old-obs' | 'not-set-up'), and whether it
+  // switched itself off.
+  camera: { on: false, availability: 'ready', failed: false },
 })
+
+/** The camera row's line, state by state (design frame 26). */
+const CAMERA_SUB = {
+  ready: 'Off. Turn on to show the cast as the camera "OBS Virtual Camera" in Zoom, Meet, browsers and TikTok LIVE Studio.',
+  feeding: 'On. In any app, pick the camera "OBS Virtual Camera". OBS doesn\'t need to be open.',
+  waiting: "On. Apps show OBS's own picture until the cast starts.",
+  'no-obs': 'Needs OBS Studio on this Mac. Install it from obsproject.com, then turn this on.',
+  'old-obs': 'Needs OBS Studio 30 or newer on this Mac.',
+  'not-set-up': 'Open OBS once, click Start Virtual Camera and allow it in macOS. After that OBS can stay closed.',
+  failed: 'Off.',
+}
+export const CAMERA_FAILED = "Couldn't start OBS Virtual Camera. Try again."
 
 const LINK_LABEL = { wireless: 'Wireless', cable: 'Cable' }
 
@@ -31,7 +47,8 @@ const LINK_LABEL = { wireless: 'Wireless', cable: 'Cable' }
 
 /**
  * One event → the next state. `event` is `{type, payload, now}`; `type` is the
- * Rust core's event name, or 'tick' (once a second) or 'syphon' (the switch's answer).
+ * Rust core's event name, or 'tick' (once a second), 'syphon' / 'camera' (a switch's
+ * answer) or 'camera:availability' (whether OBS's camera can be fed here).
  */
 export function reduce(state, { type, payload, now = Date.now() }) {
   switch (type) {
@@ -57,6 +74,13 @@ export function reduce(state, { type, payload, now = Date.now() }) {
       return { ...state, videoOpen: payload?.open === true }
     case 'syphon':
       return { ...state, syphonOutput: payload === true }
+    case 'camera':
+      // A fresh answer from the switch clears an earlier failure.
+      return { ...state, camera: { ...state.camera, on: payload === true, failed: false } }
+    case 'camera:availability':
+      return { ...state, camera: { ...state.camera, availability: payload ?? 'ready' } }
+    case 'obs-camera:failed':
+      return { ...state, camera: { ...state.camera, on: false, failed: true } }
     case 'tick':
       // ADR-036's wait ran out: the cast is over, the phone simply offline.
       return state.dropDeadline && now >= state.dropDeadline ? { ...state, link: 'offline', dropDeadline: null, liveSince: 0 } : state
@@ -96,14 +120,24 @@ export function view(state, now = Date.now()) {
       video: videoButton(state),
       status: statusReadout(state, now),
     },
-    gameSub: state.videoOpen || state.syphonOutput ? 'Playing on this computer.' : 'Plays while the video window is open or Syphon is on.',
+    // Sound follows the picture: the window, Syphon or the camera (ADR-029, ADR-039 §7).
+    gameSub: state.videoOpen || state.syphonOutput || state.camera.on ? 'Playing on this computer.' : 'Plays while the video window, Syphon or the camera is on.',
     syphon: {
       on: state.syphonOutput,
       sub: state.syphonOutput
         ? 'On. In OBS add a Syphon Client source named "Caster", and Audio Input Captures of "Caster Audio" and "Caster Mic".'
         : 'Off. OBS can still capture the video window.',
     },
+    camera: cameraRow(state),
   }
+}
+
+/** The OBS Virtual Camera row: the switch, whether it can be clicked, its line and a failure. */
+function cameraRow({ camera, live }) {
+  if (camera.on) return { on: true, enabled: true, sub: live ? CAMERA_SUB.feeding : CAMERA_SUB.waiting, message: '' }
+  if (camera.availability !== 'ready') return { on: false, enabled: false, sub: CAMERA_SUB[camera.availability] ?? CAMERA_SUB['not-set-up'], message: '' }
+  if (camera.failed) return { on: false, enabled: true, sub: CAMERA_SUB.failed, message: CAMERA_FAILED }
+  return { on: false, enabled: true, sub: CAMERA_SUB.ready, message: '' }
 }
 
 /** Which screen: the choice (frame 15), Wireless's QR (16), the cable guide (17), or the deck (19–24). */

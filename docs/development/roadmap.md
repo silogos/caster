@@ -538,6 +538,19 @@ Each step is reviewed by the product owner before the next starts. It goes on it
   - The Syphon tests still pass, and Syphon with the camera both on feeds both.
 - Docs: `desktop-native.md` describes the module; `features/virtual-camera.md` gains the native macOS section.
 
+*2026-11-22, code done on `feat/obs-virtual-camera`:*
+- `publisher.rs` now holds the due-time scheduler (from `syphon.rs`).
+- `obs_camera.rs` + `native/obs_camera_bridge.m`.
+- The switch in the window, with `obs_camera_status` re-checked on focus.
+- The sound rule; `obsCameraOutput` in `native-receiver.json`; the sink stops on quit.
+
+Found while building:
+- "Is anyone reading" cannot be known (ADR-039 §5).
+- OBS taking the camera is not detectable, so state 6 is not built.
+- OBS before 30 gets its own line ("Needs OBS Studio 30 or newer"), which frame 26 doesn't draw.
+
+**Checked:** `cargo test --lib` 133 passed, including the bridge feeding OBS's real extension; `window_state.test.mjs` 20 passed; the window clicked through in a browser stand-in. **Not checked yet:** everything on the device, the list below (also in [features/virtual-camera.md](../features/virtual-camera.md)).
+
 **Accept**, on the TB321FU → M1 Pro with OBS closed:
 - A live cast shows in Photo Booth or QuickTime, a browser, Zoom or Meet, and TikTok LIVE Studio.
 - 1920×1200 and a portrait cast are shown whole, not cropped to 1920×1080.

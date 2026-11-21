@@ -291,7 +291,7 @@ impl Engine {
 
     /// The gain the callback applies now.
     fn current_gain(&self) -> f32 {
-        let showing = sound_plays(WINDOW_OPEN.load(Ordering::Relaxed), SYPHON_ON.load(Ordering::Relaxed));
+        let showing = sound_plays(WINDOW_OPEN.load(Ordering::Relaxed), SYPHON_ON.load(Ordering::Relaxed), CAMERA_ON.load(Ordering::Relaxed));
         output_gain(f32::from_bits(self.gain_bits.load(Ordering::Relaxed)), showing)
     }
 }
@@ -311,6 +311,7 @@ fn engine(track: Track) -> &'static Engine {
 /// never replays a backlog.
 static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 static SYPHON_ON: AtomicBool = AtomicBool::new(false);
+static CAMERA_ON: AtomicBool = AtomicBool::new(false);
 
 /// Sets a track's output level (clamped to 0.0–1.0); takes effect on the
 /// next callback. Mute is a gain of 0 — the stats keep counting.
@@ -329,10 +330,17 @@ pub fn set_syphon_on(on: bool) {
     SYPHON_ON.store(on, Ordering::Relaxed);
 }
 
-/// Sound goes with the picture: it plays while the video window or the
-/// Syphon output shows the cast.
-fn sound_plays(window_open: bool, syphon_on: bool) -> bool {
-    window_open || syphon_on
+/// The OBS Virtual Camera output turned on (`true`) or off.
+pub fn set_camera_on(on: bool) {
+    CAMERA_ON.store(on, Ordering::Relaxed);
+}
+
+/// Sound goes with the picture: it plays while the video window, the
+/// Syphon output or the OBS camera shows the cast. A call app takes the
+/// picture from the camera and the sound from Caster Audio / Caster Mic,
+/// so the camera counts too (ADR-039 §7).
+fn sound_plays(window_open: bool, syphon_on: bool, camera_on: bool) -> bool {
+    window_open || syphon_on || camera_on
 }
 
 /// The gain the callback applies: the user's level, or silence while
@@ -1227,10 +1235,11 @@ mod tests {
     }
 
     #[test]
-    fn sound_plays_while_the_window_or_syphon_shows_the_cast() {
-        assert!(!sound_plays(false, false), "nothing shows the cast: silent");
-        assert!(sound_plays(true, false), "the video window");
-        assert!(sound_plays(false, true), "Syphon with the window closed — OBS still gets the sound");
-        assert!(sound_plays(true, true));
+    fn sound_plays_while_the_window_syphon_or_the_camera_shows_the_cast() {
+        assert!(!sound_plays(false, false, false), "nothing shows the cast: silent");
+        assert!(sound_plays(true, false, false), "the video window");
+        assert!(sound_plays(false, true, false), "Syphon with the window closed — OBS still gets the sound");
+        assert!(sound_plays(false, false, true), "only the camera on — a call app still gets the sound (ADR-039 §7)");
+        assert!(sound_plays(true, true, true));
     }
 }
