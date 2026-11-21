@@ -3,11 +3,13 @@ mod h264;
 mod latency_probe;
 mod link_mode;
 mod logging;
+mod obs_camera;
 mod opus_fmtp;
 mod pacing;
 mod pairing;
 mod power;
 mod protocol;
+mod publisher;
 mod settings;
 mod signaling;
 mod syphon;
@@ -184,6 +186,27 @@ fn set_syphon_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool
         log::warn!(target: "settings", "not saved: {e}");
     }
     Ok(current.clone())
+}
+
+/// The OBS Virtual Camera output (ADR-039) — a receiver control, separate
+/// from Syphon. Returns what is running: it stays off when OBS's camera is
+/// not there to feed (the window shows why from `obs_camera_status`).
+#[tauri::command]
+fn set_obs_camera_output(controls: tauri::State<'_, ReceiverControls>, enabled: bool) -> Result<settings::ReceiverSettings, String> {
+    let mut current = controls.current.lock().map_err(|_| "settings unavailable")?;
+    current.obs_camera_output = obs_camera::set_enabled(enabled);
+    audio::set_camera_on(current.obs_camera_output);
+    if let Err(e) = settings::save(&controls.path, &current) {
+        log::warn!(target: "settings", "not saved: {e}");
+    }
+    Ok(current.clone())
+}
+
+/// Whether OBS's camera can be fed on this Mac: `ready`, `no-obs`,
+/// `old-obs` or `not-set-up`. The window asks when it comes to the front.
+#[tauri::command]
+fn obs_camera_status() -> obs_camera::Availability {
+    obs_camera::availability()
 }
 
 /// Mic volume / mute — the mic's own, never the game audio's (ADR-003).
@@ -365,6 +388,9 @@ pub fn run() {
             audio::set_gain(audio::Track::Mic, saved.effective_mic_gain());
             let saved = settings::ReceiverSettings { syphon_output: saved.syphon_output && syphon::set_enabled(true), ..saved };
             audio::set_syphon_on(saved.syphon_output);
+            obs_camera::init(app.handle().clone());
+            let saved = settings::ReceiverSettings { obs_camera_output: saved.obs_camera_output && obs_camera::set_enabled(true), ..saved };
+            audio::set_camera_on(saved.obs_camera_output);
             apply_plays_on(audio::Track::Game, saved.game_plays_on);
             apply_plays_on(audio::Track::Mic, saved.mic_plays_on);
             let reopen_video = saved.video_open;
@@ -423,6 +449,8 @@ pub fn run() {
             receiver_settings,
             set_game_audio,
             set_syphon_output,
+            set_obs_camera_output,
+            obs_camera_status,
             set_mic_audio,
             caster_devices,
             install_caster_devices,

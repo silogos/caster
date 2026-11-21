@@ -4,8 +4,9 @@
 //    Allow (17); Back returns to the choice;
 //  - once paired, the deck (19–24): one connection card (the phone, the link,
 //    its status, Terminate), "Open video", the cast's status, the sound.
-//    Video plays only while the video window is open; sound while it is open
-//    or the Syphon output is on (ADR-029), on the device chosen under "Plays on".
+//    Video plays only while the video window is open; sound while it is open,
+//    the Syphon output is on (ADR-029) or the OBS camera is on (ADR-039), on
+//    the device chosen under "Plays on".
 // What the window says is decided by window_state.js — reduce(state, event) and view(state),
 // pure and tested; this file only dispatches events and draws view().
 // Events from the Rust core:
@@ -45,6 +46,10 @@ function render() {
   $('game-sub').textContent = v.gameSub
   $('syphon-switch').classList.toggle('on', v.syphon.on)
   $('syphon-sub').textContent = v.syphon.sub
+  $('camera-switch').classList.toggle('on', v.camera.on)
+  $('camera-switch').disabled = !v.camera.enabled
+  $('camera-sub').textContent = v.camera.sub
+  $('camera-message').textContent = v.camera.message
 }
 
 function drawGuide({ steps, note }) {
@@ -105,7 +110,7 @@ setInterval(() => dispatch('tick'), 1000)
 
 // ---- events ----------------------------------------------------------------
 
-for (const name of ['link:mode', 'cable:state', 'pairing:mobile-state', 'cast:state', 'cast:picture', 'video:window']) {
+for (const name of ['link:mode', 'cable:state', 'pairing:mobile-state', 'cast:state', 'cast:picture', 'video:window', 'obs-camera:failed']) {
   tauri?.event.listen(name, (event) => dispatch(name, event.payload))
 }
 tauri?.event.listen('pairing:session-updated', (event) => {
@@ -228,6 +233,7 @@ function installCasterDevices(name) {
       installingFor = null
       if (outcome === 'installed') {
         await loadCasterDevices()
+loadCameraStatus()
         await setPlaysOn(name, 'caster')
       } else if (outcome === 'failed') {
         installFailedFor = name
@@ -256,10 +262,40 @@ $('syphon-switch').addEventListener('click', () => {
     .catch((err) => console.error('set_syphon_output failed:', err))
 })
 
+// The OBS Virtual Camera output (ADR-039): its own switch, independent of
+// Syphon. Whether OBS's camera is there is asked again whenever this window
+// comes to the front, so installing or setting up OBS meanwhile shows at once.
+function loadCameraStatus() {
+  return invoke('obs_camera_status')
+    .then((availability) => dispatch('camera:availability', availability))
+    .catch((err) => console.error('obs_camera_status failed:', err))
+}
+window.addEventListener('focus', loadCameraStatus)
+// The camera switched itself off: save that, so it is off next launch too.
+tauri?.event.listen('obs-camera:failed', () => {
+  invoke('set_obs_camera_output', { enabled: false }).catch(() => {})
+})
+$('camera-switch').addEventListener('click', () => {
+  const wanted = !state.camera.on
+  invoke('set_obs_camera_output', { enabled: wanted })
+    .then((saved) => {
+      dispatch('camera', saved.obsCameraOutput === true)
+      // Asked for on, still off: OBS went away meanwhile, or the camera could not start.
+      if (wanted && saved.obsCameraOutput !== true) {
+        return invoke('obs_camera_status').then((availability) => {
+          dispatch('camera:availability', availability)
+          if (availability === 'ready') dispatch('obs-camera:failed')
+        })
+      }
+    })
+    .catch((err) => console.error('set_obs_camera_output failed:', err))
+})
+
 invoke('receiver_settings')
   .then((settings) => {
     saved = settings
     dispatch('syphon', settings.syphonOutput === true)
+    dispatch('camera', settings.obsCameraOutput === true)
     renderTracks()
     render()
   })

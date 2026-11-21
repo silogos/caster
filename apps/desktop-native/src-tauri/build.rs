@@ -8,6 +8,7 @@ fn main() {
     {
         println!("cargo:rustc-link-arg=-ObjC");
         build_syphon_bridge();
+        build_obs_camera_bridge();
         build_h264_decoder();
     }
     tauri_build::build()
@@ -19,6 +20,17 @@ fn build_h264_decoder() {
     println!("cargo:rerun-if-changed=native/h264_decoder.m");
     cc::Build::new().file("native/h264_decoder.m").flag("-fobjc-arc").compile("zf_h264_decoder");
     for framework in ["VideoToolbox", "CoreMedia", "CoreVideo", "Foundation"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
+}
+
+/// The OBS Virtual Camera output (ADR-039): feeds OBS's camera extension
+/// through CoreMediaIO. No vendored code: OBS is found on the user's Mac.
+#[cfg(target_os = "macos")]
+fn build_obs_camera_bridge() {
+    println!("cargo:rerun-if-changed=native/obs_camera_bridge.m");
+    cc::Build::new().file("native/obs_camera_bridge.m").flag("-fobjc-arc").compile("zf_obs_camera_bridge");
+    for framework in ["CoreMediaIO", "CoreMedia", "CoreVideo", "AppKit"] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
 }

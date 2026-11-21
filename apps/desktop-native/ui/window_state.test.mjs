@@ -1,7 +1,7 @@
 // node --test apps/desktop-native/ui/window_state.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { initialState, reduce, view, DROP_WINDOW_MS } from './window_state.js'
+import { initialState, reduce, view, DROP_WINDOW_MS, CAMERA_FAILED } from './window_state.js'
 
 /** Runs events through the reducer: [type, payload, now?]. */
 const run = (events, state = initialState) =>
@@ -112,8 +112,52 @@ test('the cable guide says what went wrong', () => {
 })
 
 test('the sound line and Syphon follow the receiver controls', () => {
-  assert.equal(view(initialState).gameSub, 'Plays while the video window is open or Syphon is on.')
+  assert.equal(view(initialState).gameSub, 'Plays while the video window, Syphon or the camera is on.')
   const s = reduce(initialState, { type: 'syphon', payload: true })
   assert.equal(view(s).gameSub, 'Playing on this computer.')
   assert.match(view(s).syphon.sub, /^On\./)
+})
+
+// ---- the OBS Virtual Camera row (ADR-039, design frame 26) -------------------
+
+const camera = (state, ...events) => view(events.reduce((s, [type, payload]) => reduce(s, { type, payload }), state)).camera
+
+test('the camera is off and clickable by default, and says what it does', () => {
+  const c = camera(initialState)
+  assert.deepEqual([c.on, c.enabled, c.message], [false, true, ''])
+  assert.match(c.sub, /^Off\. Turn on .*"OBS Virtual Camera"/)
+})
+
+test('on, the camera says to pick it while casting, and that OBS shows its picture between casts', () => {
+  assert.match(camera(initialState, ['camera', true]).sub, /OBS's own picture until the cast starts/)
+  assert.match(camera(initialState, ['camera', true], ['cast:state', { live: true }]).sub, /pick the camera "OBS Virtual Camera"\. OBS doesn't need to be open/)
+  assert.match(camera(initialState, ['camera', true], ['cast:state', { live: true }], ['cast:state', { live: false }]).sub, /until the cast starts/)
+})
+
+test('the camera alone makes the sound play (ADR-039 §7)', () => {
+  assert.equal(view(reduce(initialState, { type: 'camera', payload: true })).gameSub, 'Playing on this computer.')
+})
+
+test('without OBS, or before its camera is set up, the switch is greyed out and says what to do', () => {
+  const none = camera(initialState, ['camera:availability', 'no-obs'])
+  assert.deepEqual([none.on, none.enabled], [false, false])
+  assert.match(none.sub, /Needs OBS Studio/)
+  assert.match(camera(initialState, ['camera:availability', 'old-obs']).sub, /30 or newer/)
+  const setUp = camera(initialState, ['camera:availability', 'not-set-up'])
+  assert.equal(setUp.enabled, false)
+  assert.match(setUp.sub, /click Start Virtual Camera and allow it in macOS/)
+  assert.equal(camera(initialState, ['camera:availability', 'not-set-up'], ['camera:availability', 'ready']).enabled, true, 'set up meanwhile: clickable again')
+})
+
+test('a camera that switched itself off says so plainly, until the next try', () => {
+  const failed = camera(initialState, ['camera', true], ['obs-camera:failed'])
+  assert.deepEqual([failed.on, failed.enabled, failed.sub, failed.message], [false, true, 'Off.', CAMERA_FAILED])
+  assert.equal(camera(initialState, ['camera', true], ['obs-camera:failed'], ['camera', true]).message, '', 'turned on again: the message goes')
+})
+
+test('the camera and Syphon are independent switches', () => {
+  const both = [['syphon', true], ['camera', true]].reduce((s, [type, payload]) => reduce(s, { type, payload }), initialState)
+  assert.equal(view(both).syphon.on, true)
+  assert.equal(view(both).camera.on, true)
+  assert.equal(view(reduce(both, { type: 'syphon', payload: false })).camera.on, true, 'Syphon off leaves the camera on')
 })

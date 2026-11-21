@@ -2,6 +2,45 @@
 
 Feature: [ADR-007](../decisions/ADR-007-virtual-camera.md) · protocol: [webrtc.md](../architecture/webrtc.md) §Virtual camera control (proto 2) · architecture: [desktop.md](../architecture/desktop.md) §Virtual camera · issue #69. The desktop re-publishes the cast for other apps: **Windows** = system webcam (softcam via koffi), **macOS** = Syphon server (native helper — OBS/VJ reach). Toggled from the phone; output follows the cast's fps 1:1 (no cap); **no preview while active** — the receiver shows a placeholder and may be minimized.
 
+## Native receiver, macOS: OBS Virtual Camera (ADR-039, 2026-11-22)
+
+[ADR-039](../decisions/ADR-039-feeding-the-obs-virtual-camera.md) · design frames 25–26 (`designs/preview/desktop-25-obs-virtual-camera.png`, `desktop-26-obs-camera-states.png`) · architecture: [desktop-native.md](../architecture/desktop-native.md) §OBS Virtual Camera output. The native receiver feeds OBS Studio's own camera extension, so every camera app on the Mac sees the cast as "OBS Virtual Camera" while OBS is closed. It is a switch of its own under Syphon, and Syphon is unchanged. The Electron-era records below are kept as history; they don't count for the native receiver (verification-pass.md).
+
+**Automated (MacBook Pro M1 Pro, macOS 26.2, OBS 32.1.1 installed with its camera allowed):**
+- `cargo test --lib`: 133 passed (+5).
+  - `obs_camera`: the UID is found in a fake OBS.app's extension bundle; an OBS without the key and a UID that is not a UUID are refused; the bridge's answers map to the switch's vocabulary.
+  - **End to end through the bridge and OBS's real extension:** 30 frames at 60 fps, none refused, and the queue drained by the extension (skipped with a reason where OBS is missing).
+  - `publisher` (moved from `syphon.rs`, 4 tests unchanged).
+  - `audio`: the camera alone makes the sound play.
+  - `settings`: an old file leaves the camera off.
+- `node --test ui/window_state.test.mjs`: 20 passed (+6). Covered: the row in every state of frame 26 except "taken by OBS"; the Audio line; Syphon and the camera independent.
+- **The window, in a browser with a stand-in for the Rust side:** off → on (casting / no cast) → failed event → a start that fails → not set up and no OBS (greyed out) → back on after a focus re-check. Each line matches frame 26.
+
+**Measured while building it (the spike probe):**
+- CMIO reports the device as running as soon as our sink alone is, so "is anyone watching" cannot be known (ADR-039 §5). Frames go in whenever the switch is on.
+- With OBS running (started with `--startvirtualcam`), our frames kept draining from the queue: a full queue is **not** a sign that OBS took the camera. Frame 26's state 6 is not built. What a camera app shows when both write is a manual check below.
+
+**On the device, 2026-11-22 (TB321FU → M1 Pro, cable, release build of `2895905`, OBS closed):**
+- The product owner reported "All checks passed".
+- The receiver's log shows one cast at 1920×1200 @ 60 fps with game audio on the speakers. The camera was turned on 4 s in and fed for about 95 s: 3600+ frames sent, **0 dropped**, send avg **0.37 ms** per frame.
+- The same run went on: four casts in all with the camera left on. Each cast end logged "cast ended — OBS Virtual Camera shows OBS's own picture" and each next cast "cast live — feeding OBS Virtual Camera". What the camera app showed between casts isn't in the log.
+- The last cast ran **2 h 31 min** (02:04:11 → 04:35:10) at 1920×1200, 54–63 fps: **499,732 frames sent, 0 dropped**, send avg 0.38 → 0.386 ms over the whole run, with no growth worth naming.
+- Then the camera was switched off (04:35:32) and the receiver exited cleanly (exit 0), after the cast had ended. So this isn't a quit mid-cast.
+- Still no trace of: a quit mid-cast, 120 fps (the log never shows more than 63 fps), a portrait cast (every cast was 1920×1200), and OBS starting its own camera.
+- Seen in the same log and not attributed to the camera: the phone's frame rate dipped to 16–44 fps about every 5 s, in step with the link falling to ~2 Mbit/s. That is likely a still screen, and it should be compared with a run with the camera off.
+
+**Manual (TB321FU → M1 Pro, OBS closed unless the line says otherwise):**
+*Accepted 2026-11-22 by the product owner after the 2 h 31 min live run. The boxes left open below were waived for V1: they were not run, and they are not claimed.*
+- [x] A live cast in camera apps, picking "OBS Virtual Camera" (product owner, 2026-11-22). Which apps were tried isn't recorded.
+- [ ] 1920×1200 and a portrait cast are shown whole, not cropped to the 1920×1080 OBS's camera advertises.
+- [ ] 60 and 120 fps. Receiver CPU with the camera on versus Syphon on, at the same settings (`camera` log line: send avg).
+- [ ] The cast ends → OBS's own picture, not a frozen frame; the next cast → the picture comes back. *Log side done (sink stopped and restarted across four casts); what the camera app shows is still to be seen.*
+- [ ] Video window closed, camera on: the call app still gets the picture, and the sound plays (Caster Audio as the call app's mic).
+- [ ] Quit Caster mid-cast → camera apps show OBS's picture.
+- [ ] OBS opened and its own Start Virtual Camera clicked while Caster feeds it: record what the camera app shows.
+- [ ] OBS uninstalled (or renamed away), and a Mac where OBS's camera was never started: the switch is greyed out with the right line, and becomes clickable after the fix once the window comes to the front.
+- [x] 30+ min session with the camera on: 2 h 31 min, 499,732 frames, 0 dropped, send time flat (receiver log, 2026-11-22).
+
 ## Automated (2026-10-30/31, macOS dev machine)
 
 **Desktop — vitest 178/178 green, typecheck (node+web) green, `dist:win` + mac `.app` builds green:**

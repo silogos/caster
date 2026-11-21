@@ -737,9 +737,9 @@ impl Renderer {
     /// `Some(followup)` when it was dropped, `None` when it should render.
     /// Saves the decoder-buffer → I420 conversion for every hidden frame.
     pub fn drop_if_hidden(&mut self) -> Option<Followup> {
-        // The Syphon output is being read: it needs the frame even when
-        // the window does not (ADR-021).
-        if crate::syphon::wants_frames() {
+        // An output needs the frame even when the window does not: Syphon
+        // while it is read (ADR-021), the OBS camera while it is on (ADR-039).
+        if crate::syphon::wants_frames() || crate::obs_camera::wants_frames() {
             return None;
         }
         // Closed (or never opened): nothing to render, nothing to raise.
@@ -782,7 +782,8 @@ impl Renderer {
 
     /// Shows the buffer `make` gives, due when the pacer says: enqueued on
     /// the window's layer while it is visible, handed to the Syphon output
-    /// while that is being read — the same buffer for both. `make` runs only
+    /// while that is being read and to the OBS camera while it is on — the
+    /// same buffer for all. `make` runs only
     /// when someone will see the frame.
     fn present(&mut self, key: FormatKey, make: impl FnOnce(&mut Self) -> Option<CFRetained<CVPixelBuffer>>) -> Followup {
         let (width, height) = (key.width, key.height);
@@ -792,7 +793,8 @@ impl Renderer {
         let window = VIDEO_WINDOW.get();
         let visible = window.is_some() && WINDOW_VISIBLE.load(Ordering::Relaxed);
         let syphon = crate::syphon::wants_frames();
-        if !visible && !syphon {
+        let camera = crate::obs_camera::wants_frames();
+        if !visible && !syphon && !camera {
             return window.map_or(Followup::None, |vw| self.drop_hidden(vw));
         }
         let arrival = host_now();
@@ -802,6 +804,9 @@ impl Renderer {
         if syphon {
             crate::syphon::submit(&pixel_buffer, width, height, due);
         }
+        if camera {
+            crate::obs_camera::submit(&pixel_buffer, due);
+        }
         match window {
             Some(vw) if visible => {
                 if let Some(sample) = self.sample_buffer(&pixel_buffer, key, due) {
@@ -809,7 +814,7 @@ impl Renderer {
                 }
                 Followup::None
             }
-            // Syphon only: an open but covered window still gets its
+            // Outputs only: an open but covered window still gets its
             // hidden-frame housekeeping (flush, raise once).
             Some(vw) if is_open() => self.drop_hidden(vw),
             _ => Followup::None,
@@ -1310,6 +1315,8 @@ pub(crate) fn announce_input(app: &tauri::AppHandle, live: bool) {
         if !live {
             // OBS shows the still, not the last frame of the cast (ADR-021).
             crate::syphon::publish_no_input();
+            // The camera goes back to OBS's own picture (ADR-039).
+            crate::obs_camera::cast_ended();
         }
     }
 }
